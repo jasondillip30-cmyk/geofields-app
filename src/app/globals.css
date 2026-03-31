@@ -1,0 +1,137 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  color: #1d222b;
+  background: radial-gradient(circle at top, #f7f9fd 0%, #f1f5fb 44%, #eef3f9 100%);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+@layer base {
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply tracking-tight text-ink-900;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply border-slate-300 bg-white text-ink-900 placeholder:text-slate-400 shadow-sm transition-shadow;
+  }
+
+  input:focus,
+  select:focus,
+  textarea:focus {
+    @apply outline-none ring-2 ring-brand-200 border-brand-300;
+  }
+
+  button:focus-visible,
+  a:focus-visible {
+    @apply outline-none ring-2 ring-brand-300 ring-offset-2 ring-offset-slate-100;
+  }
+
+  button {
+    @apply rounded-lg transition-colors;
+  }
+}
+
+@layer components {
+  .gf-page-stack {
+    @apply space-y-5 md:space-y-6;
+  }
+
+  .gf-page-header {
+    @apply rounded-2xl border border-slate-200/90 bg-white px-5 py-4 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_10px_26px_rgba(15,23,42,0.06)] md:px-6 md:py-5;
+  }
+
+  .gf-section {
+    @apply space-y-3;
+  }
+
+  .gf-section-heading {
+    @apply flex flex-wrap items-end justify-between gap-2;
+  }
+
+  .gf-section-heading-block {
+    @apply min-w-0 space-y-1;
+  }
+
+  .gf-section-title {
+    @apply text-base font-semibold text-ink-900;
+  }
+
+  .gf-section-subtitle {
+    @apply text-sm text-slate-600;
+  }
+
+  .gf-kpi-grid-primary {
+    @apply grid gap-4 sm:grid-cols-2 xl:grid-cols-4;
+  }
+
+  .gf-kpi-grid-secondary {
+    @apply grid gap-3 sm:grid-cols-2 xl:grid-cols-4;
+  }
+
+  .gf-chart-grid {
+    @apply grid gap-5 xl:grid-cols-2;
+  }
+
+  .gf-inline-note {
+    @apply rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700;
+  }
+
+  .gf-empty-state {
+    @apply rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-600;
+  }
+
+  .gf-feedback-success {
+    @apply rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800;
+  }
+
+  .gf-feedback-warning {
+    @apply rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900;
+  }
+
+  .gf-feedback-error {
+    @apply rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700;
+  }
+
+  .gf-btn-primary {
+    @apply rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-[0_2px_8px_rgba(37,99,235,0.28)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:bg-brand-700 hover:shadow-[0_10px_20px_rgba(37,99,235,0.26)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
+  }
+
+  .gf-btn-secondary {
+    @apply rounded-lg border border-slate-200/90 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
+  }
+
+  .gf-btn-subtle {
+    @apply rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition-all duration-200 ease-out hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .gf-section-shell {
+    @apply rounded-2xl border border-slate-200/85 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_22px_rgba(15,23,42,0.06)];
+  }
+}

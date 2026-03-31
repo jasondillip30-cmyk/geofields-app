@@ -1,0 +1,278 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import {
+  BarChart3,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  ClipboardList,
+  Drill,
+  Factory,
+  Gauge,
+  HardHat,
+  LayoutDashboard,
+  Settings,
+  Wrench
+} from "lucide-react";
+
+import { canAccess } from "@/lib/auth/permissions";
+import { inventoryNavChildren, navItems } from "@/lib/navigation";
+import { cn } from "@/lib/utils";
+import { useRole } from "@/components/layout/role-provider";
+
+const iconMap: Record<string, typeof LayoutDashboard> = {
+  "Company Dashboard": LayoutDashboard,
+  "Executive Overview": LayoutDashboard,
+  "Alerts Center": ClipboardList,
+  "Data Quality Center": ClipboardList,
+  Clients: Factory,
+  Projects: ClipboardList,
+  "Drilling Reports": Drill,
+  "Breakdown Reports": Drill,
+  Revenue: BarChart3,
+  Approvals: ClipboardList,
+  Expenses: Gauge,
+  "Cost Tracking": Gauge,
+  "Budget vs Actual": Gauge,
+  Inventory: Boxes,
+  "Inventory Overview": Boxes,
+  Items: Boxes,
+  "Stock Movements": ClipboardList,
+  "Receipt Intake": ClipboardList,
+  Issues: ClipboardList,
+  Suppliers: Factory,
+  Locations: Factory,
+  Profit: BarChart3,
+  Forecasting: BarChart3,
+  "Activity Log": ClipboardList,
+  Rigs: HardHat,
+  Employees: Settings,
+  Maintenance: Wrench,
+  "Mechanics Directory": Settings,
+  "Summary Reports": ClipboardList
+};
+
+const navGroups: Array<{ title: string; labels: string[] }> = [
+  {
+    title: "Overview",
+    labels: ["Company Dashboard", "Executive Overview"]
+  },
+  {
+    title: "Operations",
+    labels: [
+      "Clients",
+      "Projects",
+      "Employees",
+      "Drilling Reports",
+      "Breakdown Reports",
+      "Rigs",
+      "Maintenance",
+      "Mechanics Directory",
+      "Inventory"
+    ]
+  },
+  {
+    title: "Finance",
+    labels: ["Revenue", "Expenses", "Cost Tracking", "Budget vs Actual", "Profit", "Forecasting"]
+  },
+  {
+    title: "Governance",
+    labels: ["Approvals", "Alerts Center", "Data Quality Center", "Activity Log", "Summary Reports"]
+  }
+];
+
+export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
+  const pathname = usePathname();
+  const { role, loading } = useRole();
+  const [inventoryExpanded, setInventoryExpanded] = useState(false);
+
+  const visibleNavItems = useMemo(
+    () => (role ? navItems.filter((item) => canAccess(role, item.permission)) : []),
+    [role]
+  );
+  const visibleInventoryChildren = useMemo(
+    () => (role ? inventoryNavChildren.filter((item) => canAccess(role, item.permission)) : []),
+    [role]
+  );
+  const visibleNavByLabel = useMemo(
+    () => new Map(visibleNavItems.map((item) => [item.label, item])),
+    [visibleNavItems]
+  );
+
+  const inventoryRouteActive = pathname.startsWith("/inventory");
+  const activeInventoryChildHref = resolveActiveInventoryChildHref({
+    pathname,
+    children: visibleInventoryChildren
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const saved = window.localStorage.getItem("geofields.inventorySidebarExpanded");
+    if (saved === "1") {
+      setInventoryExpanded(true);
+      return;
+    }
+    if (saved === "0") {
+      setInventoryExpanded(false);
+      return;
+    }
+    setInventoryExpanded(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem("geofields.inventorySidebarExpanded", inventoryExpanded ? "1" : "0");
+  }, [inventoryExpanded]);
+
+  return (
+    <aside
+      className={cn(
+        "w-full border-b border-slate-200 bg-white/95 lg:sticky lg:top-0 lg:h-full lg:shrink-0 lg:border-b-0 lg:border-r lg:transition-all lg:duration-200",
+        sidebarHidden ? "lg:w-0 lg:border-r-0 lg:opacity-0 lg:pointer-events-none lg:overflow-hidden" : "lg:w-72 lg:opacity-100"
+      )}
+    >
+      <div className={cn("flex flex-col lg:h-full", sidebarHidden && "lg:hidden")}>
+        <div className="border-b border-slate-200 px-5 py-5">
+          <p className="font-display text-xl text-ink-900">GeoFields</p>
+          <p className="text-sm text-slate-600">Operations Dashboard</p>
+        </div>
+
+        <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4">
+          {loading && (
+            <div className="space-y-2 px-1 py-1">
+              <p className="px-3 py-1 text-sm text-slate-600">Loading menu...</p>
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={`menu-loading-${index}`} className="h-8 w-full animate-pulse rounded-lg bg-slate-100" />
+              ))}
+            </div>
+          )}
+
+          {!loading &&
+            navGroups.map((group) => {
+              const groupItems = group.labels
+                .map((label) => visibleNavByLabel.get(label))
+                .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+              if (groupItems.length === 0) {
+                return null;
+              }
+
+              return (
+                <div key={group.title} className="space-y-1.5">
+                  <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    {group.title}
+                  </p>
+                  <div className="space-y-1">
+                    {groupItems.map((item) => {
+                      if (item.label === "Inventory") {
+                        return (
+                          <div key={item.href} className="space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => setInventoryExpanded((current) => !current)}
+                              className={cn(
+                                "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
+                                inventoryRouteActive
+                                  ? "border border-brand-200 bg-brand-50 text-brand-900 shadow-sm"
+                                  : "border border-transparent text-ink-700 hover:bg-slate-100"
+                              )}
+                            >
+                              <span className="flex items-center gap-2">
+                                <Boxes size={16} />
+                                {item.label}
+                              </span>
+                              {inventoryExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            </button>
+                            <div
+                              className={cn(
+                                "grid transition-[grid-template-rows,opacity] duration-300 ease-out",
+                                inventoryExpanded ? "mt-1 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                              )}
+                            >
+                              <div className="overflow-hidden">
+                                <div className="ml-4 space-y-0.5 border-l border-slate-200/90 pl-2.5">
+                                  {visibleInventoryChildren.map((child) => {
+                                    const isActive = child.href === activeInventoryChildHref;
+                                    return (
+                                      <Link
+                                        key={child.href}
+                                        href={child.href}
+                                        className={cn(
+                                          "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
+                                          isActive
+                                            ? "bg-brand-100/80 font-medium text-brand-900 shadow-sm"
+                                            : "text-ink-700 hover:bg-slate-100"
+                                        )}
+                                      >
+                                        <span
+                                          className={cn(
+                                            "h-1.5 w-1.5 rounded-full",
+                                            isActive ? "bg-brand-700" : "bg-slate-300"
+                                          )}
+                                        />
+                                        {child.label}
+                                      </Link>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const Icon = iconMap[item.label] || LayoutDashboard;
+                      const isActive =
+                        pathname === item.href ||
+                        (item.href !== "/" && pathname.startsWith(`${item.href}/`));
+                      return (
+                        <Link
+                          key={item.href}
+                          href={item.href}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out",
+                            isActive
+                              ? "bg-brand-100 text-brand-900 shadow-sm"
+                              : "text-ink-700 hover:translate-x-[1px] hover:bg-slate-100"
+                          )}
+                        >
+                          <Icon size={16} />
+                          {item.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+        </nav>
+      </div>
+    </aside>
+  );
+}
+
+function resolveActiveInventoryChildHref({
+  pathname,
+  children
+}: {
+  pathname: string;
+  children: Array<{ href: string }>;
+}) {
+  if (pathname === "/inventory/receipt-intake") return "/inventory/receipt-intake";
+  if (pathname === "/inventory/items") return "/inventory/items";
+  if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
+  if (pathname === "/inventory/issues") return "/inventory/issues";
+  if (pathname === "/inventory/suppliers") return "/inventory/suppliers";
+  if (pathname === "/inventory/locations") return "/inventory/locations";
+  if (pathname !== "/inventory") return "";
+
+  const overview = children.find((child) => child.href === "/inventory");
+  return overview ? overview.href : "";
+}

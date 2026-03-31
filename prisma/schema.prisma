@@ -1,0 +1,696 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  STAFF
+  OFFICE
+  MECHANIC
+  FIELD
+}
+
+enum ProjectStatus {
+  PLANNED
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+}
+
+enum RigStatus {
+  ACTIVE
+  IDLE
+  MAINTENANCE
+  BREAKDOWN
+}
+
+enum RigCondition {
+  EXCELLENT
+  GOOD
+  FAIR
+  POOR
+  CRITICAL
+}
+
+enum MaintenanceStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  DENIED
+  WAITING_FOR_PARTS
+  IN_REPAIR
+  COMPLETED
+}
+
+enum UrgencyLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ApprovalDecision {
+  APPROVED
+  DENIED
+  NEEDS_INFO
+}
+
+enum EntryApprovalStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum InventoryItemStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum InventoryCategory {
+  DRILLING
+  HYDRAULIC
+  ELECTRICAL
+  CONSUMABLES
+  TIRES
+  OILS
+  FILTERS
+  SPARE_PARTS
+  OTHER
+}
+
+enum InventoryMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum InventoryUsageRequestStatus {
+  SUBMITTED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BudgetScopeType {
+  RIG
+  PROJECT
+}
+
+enum AlertResolutionStatus {
+  OPEN
+  RESOLVED
+  SNOOZED
+}
+
+enum CopilotScopeMode {
+  THIS_PAGE
+  RELATED_DATA
+  WHOLE_APP
+}
+
+enum CopilotChatRole {
+  USER
+  ASSISTANT
+}
+
+enum CopilotChatIntent {
+  GENERAL_EXPLANATION
+  APP_GUIDANCE
+  NAVIGATION
+  COMPARISON
+  FOLLOW_UP_REFERENCE
+  PAGE_SUMMARY
+  WHOLE_APP_SUMMARY
+}
+
+model User {
+  id                  String              @id @default(cuid())
+  fullName            String
+  email               String              @unique
+  passwordHash        String
+  role                UserRole
+  roleId              String?
+  phone               String?
+  title               String?
+  profileImageUrl     String?
+  currentAssignment   String?
+  isActive            Boolean             @default(true)
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  roleRef             Role?               @relation(fields: [roleId], references: [id])
+  submittedReports    DrillReport[]       @relation("reportSubmitter")
+  maintenanceLogs     MaintenanceUpdate[] @relation("maintenanceActor")
+  approvals           Approval[]
+  enteredExpenses     Expense[]           @relation("expenseEnteredBy")
+  approvedExpenses    Expense[]           @relation("expenseApprover")
+  approvedReports     DrillReport[]       @relation("reportApprover")
+  submittedBreakdowns BreakdownReport[]   @relation("breakdownReporter")
+  auditLogs           AuditLog[]          @relation("auditActor")
+  inventoryMovements  InventoryMovement[] @relation("inventoryPerformedBy")
+  inventoryUsageRequests InventoryUsageRequest[] @relation("inventoryUsageRequester")
+  inventoryUsageDecisions InventoryUsageRequest[] @relation("inventoryUsageDecider")
+  createdBudgetPlans  BudgetPlan[]        @relation("budgetPlanCreator")
+  updatedBudgetPlans  BudgetPlan[]        @relation("budgetPlanUpdater")
+  copilotChatThreads  CopilotChatThread[]
+}
+
+model Role {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  users       User[]
+}
+
+model Client {
+  id                 String               @id @default(cuid())
+  name               String               @unique
+  contactPerson      String?
+  email              String?
+  phone              String?
+  description        String?
+  address            String?
+  logoUrl            String?
+  profilePhotoUrl    String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  projects           Project[]
+  drillReports       DrillReport[]
+  revenues           Revenue[]
+  expenses           Expense[]
+  maintenance        MaintenanceRequest[]
+  rigUsages          RigUsage[]
+  breakdownReports   BreakdownReport[]
+  inventoryMovements InventoryMovement[]
+  budgetPlans        BudgetPlan[]
+}
+
+model Project {
+  id                 String               @id @default(cuid())
+  clientId           String
+  name               String
+  location           String
+  description        String?
+  photoUrl           String?
+  startDate          DateTime
+  endDate            DateTime?
+  status             ProjectStatus        @default(PLANNED)
+  contractRatePerM   Float
+  assignedRigId      String?
+  backupRigId        String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  client             Client               @relation(fields: [clientId], references: [id])
+  assignedRig        Rig?                 @relation("assignedRig", fields: [assignedRigId], references: [id])
+  backupRig          Rig?                 @relation("backupRig", fields: [backupRigId], references: [id])
+  rigUsage           RigUsage[]
+  drillReports       DrillReport[]
+  revenues           Revenue[]
+  expenses           Expense[]
+  maintenance        MaintenanceRequest[]
+  summaryReports     SummaryReport[]
+  breakdownReports   BreakdownReport[]
+  inventoryMovements InventoryMovement[]
+  inventoryUsageRequests InventoryUsageRequest[]
+  budgetPlans        BudgetPlan[]
+}
+
+model Rig {
+  id                       String               @id @default(cuid())
+  rigCode                  String               @unique
+  model                    String
+  serialNumber             String               @unique
+  photoUrl                 String?
+  acquisitionDate          DateTime?
+  status                   RigStatus            @default(IDLE)
+  condition                RigCondition         @default(GOOD)
+  conditionScore           Int                  @default(80)
+  totalHoursWorked         Float                @default(0)
+  totalMetersDrilled       Float                @default(0)
+  totalLifetimeDays        Int                  @default(0)
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
+  assignedProjects         Project[]            @relation("assignedRig")
+  backupProjects           Project[]            @relation("backupRig")
+  rigUsage                 RigUsage[]
+  drillReports             DrillReport[]
+  revenues                 Revenue[]
+  expenses                 Expense[]
+  maintenance              MaintenanceRequest[]
+  inspections              Inspection[]
+  breakdownReports         BreakdownReport[]
+  inventoryMovements       InventoryMovement[]
+  compatibleInventoryItems InventoryItem[]      @relation("itemCompatibleRig")
+  inventoryUsageRequests   InventoryUsageRequest[]
+  budgetPlans              BudgetPlan[]
+}
+
+model RigUsage {
+  id         String    @id @default(cuid())
+  rigId      String
+  projectId  String
+  clientId   String
+  startDate  DateTime
+  endDate    DateTime?
+  usageDays  Int       @default(0)
+  usageHours Float     @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  rig        Rig       @relation(fields: [rigId], references: [id])
+  project    Project   @relation(fields: [projectId], references: [id])
+  client     Client    @relation(fields: [clientId], references: [id])
+}
+
+model DrillReport {
+  id                 String              @id @default(cuid())
+  date               DateTime
+  clientId           String
+  projectId          String
+  rigId              String
+  submittedById      String?
+  submittedAt        DateTime?
+  approvedById       String?
+  approvalStatus     EntryApprovalStatus @default(SUBMITTED)
+  approvedAt         DateTime?
+  rejectionReason    String?
+  holeNumber         String
+  areaLocation       String
+  fromMeter          Float
+  toMeter            Float
+  totalMetersDrilled Float
+  workHours          Float
+  rigMoves           Int                 @default(0)
+  standbyHours       Float               @default(0)
+  delayHours         Float               @default(0)
+  comments           String?
+  operatorCrew       String?
+  billableAmount     Float               @default(0)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  client             Client              @relation(fields: [clientId], references: [id])
+  project            Project             @relation(fields: [projectId], references: [id])
+  rig                Rig                 @relation(fields: [rigId], references: [id])
+  submittedBy        User?               @relation("reportSubmitter", fields: [submittedById], references: [id])
+  approvedBy         User?               @relation("reportApprover", fields: [approvedById], references: [id])
+}
+
+model Revenue {
+  id        String   @id @default(cuid())
+  date      DateTime
+  amount    Float
+  category  String
+  clientId  String?
+  projectId String?
+  rigId     String?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  client    Client?  @relation(fields: [clientId], references: [id])
+  project   Project? @relation(fields: [projectId], references: [id])
+  rig       Rig?     @relation(fields: [rigId], references: [id])
+}
+
+model Expense {
+  id                 String              @id @default(cuid())
+  date               DateTime
+  amount             Float
+  category           String
+  subcategory        String?
+  entrySource        String              @default("SYSTEM")
+  vendor             String?             @map("vendorName")
+  receiptNumber      String?
+  quantity           Float?
+  unitCost           Float?
+  receiptUrl         String?
+  receiptFileName    String?
+  enteredByUserId    String?             @map("submittedById")
+  submittedAt        DateTime?
+  approvedById       String?
+  approvalStatus     EntryApprovalStatus @default(DRAFT)
+  approvedAt         DateTime?
+  rejectionReason    String?
+  clientId           String?
+  projectId          String?
+  rigId              String?
+  notes              String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  client             Client?             @relation(fields: [clientId], references: [id])
+  project            Project?            @relation(fields: [projectId], references: [id])
+  rig                Rig?                @relation(fields: [rigId], references: [id])
+  enteredBy          User?               @relation("expenseEnteredBy", fields: [enteredByUserId], references: [id])
+  approvedBy         User?               @relation("expenseApprover", fields: [approvedById], references: [id])
+  inventoryMovements InventoryMovement[]
+}
+
+model AuditLog {
+  id              String    @id @default(cuid())
+  module          String
+  entityType      String
+  entityId        String
+  action          String
+  description     String?
+  beforeValueJson String?
+  afterValueJson  String?
+  actorId         String?
+  actorName       String?
+  actorRole       UserRole?
+  createdAt       DateTime  @default(now())
+  actor           User?     @relation("auditActor", fields: [actorId], references: [id])
+
+  @@index([createdAt])
+  @@index([module, action])
+  @@index([entityType, entityId])
+}
+
+model Mechanic {
+  id                String               @id @default(cuid())
+  fullName          String
+  specialization    String
+  phone             String?
+  email             String?              @unique
+  profileImageUrl   String?
+  currentAssignment String?
+  status            String               @default("AVAILABLE")
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  maintenance       MaintenanceRequest[]
+  inspections       Inspection[]
+}
+
+model MaintenanceRequest {
+  id                   String              @id @default(cuid())
+  requestCode          String              @unique
+  requestDate          DateTime
+  rigId                String
+  clientId             String?
+  projectId            String?
+  mechanicId           String
+  issueDescription     String
+  materialsNeeded      String
+  urgency              UrgencyLevel
+  photoUrls            String
+  notes                String?
+  estimatedDowntimeHrs Float               @default(0)
+  status               MaintenanceStatus   @default(SUBMITTED)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  rig                  Rig                 @relation(fields: [rigId], references: [id])
+  client               Client?             @relation(fields: [clientId], references: [id])
+  project              Project?            @relation(fields: [projectId], references: [id])
+  mechanic             Mechanic            @relation(fields: [mechanicId], references: [id])
+  updates              MaintenanceUpdate[]
+  approvals            Approval[]
+  inventoryMovements   InventoryMovement[]
+  inventoryUsageRequests InventoryUsageRequest[]
+}
+
+model InventorySupplier {
+  id            String              @id @default(cuid())
+  name          String              @unique
+  contactPerson String?
+  email         String?
+  phone         String?
+  notes         String?
+  isActive      Boolean             @default(true)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  items         InventoryItem[]
+  movements     InventoryMovement[]
+
+  @@index([name])
+}
+
+model InventoryLocation {
+  id           String              @id @default(cuid())
+  name         String              @unique
+  description  String?
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  items        InventoryItem[]
+  movementFrom InventoryMovement[] @relation("movementLocationFrom")
+  movementTo   InventoryMovement[] @relation("movementLocationTo")
+  usageRequests InventoryUsageRequest[]
+
+  @@index([name])
+}
+
+model InventoryItem {
+  id                String              @id @default(cuid())
+  name              String
+  sku               String              @unique
+  category          InventoryCategory
+  description       String?
+  quantityInStock   Float               @default(0)
+  minimumStockLevel Float               @default(0)
+  unitCost          Float               @default(0)
+  supplierId        String?
+  locationId        String?
+  compatibleRigId   String?
+  compatibleRigType String?
+  partNumber        String?
+  status            InventoryItemStatus @default(ACTIVE)
+  notes             String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  supplier          InventorySupplier?  @relation(fields: [supplierId], references: [id])
+  location          InventoryLocation?  @relation(fields: [locationId], references: [id])
+  compatibleRig     Rig?                @relation("itemCompatibleRig", fields: [compatibleRigId], references: [id])
+  movements         InventoryMovement[]
+  usageRequests     InventoryUsageRequest[]
+
+  @@index([category])
+  @@index([status])
+  @@index([name])
+}
+
+model InventoryMovement {
+  id                    String                @id @default(cuid())
+  itemId                String
+  movementType          InventoryMovementType
+  quantity              Float
+  unitCost              Float?
+  totalCost             Float?
+  date                  DateTime
+  performedByUserId     String?
+  clientId              String?
+  rigId                 String?
+  projectId             String?
+  maintenanceRequestId  String?
+  expenseId             String?
+  supplierId            String?
+  locationFromId        String?
+  locationToId          String?
+  traReceiptNumber      String?
+  supplierInvoiceNumber String?
+  receiptUrl            String?
+  receiptFileName       String?
+  notes                 String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  item                  InventoryItem         @relation(fields: [itemId], references: [id])
+  performedBy           User?                 @relation("inventoryPerformedBy", fields: [performedByUserId], references: [id])
+  client                Client?               @relation(fields: [clientId], references: [id])
+  rig                   Rig?                  @relation(fields: [rigId], references: [id])
+  project               Project?              @relation(fields: [projectId], references: [id])
+  maintenanceRequest    MaintenanceRequest?   @relation(fields: [maintenanceRequestId], references: [id])
+  expense               Expense?              @relation(fields: [expenseId], references: [id])
+  supplier              InventorySupplier?    @relation(fields: [supplierId], references: [id])
+  locationFrom          InventoryLocation?    @relation("movementLocationFrom", fields: [locationFromId], references: [id])
+  locationTo            InventoryLocation?    @relation("movementLocationTo", fields: [locationToId], references: [id])
+
+  @@index([itemId, date])
+  @@index([movementType, date])
+  @@index([rigId, projectId, date])
+  @@index([maintenanceRequestId, date])
+}
+
+model InventoryUsageRequest {
+  id                String                      @id @default(cuid())
+  itemId            String
+  quantity          Float
+  reason            String
+  projectId         String?
+  rigId             String?
+  maintenanceRequestId String?
+  locationId        String?
+  requestedForDate  DateTime?
+  requestedById     String?
+  status            InventoryUsageRequestStatus @default(SUBMITTED)
+  decisionNote      String?
+  decidedById       String?
+  decidedAt         DateTime?
+  approvedMovementId String?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+  item              InventoryItem               @relation(fields: [itemId], references: [id])
+  project           Project?                    @relation(fields: [projectId], references: [id])
+  rig               Rig?                        @relation(fields: [rigId], references: [id])
+  maintenanceRequest MaintenanceRequest?        @relation(fields: [maintenanceRequestId], references: [id])
+  location          InventoryLocation?          @relation(fields: [locationId], references: [id])
+  requestedBy       User?                       @relation("inventoryUsageRequester", fields: [requestedById], references: [id])
+  decidedBy         User?                       @relation("inventoryUsageDecider", fields: [decidedById], references: [id])
+
+  @@index([status, createdAt])
+  @@index([itemId, createdAt])
+  @@index([projectId, rigId, locationId])
+  @@index([maintenanceRequestId, requestedForDate])
+}
+
+model MaintenanceUpdate {
+  id                 String             @id @default(cuid())
+  maintenanceId      String
+  actorUserId        String
+  previousStatus     MaintenanceStatus?
+  newStatus          MaintenanceStatus
+  updateNote         String
+  createdAt          DateTime           @default(now())
+  maintenanceRequest MaintenanceRequest @relation(fields: [maintenanceId], references: [id])
+  actor              User               @relation("maintenanceActor", fields: [actorUserId], references: [id])
+}
+
+model Inspection {
+  id                 String       @id @default(cuid())
+  rigId              String
+  mechanicId         String
+  inspectionDate     DateTime
+  condition          RigCondition
+  conditionScore     Int
+  findings           String
+  recommendedActions String?
+  createdAt          DateTime     @default(now())
+  rig                Rig          @relation(fields: [rigId], references: [id])
+  mechanic           Mechanic     @relation(fields: [mechanicId], references: [id])
+}
+
+model Approval {
+  id                 String             @id @default(cuid())
+  maintenanceId      String
+  approverId         String
+  decision           ApprovalDecision
+  note               String?
+  createdAt          DateTime           @default(now())
+  maintenanceRequest MaintenanceRequest @relation(fields: [maintenanceId], references: [id])
+  approver           User               @relation(fields: [approverId], references: [id])
+}
+
+model SummaryReport {
+  id            String   @id @default(cuid())
+  reportDate    DateTime
+  reportType    String
+  clientId      String?
+  projectId     String?
+  payloadJson   String
+  generatedById String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  project       Project? @relation(fields: [projectId], references: [id])
+
+  @@index([reportType, reportDate])
+}
+
+model BreakdownReport {
+  id            String       @id @default(cuid())
+  reportDate    DateTime     @default(now())
+  reportedById  String
+  rigId         String
+  projectId     String
+  clientId      String
+  title         String
+  description   String
+  severity      UrgencyLevel @default(MEDIUM)
+  downtimeHours Float        @default(0)
+  status        String       @default("SUBMITTED")
+  photoUrls     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  reportedBy    User         @relation("breakdownReporter", fields: [reportedById], references: [id])
+  rig           Rig          @relation(fields: [rigId], references: [id])
+  project       Project      @relation(fields: [projectId], references: [id])
+  client        Client       @relation(fields: [clientId], references: [id])
+}
+
+model BudgetPlan {
+  id          String          @id @default(cuid())
+  scopeType   BudgetScopeType
+  name        String
+  amount      Float
+  currency    String          @default("USD")
+  periodStart DateTime
+  periodEnd   DateTime
+  isActive    Boolean         @default(true)
+  notes       String?
+  clientId    String?
+  projectId   String?
+  rigId       String?
+  createdById String
+  updatedById String
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  client      Client?         @relation(fields: [clientId], references: [id])
+  project     Project?        @relation(fields: [projectId], references: [id])
+  rig         Rig?            @relation(fields: [rigId], references: [id])
+  createdBy   User            @relation("budgetPlanCreator", fields: [createdById], references: [id])
+  updatedBy   User            @relation("budgetPlanUpdater", fields: [updatedById], references: [id])
+
+  @@index([scopeType, rigId, isActive, periodStart, periodEnd])
+  @@index([scopeType, projectId, isActive, periodStart, periodEnd])
+  @@index([clientId, isActive, periodStart, periodEnd])
+}
+
+model AlertCenterState {
+  id               String                @id @default(cuid())
+  alertKey         String                @unique
+  status           AlertResolutionStatus @default(OPEN)
+  snoozedUntil     DateTime?
+  resolvedAt       DateTime?
+  resolvedByUserId String?
+  note             String?
+  metadataJson     String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([resolvedAt])
+  @@index([snoozedUntil])
+}
+
+model CopilotChatThread {
+  id             String            @id @default(cuid())
+  userId         String
+  title          String
+  scopeMode      CopilotScopeMode  @default(THIS_PAGE)
+  currentPageKey String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages       CopilotChatMessage[]
+
+  @@index([userId, updatedAt])
+  @@index([scopeMode, updatedAt])
+}
+
+model CopilotChatMessage {
+  id               String             @id @default(cuid())
+  threadId         String
+  role             CopilotChatRole
+  intent           CopilotChatIntent?
+  content          String
+  pageKey          String?
+  scopeMode        CopilotScopeMode?
+  contextJson      String?
+  responseDataJson String?
+  createdAt        DateTime           @default(now())
+  thread           CopilotChatThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@index([intent, createdAt])
+}
