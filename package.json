@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "NEXT_DIST_DIR=.next-dev next dev",
-    "build": "NEXT_DIST_DIR=.next-build next build",
-    "start": "NEXT_DIST_DIR=.next-build next start",
+    "build": "next build",
+    "start": "next start",
     "lint": "next lint",
     "typecheck": "rm -f tsconfig.tsbuildinfo && NEXT_DIST_DIR=.next-build next typegen && tsc --noEmit",
     "smoke:critical": "npx tsx scripts/smoke-critical-workflows.ts",
