@@ -5,7 +5,6 @@ import Link from "next/link";
 
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { AccessGate } from "@/components/layout/access-gate";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import {
@@ -1391,17 +1390,6 @@ export default function ApprovalsPage() {
             </div>
 
             <div
-              id={APPROVAL_SECTION_IDS.focus}
-              className={
-                focusedSectionId === APPROVAL_SECTION_IDS.focus
-                  ? "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-                  : undefined
-              }
-            >
-              <AiFocusPanel context={copilotContext} pageKey="approvals" />
-            </div>
-
-            <div
               id={APPROVAL_SECTION_IDS.receipts}
               className={`overflow-hidden rounded-xl border border-slate-200 ${
                 focusedSectionId === APPROVAL_SECTION_IDS.receipts
@@ -1889,7 +1877,6 @@ const APPROVAL_TABS: Array<{ key: ApprovalTab; label: string }> = [
 
 const APPROVAL_SECTION_IDS = {
   summary: "approvals-summary-section",
-  focus: "approvals-focus-panel-section",
   receipts: "approvals-receipts-section",
   drilling: "approvals-tab-drilling-reports",
   maintenance: "approvals-tab-maintenance",

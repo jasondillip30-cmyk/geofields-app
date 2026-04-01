@@ -5,7 +5,6 @@ import Link from "next/link";
 import { RotateCw } from "lucide-react";
 
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
@@ -961,17 +960,6 @@ export default function AlertsCenterPage() {
           </div>
         </section>
 
-        <section
-          id="alerts-focus-panel-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "alerts-focus-panel-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <AiFocusPanel context={copilotContext} pageKey="alerts-center" />
-        </section>
-
         <section className="gf-section">
           <SectionHeader
             title="Active Alerts"
@@ -1160,7 +1148,7 @@ export default function AlertsCenterPage() {
                 {bulkFeedback ? <p className="mb-2 text-xs text-emerald-700">{bulkFeedback}</p> : null}
                 {aiFeedback ? <p className="mb-2 text-xs text-indigo-700">AI-generated advisory: {aiFeedback}</p> : null}
                 <p className="mb-2 text-[11px] text-slate-500">
-                  Use the Focus Panel for page-first triage, then open the global assistant for cross-page routing if needed.
+                  Use this alerts queue for page-first triage, then open the global assistant for cross-page routing if needed.
                 </p>
                 <DataTable
                   columns={[

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { MaintenanceStatusBadge } from "@/components/modules/status-utils";
 import { AccessGate } from "@/components/layout/access-gate";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
@@ -613,16 +612,6 @@ function MaintenanceWorkspace() {
       )}
 
       <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
-
-      <section
-        id="maintenance-focus-panel-section"
-        className={cn(
-          focusedSectionId === "maintenance-focus-panel-section" &&
-            "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-        )}
-      >
-        <AiFocusPanel context={copilotContext} pageKey="maintenance" />
-      </section>
 
       <section>
         <WorkflowAssistPanel model={maintenanceWorkflowAssist} />

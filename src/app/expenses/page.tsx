@@ -4,7 +4,6 @@ import { Suspense, type ReactNode, useCallback, useEffect, useMemo, useState } f
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
@@ -948,17 +947,6 @@ function ExpensesPageContent() {
               window.dispatchEvent(new Event("gf:profit-updated"));
             }}
           />
-        </section>
-
-        <section
-          id="expenses-focus-panel-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "expenses-focus-panel-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <AiFocusPanel context={copilotContext} pageKey="expenses" />
         </section>
 
         <section

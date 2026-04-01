@@ -15,7 +15,6 @@ import {
 import { RotateCw } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
@@ -977,17 +976,6 @@ export default function ExecutiveOverviewPage() {
               </p>
             </Card>
           </div>
-        </section>
-
-        <section
-          id="executive-focus-panel-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "executive-focus-panel-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <AiFocusPanel context={copilotContext} pageKey="executive-overview" />
         </section>
 
         <section

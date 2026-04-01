@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
@@ -495,16 +494,6 @@ export default function RigsPage() {
     <AccessGate permission="rigs:view">
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} rigLabel={selectedRigLabel} />
-
-        <section
-          id="rigs-focus-panel-section"
-          className={cn(
-            focusedSectionId === "rigs-focus-panel-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <AiFocusPanel context={copilotContext} pageKey="rigs" />
-        </section>
 
         <section className="grid gap-3 md:grid-cols-5">
           <MetricCard

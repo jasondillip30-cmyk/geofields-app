@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { RotateCw } from "lucide-react";
 
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { AiFocusPanel } from "@/components/layout/ai-focus-panel";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import {
@@ -949,21 +948,10 @@ export default function DataQualityLinkageCenterPage() {
                 AI suggestions are advisory only and use existing record patterns from approved operational data.
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
-                Use the Focus Panel to prioritize this page first, then use global assistant routing only when you need cross-page context.
+                Use this linkage queue to prioritize page-level fixes first, then use global assistant routing only when you need cross-page context.
               </p>
             </Card>
           </div>
-        </section>
-
-        <section
-          id="linkage-focus-panel-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "linkage-focus-panel-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <AiFocusPanel context={copilotContext} pageKey="data-quality-linkage-center" />
         </section>
 
         <section className="gf-section">
