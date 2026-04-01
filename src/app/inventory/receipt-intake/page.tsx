@@ -694,7 +694,7 @@ function InventoryReceiptIntakePageContent() {
 
   return (
     <AccessGate permission="inventory:view">
-      <div className="gf-page-stack space-y-4 md:space-y-5">
+      <div className="gf-page-stack space-y-3 md:space-y-4">
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
         )}
@@ -730,14 +730,86 @@ function InventoryReceiptIntakePageContent() {
               </Link>
             </div>
           </div>
-          <div className="mt-4 border-t border-slate-200/80" />
+          <div className="mt-3 border-t border-slate-200/80" />
         </section>
 
-        <section className="grid gap-3 md:grid-cols-3">
-          <MetricCard label="Receipts in Scope" value={String(historyRows.length)} />
-          <MetricCard label="Receipt-Linked Value" value={formatCurrency(totalReceiptValue)} />
-          <MetricCard label="Suppliers in Intake" value={String(new Set(historyRows.map((row) => row.supplier?.id || "")).size)} />
-        </section>
+        {currentView === "scan" && (
+          <section id="inventory-receipt-entry-section" className="rounded-2xl border border-brand-200 bg-brand-50/70 p-4 shadow-sm md:p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Start Here</p>
+            <p className="mt-1 text-sm text-brand-900">
+              Choose your intake path first, then continue straight into scanning and review.
+            </p>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setEntryMode("REQUISITION")}
+                className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
+                  entryMode === "REQUISITION"
+                    ? "border-brand-500 bg-white text-brand-900 shadow-sm"
+                    : "border-brand-200 bg-white/80 text-slate-700 hover:bg-white"
+                }`}
+              >
+                Start from Approved Requisition
+              </button>
+              <button
+                type="button"
+                onClick={() => setEntryMode("MANUAL")}
+                className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
+                  entryMode === "MANUAL"
+                    ? "border-brand-500 bg-white text-brand-900 shadow-sm"
+                    : "border-brand-200 bg-white/80 text-slate-700 hover:bg-white"
+                }`}
+              >
+                Manual Entry (No Requisition)
+              </button>
+            </div>
+            {entryMode === "REQUISITION" && (
+              <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                <label className="text-xs text-ink-700">
+                  <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
+                  <select
+                    value={selectedRequisitionId}
+                    onChange={(event) => setSelectedRequisitionId(event.target.value)}
+                    className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800"
+                  >
+                    <option value="">Select approved requisition</option>
+                    {urlRequisitionPrefill &&
+                      !approvedRequisitions.some((entry) => entry.id === urlRequisitionPrefill.id) && (
+                        <option value={urlRequisitionPrefill.id}>
+                          {urlRequisitionPrefill.requisitionCode} • {formatRequisitionType(urlRequisitionPrefill.type)}
+                        </option>
+                      )}
+                    {approvedRequisitions.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.requisitionCode} • {formatRequisitionType(entry.type)} • {formatCurrency(entry.totals.approvedTotalCost)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {requisitionLookupError && (
+                  <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                    {requisitionLookupError}
+                  </p>
+                )}
+                {selectedRequisitionSummary ? (
+                  <p className="mt-2 text-xs text-indigo-900">
+                    Prefilled from{" "}
+                    <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>
+                    {" • "}
+                    {selectedRequisitionSummary.type} • Project:{" "}
+                    <span className="font-semibold">{selectedRequisitionSummary.projectName}</span> • Rig:{" "}
+                    <span className="font-semibold">{selectedRequisitionSummary.rigCode}</span> • Client:{" "}
+                    <span className="font-semibold">{selectedRequisitionSummary.clientName}</span>
+                  </p>
+                ) : (
+                  <p className="mt-2 text-xs text-indigo-900">
+                    Select an approved requisition to continue with prefilled receipt intake, or switch to manual entry.
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+        )}
 
         {currentView === "scan" && (
           <section
@@ -757,81 +829,6 @@ function InventoryReceiptIntakePageContent() {
                 Submissions from your role are saved as <span className="font-semibold">Pending review</span>. A manager/admin must review and finalize posting.
               </p>
             )}
-            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Entry Point</p>
-              <p className="mt-1 text-xs text-slate-600">
-                Start from an approved requisition whenever possible. Use manual entry only when no requisition exists.
-              </p>
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setEntryMode("REQUISITION")}
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    entryMode === "REQUISITION"
-                      ? "border-brand-300 bg-brand-50 text-brand-800"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Start from Approved Requisition
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEntryMode("MANUAL")}
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    entryMode === "MANUAL"
-                      ? "border-brand-300 bg-brand-50 text-brand-800"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Manual Entry (No Requisition)
-                </button>
-              </div>
-              {entryMode === "REQUISITION" && (
-                <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-                  <label className="text-xs text-ink-700">
-                    <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
-                    <select
-                      value={selectedRequisitionId}
-                      onChange={(event) => setSelectedRequisitionId(event.target.value)}
-                      className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800"
-                    >
-                      <option value="">Select approved requisition</option>
-                      {urlRequisitionPrefill &&
-                        !approvedRequisitions.some((entry) => entry.id === urlRequisitionPrefill.id) && (
-                          <option value={urlRequisitionPrefill.id}>
-                            {urlRequisitionPrefill.requisitionCode} • {formatRequisitionType(urlRequisitionPrefill.type)}
-                          </option>
-                        )}
-                      {approvedRequisitions.map((entry) => (
-                        <option key={entry.id} value={entry.id}>
-                          {entry.requisitionCode} • {formatRequisitionType(entry.type)} • {formatCurrency(entry.totals.approvedTotalCost)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {requisitionLookupError && (
-                    <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                      {requisitionLookupError}
-                    </p>
-                  )}
-                  {selectedRequisitionSummary ? (
-                    <p className="mt-2 text-xs text-indigo-900">
-                      Workflow and context will be prefilled and locked from requisition{" "}
-                      <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>
-                      {" • "}
-                      {selectedRequisitionSummary.type} • Project:{" "}
-                      <span className="font-semibold">{selectedRequisitionSummary.projectName}</span> • Rig:{" "}
-                      <span className="font-semibold">{selectedRequisitionSummary.rigCode}</span> • Client:{" "}
-                      <span className="font-semibold">{selectedRequisitionSummary.clientName}</span>
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs text-indigo-900">
-                      Select an approved requisition to start purchase receipt intake, or switch to manual entry.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
             {activeRequisitionPrefill && (
               <p className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
                 Purchase stage linked to requisition{" "}
@@ -1012,6 +1009,12 @@ function InventoryReceiptIntakePageContent() {
           </Card>
           </section>
         )}
+
+        <section className="grid gap-3 md:grid-cols-3">
+          <MetricCard label="Receipts in Scope" value={String(historyRows.length)} />
+          <MetricCard label="Receipt-Linked Value" value={formatCurrency(totalReceiptValue)} />
+          <MetricCard label="Suppliers in Intake" value={String(new Set(historyRows.map((row) => row.supplier?.id || "")).size)} />
+        </section>
       </div>
     </AccessGate>
   );
