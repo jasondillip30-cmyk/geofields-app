@@ -48,6 +48,11 @@ interface ReceiptIntakePanelProps {
     id: string;
     status: "SUBMITTED" | "APPROVED" | "REJECTED";
     draft: {
+      workflowType?:
+        | "PROJECT_PURCHASE"
+        | "MAINTENANCE_PURCHASE"
+        | "STOCK_PURCHASE"
+        | "INTERNAL_TRANSFER";
       receiptType?:
         | "INVENTORY_PURCHASE"
         | "MAINTENANCE_LINKED_PURCHASE"
@@ -183,6 +188,7 @@ interface ReviewState {
   expenseOnlyCategory: ExpenseOnlyCategory | "";
   createExpense: boolean;
   receiptPurpose: ReceiptPurpose;
+  receiptWorkflowChoice: ReceiptWorkflowChoice;
   receiptClassification: ReceiptClassification;
   warnings: string[];
   extractionMethod: string;
@@ -232,6 +238,12 @@ type ReceiptClassification =
   | "INVENTORY_PURCHASE"
   | "MAINTENANCE_LINKED_PURCHASE"
   | "EXPENSE_ONLY"
+  | "INTERNAL_TRANSFER";
+
+type ReceiptWorkflowChoice =
+  | "PROJECT_PURCHASE"
+  | "MAINTENANCE_PURCHASE"
+  | "STOCK_PURCHASE"
   | "INTERNAL_TRANSFER";
 
 interface QrCropSelection {
@@ -346,6 +358,7 @@ export function ReceiptIntakePanel({
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [receiptClassification, setReceiptClassification] = useState<ReceiptClassification | "">("");
+  const [receiptWorkflowChoice, setReceiptWorkflowChoice] = useState<ReceiptWorkflowChoice | "">("");
   const [duplicateOverrideConfirmed, setDuplicateOverrideConfirmed] = useState(false);
   const [manualQrAssistEnabled, setManualQrAssistEnabled] = useState(false);
   const [qrAssistSelection, setQrAssistSelection] = useState<QrCropSelection | null>(null);
@@ -395,6 +408,7 @@ export function ReceiptIntakePanel({
     }
     if (requisitionClassification && receiptClassification !== requisitionClassification) {
       setReceiptClassification(requisitionClassification);
+      setReceiptWorkflowChoice(mapRequisitionTypeToWorkflowChoice(initialRequisition.type));
     }
   }, [
     activeSubmission,
@@ -423,6 +437,7 @@ export function ReceiptIntakePanel({
     });
     setReview(hydrated);
     setReceiptClassification(hydrated.receiptClassification);
+    setReceiptWorkflowChoice(resolveWorkflowChoiceFromReview(hydrated));
     setActiveSubmissionId(activeSubmission.id);
     setNoticeTone("WARNING");
     setNotice(
@@ -521,6 +536,25 @@ export function ReceiptIntakePanel({
     review,
     saveReadiness
   });
+
+  const activeWorkflowChoice = useMemo<ReceiptWorkflowChoice | "">(() => {
+    if (review) {
+      return resolveWorkflowChoiceFromReview(review);
+    }
+    return receiptWorkflowChoice;
+  }, [receiptWorkflowChoice, review]);
+  const requiresAllocation = useMemo(() => {
+    return activeWorkflowChoice === "PROJECT_PURCHASE" || activeWorkflowChoice === "MAINTENANCE_PURCHASE";
+  }, [activeWorkflowChoice]);
+
+  function applyWorkflowChoice(choice: ReceiptWorkflowChoice) {
+    const workflowConfig = resolveWorkflowSelectionConfig(choice);
+    setReceiptWorkflowChoice(choice);
+    setReceiptClassification(workflowConfig.classification);
+    setReview((current) =>
+      current ? applyWorkflowSelectionUpdate(current, workflowConfig) : current
+    );
+  }
 
   function closeFocusedRecordOverlay() {
     setFocusedRecordPayload(null);
@@ -631,11 +665,12 @@ export function ReceiptIntakePanel({
       setExtractState("FAILED");
       return;
     }
-    if (!receiptClassification) {
-      setError("Select a receipt type before scanning.");
+    if (!receiptWorkflowChoice) {
+      setError("Select a receipt workflow type before scanning.");
       setExtractState("FAILED");
       return;
     }
+    const selectedWorkflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
 
     setExtractState("UPLOADING");
     setError(null);
@@ -672,7 +707,8 @@ export function ReceiptIntakePanel({
           receiptFileName: receiptFile.name,
           defaultClientId,
           defaultRigId,
-          receiptClassification,
+          receiptClassification: selectedWorkflowConfig.classification,
+          receiptWorkflowChoice,
           initialRequisition
         });
         setReview(nextReview);
@@ -711,7 +747,8 @@ export function ReceiptIntakePanel({
           response.ok
             ? readPayloadMessage(payload, "Some fields need review. You can continue manually.")
             : readApiError(response, payload, "Some fields need review. You can continue manually."),
-        receiptClassification,
+        receiptClassification: selectedWorkflowConfig.classification,
+        receiptWorkflowChoice,
         initialRequisition
       });
       setReview(fallbackReview);
@@ -734,7 +771,8 @@ export function ReceiptIntakePanel({
           (scanError instanceof Error && scanError.message
             ? scanError.message
             : "Some fields need review. You can continue manually."),
-        receiptClassification,
+        receiptClassification: selectedWorkflowConfig.classification,
+        receiptWorkflowChoice,
         initialRequisition
       });
       setReview(fallbackReview);
@@ -761,6 +799,11 @@ export function ReceiptIntakePanel({
     nextReview: ReviewState,
     options: { auto: boolean; allowDuplicateSave?: boolean }
   ) {
+    const readiness = evaluateSaveReadiness(nextReview);
+    if (!readiness.ready) {
+      setError(readiness.reasons[0] || "Complete required receipt context before saving.");
+      return;
+    }
     if (options.auto) {
       const autoReadiness = evaluateAutoSaveEligibility(nextReview);
       if (!autoReadiness.ready) {
@@ -835,6 +878,7 @@ export function ReceiptIntakePanel({
             locationToId: nextReview.locationToId || null
           },
           allowDuplicateSave: Boolean(options.allowDuplicateSave),
+          workflowType: resolveWorkflowChoiceFromReview(nextReview),
           receiptType: nextReview.receiptClassification,
           expenseOnlyCategory: nextReview.expenseOnlyCategory || null,
           receiptPurpose: nextReview.receiptPurpose,
@@ -1314,18 +1358,26 @@ export function ReceiptIntakePanel({
           )}
         </div>
 
-        <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-3">
+        <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 1</p>
-            <p className="text-slate-600">Classify and scan receipt</p>
+            <p className="text-slate-600">Select workflow type</p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 2</p>
-            <p className="text-slate-600">Review extracted fields and line items</p>
+            <p className="text-slate-600">Upload and scan receipt</p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 3</p>
-            <p className="text-slate-600">Complete links and submit/finalize</p>
+            <p className="text-slate-600">Review extracted data</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+            <p className="font-semibold text-slate-800">Step 4</p>
+            <p className="text-slate-600">Link context (required)</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+            <p className="font-semibold text-slate-800">Step 5</p>
+            <p className="text-slate-600">Submit / finalize</p>
           </div>
         </div>
 
@@ -1346,53 +1398,60 @@ export function ReceiptIntakePanel({
           <div className="mt-2 grid gap-2 md:grid-cols-2">
             <button
               type="button"
-              onClick={() => setReceiptClassification("INVENTORY_PURCHASE")}
+              onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
               disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                receiptClassification === "INVENTORY_PURCHASE"
+                activeWorkflowChoice === "PROJECT_PURCHASE"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               } disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              Inventory purchase (stock)
+              Project Purchase (Live Work)
             </button>
             <button
               type="button"
-              onClick={() => setReceiptClassification("MAINTENANCE_LINKED_PURCHASE")}
+              onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
               disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                receiptClassification === "MAINTENANCE_LINKED_PURCHASE"
+                activeWorkflowChoice === "MAINTENANCE_PURCHASE"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               } disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              Maintenance-linked purchase
+              Maintenance Purchase (Rig Repair)
             </button>
             <button
               type="button"
-              onClick={() => setReceiptClassification("EXPENSE_ONLY")}
+              onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
               disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                receiptClassification === "EXPENSE_ONLY"
+                activeWorkflowChoice === "STOCK_PURCHASE"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               } disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              Expense only (non-inventory)
+              Stock Purchase (Inventory)
             </button>
             <button
               type="button"
-              onClick={() => setReceiptClassification("INTERNAL_TRANSFER")}
+              onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
               disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                receiptClassification === "INTERNAL_TRANSFER"
+                activeWorkflowChoice === "INTERNAL_TRANSFER"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
               } disabled:cursor-not-allowed disabled:opacity-60`}
             >
-              Internal transfer
+              Internal Transfer
             </button>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Upload / scan receipt</p>
+          <p className="mt-1 text-xs text-slate-600">
+            Capture receipt data first, then we will guide context linking before posting.
+          </p>
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
@@ -1413,7 +1472,7 @@ export function ReceiptIntakePanel({
           <button
             type="button"
             onClick={() => void handleExtract()}
-            disabled={!receiptFile || extracting || !receiptClassification}
+            disabled={!receiptFile || extracting || !receiptWorkflowChoice}
             className="gf-btn-primary"
           >
             {extractState === "UPLOADING"
@@ -1518,7 +1577,7 @@ export function ReceiptIntakePanel({
                   <button
                     type="button"
                     onClick={() => void handleExtract()}
-                    disabled={!receiptFile || !qrAssistSelection || extracting || !receiptClassification}
+                    disabled={!receiptFile || !qrAssistSelection || extracting || !receiptWorkflowChoice}
                     className="rounded border border-brand-300 bg-brand-50 px-2 py-1 font-semibold text-brand-800 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Retry With Selected QR Area
@@ -1556,7 +1615,7 @@ export function ReceiptIntakePanel({
               </div>
             )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Review extracted receipt data</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 3 — Review extracted receipt data</p>
               <p className="mt-1 text-xs text-slate-600">
                 We prefill what was captured. Confirm values, then complete any business-context fields that cannot be inferred from the receipt image.
               </p>
@@ -1579,28 +1638,41 @@ export function ReceiptIntakePanel({
                 <p><span className="font-semibold">Supplier:</span> {review.supplierName || "-"}</p>
                 <p><span className="font-semibold">Receipt #:</span> {review.receiptNumber || "-"}</p>
                 <p><span className="font-semibold">Total:</span> {formatMoneyText(review.total, review.currency)}</p>
-                <p>
-                  <span className="font-semibold">Allocation:</span>{" "}
-                  <span
-                    className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                      allocationPreview === "ALLOCATED"
-                        ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-                        : "border-amber-300 bg-amber-100 text-amber-800"
-                    }`}
-                  >
-                    {formatAllocationStatusLabel(allocationPreview || "UNALLOCATED")}
-                  </span>
-                  {allocationPreview !== "ALLOCATED" && (
-                    <span className="ml-2 text-amber-800">Needs allocation</span>
-                  )}
-                </p>
+                {requiresAllocation ? (
+                  <p>
+                    <span className="font-semibold">Allocation:</span>{" "}
+                    <span
+                      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
+                        allocationPreview === "ALLOCATED"
+                          ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                          : "border-amber-300 bg-amber-100 text-amber-800"
+                      }`}
+                    >
+                      {formatAllocationStatusLabel(allocationPreview || "UNALLOCATED")}
+                    </span>
+                    {allocationPreview !== "ALLOCATED" && (
+                      <span className="ml-2 text-amber-800">Needs allocation</span>
+                    )}
+                  </p>
+                ) : (
+                  <p>
+                    <span className="font-semibold">Allocation:</span> Not required for this workflow
+                  </p>
+                )}
               </div>
               <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <p>
                   <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, totals, and verification fields when confidence is sufficient.
                 </p>
                 <p className="mt-1">
-                  <span className="font-semibold">Usually manual:</span> client, project, rig, maintenance linkage, and allocation details.
+                  <span className="font-semibold">Usually manual:</span>{" "}
+                  {activeWorkflowChoice === "PROJECT_PURCHASE"
+                    ? "project linkage, optional rig context, and allocation details."
+                    : activeWorkflowChoice === "MAINTENANCE_PURCHASE"
+                      ? "rig linkage, optional maintenance request, and allocation details."
+                      : activeWorkflowChoice === "STOCK_PURCHASE"
+                        ? "stock location and inventory line matching."
+                        : "from/to locations and inventory line matching."}
                 </p>
                 {manualFieldHints.length > 0 && (
                   <p className="mt-1 text-amber-900">
@@ -1809,9 +1881,9 @@ export function ReceiptIntakePanel({
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 3 — Complete business context and submit</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 4 — Link context (required)</p>
               <p className="mt-1 text-xs text-slate-600">
-                Confirm allocation and posting intent, then submit for review (staff) or finalize (manager/admin).
+                Link this receipt to the right project, rig, or inventory context before posting.
               </p>
               {review.requisitionId && (
                 <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
@@ -1824,7 +1896,10 @@ export function ReceiptIntakePanel({
               )}
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-sm font-semibold text-slate-800">Receipt Approval Card</p>
+              <p className="text-sm font-semibold text-slate-800">Context Linking</p>
+              <p className="mt-1 text-xs text-slate-600">
+                Required mapping rules: Project Purchase must link a project, Maintenance Purchase must link a rig, Stock Purchase stays inventory-only, and Internal Transfer requires both locations.
+              </p>
               <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                 <label className="text-xs text-ink-700">
                   <span className="mb-1 block uppercase tracking-wide text-slate-500">Supplier (existing)</span>
@@ -1894,23 +1969,21 @@ export function ReceiptIntakePanel({
                   onChange={(value) => setReview((current) => (current ? { ...current, currency: value.toUpperCase() } : current))}
                 />
                 <SelectField
-                  label="Receipt Type"
-                  value={review.receiptClassification}
-                  onChange={(value) =>
-                    {
-                      const normalized = normalizeReceiptClassification(value);
-                      const receiptConfig = resolveReceiptConfig(normalized);
-                      setReceiptClassification(normalized);
-                      setReview((current) =>
-                        current ? applyReceiptClassificationUpdate(current, normalized, receiptConfig) : current
-                      );
+                  label="Workflow Type"
+                  value={activeWorkflowChoice}
+                  onChange={(value) => {
+                    const normalizedWorkflowChoice = normalizeReceiptWorkflowChoice(value);
+                    if (!normalizedWorkflowChoice) {
+                      return;
                     }
-                  }
+                    applyWorkflowChoice(normalizedWorkflowChoice);
+                  }}
+                  disabled={requisitionLocked}
                   options={[
-                    { value: "INVENTORY_PURCHASE", label: "Inventory purchase (stock)" },
-                    { value: "MAINTENANCE_LINKED_PURCHASE", label: "Maintenance-linked purchase" },
-                    { value: "EXPENSE_ONLY", label: "Expense only (non-inventory)" },
-                    { value: "INTERNAL_TRANSFER", label: "Internal transfer" }
+                    { value: "PROJECT_PURCHASE", label: "Project Purchase (Live Work)" },
+                    { value: "MAINTENANCE_PURCHASE", label: "Maintenance Purchase (Rig Repair)" },
+                    { value: "STOCK_PURCHASE", label: "Stock Purchase (Inventory)" },
+                    { value: "INTERNAL_TRANSFER", label: "Internal Transfer" }
                   ]}
                 />
                 <SelectField
@@ -1932,6 +2005,7 @@ export function ReceiptIntakePanel({
                         : current
                     )
                   }
+                  disabled={activeWorkflowChoice === "STOCK_PURCHASE" || activeWorkflowChoice === "INTERNAL_TRANSFER"}
                   options={[
                     { value: "", label: "No client" },
                     ...clients.map((client) => ({ value: client.id, label: client.name }))
@@ -1941,14 +2015,20 @@ export function ReceiptIntakePanel({
                   label="Link Project"
                   value={review.projectId}
                   onChange={(value) => setReview((current) => (current ? { ...current, projectId: value } : current))}
-                  disabled={review.requisitionType === "INVENTORY_STOCK_UP"}
+                  disabled={
+                    review.requisitionType === "INVENTORY_STOCK_UP" ||
+                    activeWorkflowChoice === "STOCK_PURCHASE" ||
+                    activeWorkflowChoice === "INTERNAL_TRANSFER"
+                  }
                   options={[
                     {
                       value: "",
                       label:
-                        review.requisitionType === "INVENTORY_STOCK_UP"
-                          ? "Project disabled for stock-up requisition"
-                          : "No project"
+                        review.requisitionType === "INVENTORY_STOCK_UP" ||
+                        activeWorkflowChoice === "STOCK_PURCHASE" ||
+                        activeWorkflowChoice === "INTERNAL_TRANSFER"
+                          ? "Project not required for this workflow"
+                          : "Select project (required)"
                     },
                     ...filteredProjects.map((project) => ({ value: project.id, label: project.name }))
                   ]}
@@ -1957,20 +2037,27 @@ export function ReceiptIntakePanel({
                   label="Link Rig"
                   value={review.rigId}
                   onChange={(value) => setReview((current) => (current ? { ...current, rigId: value } : current))}
+                  disabled={activeWorkflowChoice === "STOCK_PURCHASE" || activeWorkflowChoice === "INTERNAL_TRANSFER"}
                   options={[
-                    { value: "", label: "No rig" },
+                    {
+                      value: "",
+                      label:
+                        activeWorkflowChoice === "MAINTENANCE_PURCHASE"
+                          ? "Select rig (required)"
+                          : "No rig"
+                    },
                     ...rigs.map((rig) => ({ value: rig.id, label: rig.rigCode }))
                   ]}
                 />
-                {review.receiptClassification === "MAINTENANCE_LINKED_PURCHASE" && (
+                {activeWorkflowChoice === "MAINTENANCE_PURCHASE" && (
                   <SelectField
-                    label="Maintenance Request"
+                    label="Maintenance Request (optional)"
                     value={review.maintenanceRequestId}
                     onChange={(value) =>
                       setReview((current) => (current ? { ...current, maintenanceRequestId: value } : current))
                     }
                     options={[
-                      { value: "", label: "Select maintenance request" },
+                      { value: "", label: "No maintenance request selected" },
                       ...maintenanceRequests.map((request) => ({
                         value: request.id,
                         label: request.requestCode
@@ -1996,7 +2083,7 @@ export function ReceiptIntakePanel({
                     ]}
                   />
                 )}
-                {review.receiptClassification === "INTERNAL_TRANSFER" && (
+                {activeWorkflowChoice === "INTERNAL_TRANSFER" && (
                   <SelectField
                     label="From Location"
                     value={review.locationFromId}
@@ -2008,14 +2095,14 @@ export function ReceiptIntakePanel({
                   />
                 )}
                 <SelectField
-                  label={review.receiptClassification === "INTERNAL_TRANSFER" ? "To Location" : "Stock Location"}
+                  label={activeWorkflowChoice === "INTERNAL_TRANSFER" ? "To Location" : "Stock Location"}
                   value={review.locationToId}
                   onChange={(value) => setReview((current) => (current ? { ...current, locationToId: value } : current))}
                   options={[
                     {
                       value: "",
                       label:
-                        review.receiptClassification === "INTERNAL_TRANSFER"
+                        activeWorkflowChoice === "INTERNAL_TRANSFER"
                           ? "Select destination location"
                           : "No location"
                     },
@@ -2024,15 +2111,15 @@ export function ReceiptIntakePanel({
                 />
               </div>
               <p className="mt-2 text-xs text-slate-700">
-                {review.receiptClassification === "MAINTENANCE_LINKED_PURCHASE"
-                  ? "Maintenance-linked purchase: stock and expense posting will be tied to the selected maintenance request."
-                  : review.receiptClassification === "EXPENSE_ONLY"
-                    ? "Expense-only: this will create an expense record and will not create inventory stock movements."
-                    : review.receiptClassification === "INTERNAL_TRANSFER"
-                      ? "Internal transfer: this creates transfer stock movements only and does not create an expense record."
-                      : "Inventory purchase: this will create stock movements and record the purchase expense."}
+                {activeWorkflowChoice === "PROJECT_PURCHASE"
+                  ? "Project purchase: posted costs will flow into the selected project profitability."
+                  : activeWorkflowChoice === "MAINTENANCE_PURCHASE"
+                    ? "Maintenance purchase: posted costs are tied to the selected rig and maintenance context."
+                    : activeWorkflowChoice === "STOCK_PURCHASE"
+                      ? "Stock purchase: this remains inventory-only and will not be posted as project cost."
+                      : "Internal transfer: this creates transfer stock movements only and does not create an expense record."}
               </p>
-              {allocationPreview !== "ALLOCATED" && (
+              {requiresAllocation && allocationPreview !== "ALLOCATED" && (
                 <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
                   Needs allocation: project/client are not fully assigned yet. You can save now and update allocation later.
                 </p>
@@ -2185,6 +2272,13 @@ export function ReceiptIntakePanel({
                 </div>
               </div>
             )}
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 5 — Submit</p>
+              <p className="mt-1 text-xs text-slate-600">
+                Submit for review (staff) or finalize posting (manager/admin) once context linking is complete.
+              </p>
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -2473,6 +2567,135 @@ function normalizeReceiptClassification(value: string): ReceiptClassification {
     return value;
   }
   return "INVENTORY_PURCHASE";
+}
+
+function normalizeReceiptWorkflowChoice(value: string): ReceiptWorkflowChoice | null {
+  if (
+    value === "PROJECT_PURCHASE" ||
+    value === "MAINTENANCE_PURCHASE" ||
+    value === "STOCK_PURCHASE" ||
+    value === "INTERNAL_TRANSFER"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function resolveWorkflowSelectionConfig(choice: ReceiptWorkflowChoice): {
+  classification: ReceiptClassification;
+  receiptPurpose: ReceiptPurpose;
+  createExpense: boolean;
+} {
+  if (choice === "MAINTENANCE_PURCHASE") {
+    return {
+      classification: "MAINTENANCE_LINKED_PURCHASE",
+      receiptPurpose: "INVENTORY_AND_EXPENSE",
+      createExpense: true
+    };
+  }
+  if (choice === "STOCK_PURCHASE") {
+    return {
+      classification: "INVENTORY_PURCHASE",
+      receiptPurpose: "INVENTORY_PURCHASE",
+      createExpense: false
+    };
+  }
+  if (choice === "INTERNAL_TRANSFER") {
+    return {
+      classification: "INTERNAL_TRANSFER",
+      receiptPurpose: "INVENTORY_PURCHASE",
+      createExpense: false
+    };
+  }
+  return {
+    classification: "INVENTORY_PURCHASE",
+    receiptPurpose: "INVENTORY_AND_EXPENSE",
+    createExpense: true
+  };
+}
+
+function resolveWorkflowChoiceFromClassification({
+  receiptClassification,
+  receiptPurpose,
+  createExpense
+}: {
+  receiptClassification: ReceiptClassification;
+  receiptPurpose: ReceiptPurpose;
+  createExpense?: boolean;
+}): ReceiptWorkflowChoice {
+  if (receiptClassification === "INTERNAL_TRANSFER") {
+    return "INTERNAL_TRANSFER";
+  }
+  if (receiptClassification === "MAINTENANCE_LINKED_PURCHASE") {
+    return "MAINTENANCE_PURCHASE";
+  }
+  if (receiptClassification === "INVENTORY_PURCHASE") {
+    if (!createExpense || receiptPurpose === "INVENTORY_PURCHASE") {
+      return "STOCK_PURCHASE";
+    }
+    return "PROJECT_PURCHASE";
+  }
+  return "PROJECT_PURCHASE";
+}
+
+function resolveWorkflowChoiceFromReview(
+  review: Pick<
+    ReviewState,
+    "receiptWorkflowChoice" | "receiptClassification" | "receiptPurpose" | "createExpense" | "requisitionType"
+  >
+): ReceiptWorkflowChoice {
+  if (review.requisitionType) {
+    return mapRequisitionTypeToWorkflowChoice(review.requisitionType);
+  }
+  const explicit = normalizeReceiptWorkflowChoice(review.receiptWorkflowChoice);
+  if (explicit) {
+    return explicit;
+  }
+  return resolveWorkflowChoiceFromClassification({
+    receiptClassification: review.receiptClassification,
+    receiptPurpose: review.receiptPurpose,
+    createExpense: review.createExpense
+  });
+}
+
+function applyWorkflowSelectionUpdate(
+  current: ReviewState,
+  workflowConfig: {
+    classification: ReceiptClassification;
+    receiptPurpose: ReceiptPurpose;
+    createExpense: boolean;
+  }
+): ReviewState {
+  const workflowChoice = resolveWorkflowChoiceFromClassification({
+    receiptClassification: workflowConfig.classification,
+    receiptPurpose: workflowConfig.receiptPurpose,
+    createExpense: workflowConfig.createExpense
+  });
+
+  return {
+    ...current,
+    receiptClassification: workflowConfig.classification,
+    receiptPurpose: workflowConfig.receiptPurpose,
+    createExpense: workflowConfig.createExpense,
+    receiptWorkflowChoice: workflowChoice,
+    projectId:
+      workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+        ? current.projectId
+        : "",
+    clientId:
+      workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+        ? current.clientId
+        : "",
+    rigId:
+      workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+        ? current.rigId
+        : "",
+    maintenanceRequestId:
+      workflowChoice === "MAINTENANCE_PURCHASE" ? current.maintenanceRequestId : "",
+    locationFromId: workflowChoice === "INTERNAL_TRANSFER" ? current.locationFromId : "",
+    expenseOnlyCategory: workflowConfig.classification === "EXPENSE_ONLY" ? current.expenseOnlyCategory : "",
+    lines: applyReceiptClassificationLineDefaults(current.lines, workflowConfig.classification)
+  };
 }
 
 function formatReceiptPurposeLabel(value: string) {
@@ -2779,18 +3002,34 @@ function buildReviewStateFromSubmission({
   const receipt = draft.receipt || {};
   const linkContext = draft.linkContext || {};
   const normalizedClassification = normalizeReceiptClassification(asString(draft.receiptType));
+  const normalizedWorkflowChoice = normalizeReceiptWorkflowChoice(asString(draft.workflowType));
   const submittedLines = Array.isArray(draft.lines) ? draft.lines : [];
   const requisitionFromDraft = asString(draft.requisitionId);
   const requisitionLink = resolveRequisitionLink({
     requisitionId: requisitionFromDraft,
     initialRequisition
   });
+  const draftReceiptPurpose = normalizeReceiptPurpose(asString(draft.receiptPurpose));
+  const draftCreateExpense = typeof draft.createExpense === "boolean" ? draft.createExpense : undefined;
+  const workflowChoice = requisitionLink.type
+    ? mapRequisitionTypeToWorkflowChoice(requisitionLink.type)
+    : normalizedWorkflowChoice ||
+      resolveWorkflowChoiceFromClassification({
+        receiptClassification: normalizedClassification,
+        receiptPurpose: draftReceiptPurpose,
+        createExpense: draftCreateExpense
+      });
+  const workflowConfig = resolveWorkflowSelectionConfig(workflowChoice);
   const effectiveClassification = requisitionLink.type
     ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
-    : normalizedClassification;
+    : normalizedWorkflowChoice
+      ? workflowConfig.classification
+      : normalizedClassification;
   const receiptConfig = requisitionLink.type
     ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
-    : resolveReceiptConfig(effectiveClassification);
+    : normalizedWorkflowChoice
+      ? { receiptPurpose: workflowConfig.receiptPurpose, createExpense: workflowConfig.createExpense }
+      : resolveReceiptConfig(effectiveClassification);
   const lines = applyReceiptClassificationLineDefaults(
     submittedLines.map((line, index) => {
       const description = asString(line.description) || "Submitted receipt line";
@@ -2830,7 +3069,26 @@ function buildReviewStateFromSubmission({
     effectiveClassification
   );
 
-  const receiptPurposeRaw = asString(draft.receiptPurpose);
+  const effectiveReceiptPurpose = requisitionLink.type
+    ? receiptConfig.receiptPurpose
+    : normalizedWorkflowChoice
+      ? workflowConfig.receiptPurpose
+      : draftReceiptPurpose;
+  const effectiveCreateExpense = requisitionLink.type
+    ? receiptConfig.createExpense
+    : normalizedWorkflowChoice
+      ? workflowConfig.createExpense
+      : typeof draft.createExpense === "boolean"
+        ? draft.createExpense
+        : receiptConfig.createExpense;
+  const defaultClientForWorkflow =
+    workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+      ? defaultClientId
+      : "";
+  const defaultRigForWorkflow =
+    workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+      ? defaultRigId
+      : "";
   return {
     requisitionId: requisitionLink.id,
     requisitionCode: requisitionLink.code,
@@ -2867,26 +3125,17 @@ function buildReviewStateFromSubmission({
     subtotal: toNumericString(receipt.subtotal),
     tax: toNumericString(receipt.tax),
     total: toNumericString(receipt.total),
-    clientId: requisitionLink.clientId || asString(linkContext.clientId) || defaultClientId,
+    clientId: requisitionLink.clientId || asString(linkContext.clientId) || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || asString(linkContext.projectId),
-    rigId: requisitionLink.rigId || asString(linkContext.rigId) || defaultRigId,
+    rigId: requisitionLink.rigId || asString(linkContext.rigId) || defaultRigForWorkflow,
     maintenanceRequestId:
       requisitionLink.maintenanceRequestId || asString(linkContext.maintenanceRequestId),
     locationFromId: asString(linkContext.locationFromId),
     locationToId: asString(linkContext.locationToId),
     expenseOnlyCategory: resolveExpenseOnlyCategory(asString(draft.expenseOnlyCategory)) || "",
-    createExpense:
-      requisitionLink.type
-        ? receiptConfig.createExpense
-        : typeof draft.createExpense === "boolean"
-          ? draft.createExpense
-          : receiptConfig.createExpense,
-    receiptPurpose:
-      requisitionLink.type
-        ? receiptConfig.receiptPurpose
-        : receiptPurposeRaw.length > 0
-        ? normalizeReceiptPurpose(receiptPurposeRaw)
-        : receiptConfig.receiptPurpose,
+    createExpense: effectiveCreateExpense,
+    receiptPurpose: effectiveReceiptPurpose,
+    receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
     warnings: ["Loaded from pending submission. Review and finalize when ready."],
     extractionMethod: "SUBMISSION",
@@ -2941,6 +3190,7 @@ function buildReviewStateFromPayload({
   defaultClientId,
   defaultRigId,
   receiptClassification,
+  receiptWorkflowChoice,
   initialRequisition
 }: {
   payload: {
@@ -2955,6 +3205,7 @@ function buildReviewStateFromPayload({
   defaultClientId: string;
   defaultRigId: string;
   receiptClassification: ReceiptClassification;
+  receiptWorkflowChoice: ReceiptWorkflowChoice | "";
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
 }): ReviewState {
   const extracted = payload.extracted;
@@ -2999,12 +3250,33 @@ function buildReviewStateFromPayload({
     requisitionId: "",
     initialRequisition
   });
+  const workflowChoice = requisitionLink.type
+    ? mapRequisitionTypeToWorkflowChoice(requisitionLink.type)
+    : receiptWorkflowChoice ||
+      resolveWorkflowChoiceFromClassification({
+        receiptClassification,
+        receiptPurpose: "INVENTORY_PURCHASE",
+        createExpense: false
+      });
+  const workflowConfig = resolveWorkflowSelectionConfig(workflowChoice);
   const effectiveClassification = requisitionLink.type
     ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
-    : receiptClassification;
+    : workflowConfig.classification;
   const receiptConfig = requisitionLink.type
     ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
-    : resolveReceiptConfig(effectiveClassification);
+    : {
+        receiptPurpose: workflowConfig.receiptPurpose,
+        createExpense: workflowConfig.createExpense
+      };
+
+  const defaultClientForWorkflow =
+    workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+      ? defaultClientId
+      : "";
+  const defaultRigForWorkflow =
+    workflowChoice === "MAINTENANCE_PURCHASE" || workflowChoice === "PROJECT_PURCHASE"
+      ? defaultRigId
+      : "";
 
   return {
     requisitionId: requisitionLink.id,
@@ -3042,15 +3314,16 @@ function buildReviewStateFromPayload({
     subtotal: toNumericString(extractedHeader?.subtotal),
     tax: toNumericString(extractedHeader?.tax),
     total: toNumericString(extractedHeader?.total),
-    clientId: requisitionLink.clientId || defaultClientId,
+    clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
-    rigId: requisitionLink.rigId || defaultRigId,
+    rigId: requisitionLink.rigId || defaultRigForWorkflow,
     maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
     locationToId: "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,
+    receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
     warnings: Array.isArray(extracted.warnings)
       ? Array.from(new Set(extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean)))
@@ -3077,6 +3350,7 @@ function buildManualAssistReview({
   defaultRigId,
   warning,
   receiptClassification,
+  receiptWorkflowChoice,
   initialRequisition
 }: {
   payload: unknown;
@@ -3085,6 +3359,7 @@ function buildManualAssistReview({
   defaultRigId: string;
   warning: string;
   receiptClassification: ReceiptClassification;
+  receiptWorkflowChoice: ReceiptWorkflowChoice | "";
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
 }): ReviewState {
   const root = asRecord(payload);
@@ -3132,12 +3407,33 @@ function buildManualAssistReview({
     requisitionId: "",
     initialRequisition
   });
+  const workflowChoice = requisitionLink.type
+    ? mapRequisitionTypeToWorkflowChoice(requisitionLink.type)
+    : receiptWorkflowChoice ||
+      resolveWorkflowChoiceFromClassification({
+        receiptClassification,
+        receiptPurpose: "INVENTORY_PURCHASE",
+        createExpense: false
+      });
+  const workflowConfig = resolveWorkflowSelectionConfig(workflowChoice);
   const effectiveClassification = requisitionLink.type
     ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
-    : receiptClassification;
+    : workflowConfig.classification;
   const receiptConfig = requisitionLink.type
     ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
-    : resolveReceiptConfig(effectiveClassification);
+    : {
+        receiptPurpose: workflowConfig.receiptPurpose,
+        createExpense: workflowConfig.createExpense
+      };
+
+  const defaultClientForWorkflow =
+    workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
+      ? defaultClientId
+      : "";
+  const defaultRigForWorkflow =
+    workflowChoice === "MAINTENANCE_PURCHASE" || workflowChoice === "PROJECT_PURCHASE"
+      ? defaultRigId
+      : "";
 
   const warnings = [
     calmMessage(warning),
@@ -3182,15 +3478,16 @@ function buildManualAssistReview({
     subtotal: toNumericString(extractedHeader?.subtotal),
     tax: toNumericString(extractedHeader?.tax),
     total: toNumericString(extractedHeader?.total),
-    clientId: requisitionLink.clientId || defaultClientId,
+    clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
-    rigId: requisitionLink.rigId || defaultRigId,
+    rigId: requisitionLink.rigId || defaultRigForWorkflow,
     maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
     locationToId: "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,
+    receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
     warnings: Array.from(new Set(warnings.filter(Boolean))),
     extractionMethod: asString(extracted?.extractionMethod) || "UNKNOWN",
@@ -3275,6 +3572,18 @@ function mapRequisitionTypeToReceiptClassification(
     return "MAINTENANCE_LINKED_PURCHASE";
   }
   return "INVENTORY_PURCHASE";
+}
+
+function mapRequisitionTypeToWorkflowChoice(
+  requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE"
+): ReceiptWorkflowChoice {
+  if (requisitionType === "MAINTENANCE_PURCHASE") {
+    return "MAINTENANCE_PURCHASE";
+  }
+  if (requisitionType === "INVENTORY_STOCK_UP") {
+    return "STOCK_PURCHASE";
+  }
+  return "PROJECT_PURCHASE";
 }
 
 function resolveRequisitionLink({
@@ -3652,6 +3961,7 @@ function readDebugFlags(payload: unknown): ReviewState["debugFlags"] {
 
 function evaluateSaveReadiness(review: ReviewState): SaveReadiness {
   const reasons: string[] = [];
+  const workflowChoice = resolveWorkflowChoiceFromReview(review);
   const effectiveCreateExpense = resolveCreateExpenseForPurpose(review);
   const inventoryLines = review.lines.filter((line) => line.mode !== "EXPENSE_ONLY");
   if (!review.receiptNumber.trim()) {
@@ -3666,13 +3976,21 @@ function evaluateSaveReadiness(review: ReviewState): SaveReadiness {
   if (review.receiptPurpose === "OTHER_MANUAL") {
     reasons.push("Choose a final receipt purpose before saving.");
   }
-  if (review.receiptClassification === "MAINTENANCE_LINKED_PURCHASE" && !review.maintenanceRequestId) {
-    reasons.push("Select a maintenance request for maintenance-linked purchases.");
+  if (review.receiptClassification !== "EXPENSE_ONLY") {
+    if (workflowChoice === "PROJECT_PURCHASE" && !review.projectId) {
+      reasons.push("Select a project for Project Purchase (Live Work).");
+    }
+    if (workflowChoice === "MAINTENANCE_PURCHASE" && !review.rigId) {
+      reasons.push("Select a rig for Maintenance Purchase (Rig Repair).");
+    }
+    if (workflowChoice === "STOCK_PURCHASE" && review.projectId) {
+      reasons.push("Stock Purchase should not be linked to a project.");
+    }
   }
   if (review.receiptClassification === "EXPENSE_ONLY" && !review.expenseOnlyCategory) {
     reasons.push("Select an expense category for expense-only receipts.");
   }
-  if (review.receiptClassification === "INTERNAL_TRANSFER") {
+  if (workflowChoice === "INTERNAL_TRANSFER") {
     if (!review.locationFromId || !review.locationToId) {
       reasons.push("Select both from-location and to-location for internal transfers.");
     } else if (review.locationFromId === review.locationToId) {
@@ -3802,22 +4120,19 @@ function workflowBadgeClass(stage: WorkflowStage) {
 
 function deriveManualFieldHints(review: ReviewState) {
   const hints: string[] = [];
-  if (!review.clientId) {
-    hints.push("Link client");
-  }
-  if (!review.projectId) {
-    hints.push("Link project");
-  }
-  if (!review.rigId) {
-    hints.push("Link rig");
-  }
-  if (review.receiptClassification === "MAINTENANCE_LINKED_PURCHASE" && !review.maintenanceRequestId) {
-    hints.push("Select maintenance request");
+  const workflowChoice = resolveWorkflowChoiceFromReview(review);
+  if (review.receiptClassification !== "EXPENSE_ONLY") {
+    if (workflowChoice === "PROJECT_PURCHASE" && !review.projectId) {
+      hints.push("Select project");
+    }
+    if (workflowChoice === "MAINTENANCE_PURCHASE" && !review.rigId) {
+      hints.push("Select rig");
+    }
   }
   if (review.receiptClassification === "EXPENSE_ONLY" && !review.expenseOnlyCategory) {
     hints.push("Select expense category");
   }
-  if (review.receiptClassification === "INTERNAL_TRANSFER") {
+  if (workflowChoice === "INTERNAL_TRANSFER") {
     if (!review.locationFromId) {
       hints.push("Select from-location");
     }

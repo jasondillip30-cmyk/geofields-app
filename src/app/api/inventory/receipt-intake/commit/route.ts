@@ -76,6 +76,11 @@ interface IntakeCommitPayload {
   };
   createExpense?: boolean;
   allowDuplicateSave?: boolean;
+  workflowType?:
+    | "PROJECT_PURCHASE"
+    | "MAINTENANCE_PURCHASE"
+    | "STOCK_PURCHASE"
+    | "INTERNAL_TRANSFER";
   receiptType?:
     | "INVENTORY_PURCHASE"
     | "MAINTENANCE_LINKED_PURCHASE"
@@ -182,6 +187,11 @@ type ReceiptType =
   | "MAINTENANCE_LINKED_PURCHASE"
   | "EXPENSE_ONLY"
   | "INTERNAL_TRANSFER";
+type ReceiptWorkflowType =
+  | "PROJECT_PURCHASE"
+  | "MAINTENANCE_PURCHASE"
+  | "STOCK_PURCHASE"
+  | "INTERNAL_TRANSFER";
 
 const RECEIPT_SUBMISSION_REPORT_TYPE = "INVENTORY_RECEIPT_SUBMISSION";
 
@@ -210,6 +220,7 @@ export async function POST(request: NextRequest) {
     receiptPurpose,
     requestedCreateExpense
   });
+  let workflowType = resolveReceiptWorkflowType(body?.workflowType);
   const allowDuplicateSave = Boolean(body?.allowDuplicateSave);
   if (receiptPurpose === "OTHER_MANUAL") {
     return NextResponse.json(
@@ -288,14 +299,28 @@ export async function POST(request: NextRequest) {
       ? body.linkContext.locationToId
       : null;
   const expenseOnlyCategory = resolveExpenseOnlyCategory(body?.expenseOnlyCategory);
-  const allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
-
-  if (receiptType === "MAINTENANCE_LINKED_PURCHASE" && !maintenanceRequestId) {
-    return NextResponse.json(
-      { message: "Maintenance-linked receipts require a maintenance request." },
-      { status: 400 }
-    );
+  workflowType =
+    workflowType ||
+    deriveWorkflowTypeFromContext({
+      receiptType,
+      receiptPurpose,
+      createExpense,
+      projectId
+    });
+  if (workflowType === "STOCK_PURCHASE") {
+    clientId = null;
+    projectId = null;
+    rigId = null;
+    maintenanceRequestId = null;
   }
+  if (workflowType === "INTERNAL_TRANSFER") {
+    clientId = null;
+    projectId = null;
+    rigId = null;
+    maintenanceRequestId = null;
+  }
+  let allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
+
   if (receiptType === "EXPENSE_ONLY" && !expenseOnlyCategory) {
     return NextResponse.json(
       {
@@ -407,7 +432,7 @@ export async function POST(request: NextRequest) {
     maintenanceRequestId
       ? prisma.maintenanceRequest.findUnique({
           where: { id: maintenanceRequestId },
-          select: { id: true, status: true, requestCode: true }
+          select: { id: true, status: true, requestCode: true, rigId: true, projectId: true, clientId: true }
         })
       : Promise.resolve(null),
     requisitionId
@@ -509,7 +534,49 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    const expectedWorkflowType = mapRequisitionTypeToWorkflowType(parsedRequisition.payload.type);
+    if (workflowType !== expectedWorkflowType) {
+      return NextResponse.json(
+        {
+          message: `Linked requisition expects ${formatWorkflowTypeLabel(expectedWorkflowType)}.`
+        },
+        { status: 400 }
+      );
+    }
+    workflowType = expectedWorkflowType;
   }
+
+  if (workflowType === "MAINTENANCE_PURCHASE" && !rigId && existingMaintenanceRequest?.rigId) {
+    rigId = existingMaintenanceRequest.rigId;
+  }
+  if (workflowType === "MAINTENANCE_PURCHASE" && !projectId && existingMaintenanceRequest?.projectId) {
+    projectId = existingMaintenanceRequest.projectId;
+  }
+  if (workflowType === "MAINTENANCE_PURCHASE" && !clientId && existingMaintenanceRequest?.clientId) {
+    clientId = existingMaintenanceRequest.clientId;
+  }
+  if (workflowType === "STOCK_PURCHASE" || workflowType === "INTERNAL_TRANSFER") {
+    clientId = null;
+    projectId = null;
+    if (workflowType === "STOCK_PURCHASE") {
+      rigId = null;
+      maintenanceRequestId = null;
+    }
+  }
+
+  if (workflowType === "PROJECT_PURCHASE" && !projectId) {
+    return NextResponse.json(
+      { message: "Project Purchase (Live Work) requires linking a project before submission." },
+      { status: 400 }
+    );
+  }
+  if (workflowType === "MAINTENANCE_PURCHASE" && !rigId) {
+    return NextResponse.json(
+      { message: "Maintenance Purchase (Rig Repair) requires linking a rig before submission." },
+      { status: 400 }
+    );
+  }
+  allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
 
   const existingItemById = new Map(existingItems.map((item) => [item.id, item]));
   const supplierNameRaw = typeof body?.receipt?.supplierName === "string" ? body.receipt.supplierName.trim() : "";
@@ -620,6 +687,7 @@ export async function POST(request: NextRequest) {
 
   const submissionDraft = {
     requisitionId,
+    workflowType,
     receiptType,
     receiptPurpose,
     createExpense,
@@ -727,6 +795,7 @@ export async function POST(request: NextRequest) {
         submissionStatus: "PENDING_REVIEW",
         submissionId: submission.id,
         requisitionId,
+        workflowType,
         receiptType,
         movementCount: 0,
         itemsCreatedCount: 0,
@@ -1147,6 +1216,7 @@ export async function POST(request: NextRequest) {
       submissionStatus: submissionId ? "FINALIZED" : null,
       submissionId: submissionId || null,
       requisitionId,
+      workflowType,
       receiptType,
       supplier: result.supplierName,
       movementCount: result.createdMovements.length,
@@ -1495,6 +1565,64 @@ function resolveReceiptType(value: unknown): ReceiptType {
     return value;
   }
   return "INVENTORY_PURCHASE";
+}
+
+function resolveReceiptWorkflowType(value: unknown): ReceiptWorkflowType | null {
+  if (
+    value === "PROJECT_PURCHASE" ||
+    value === "MAINTENANCE_PURCHASE" ||
+    value === "STOCK_PURCHASE" ||
+    value === "INTERNAL_TRANSFER"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function deriveWorkflowTypeFromContext({
+  receiptType,
+  receiptPurpose,
+  createExpense,
+  projectId
+}: {
+  receiptType: ReceiptType;
+  receiptPurpose: ReceiptPurpose;
+  createExpense: boolean;
+  projectId: string | null;
+}): ReceiptWorkflowType {
+  if (receiptType === "INTERNAL_TRANSFER") {
+    return "INTERNAL_TRANSFER";
+  }
+  if (receiptType === "MAINTENANCE_LINKED_PURCHASE") {
+    return "MAINTENANCE_PURCHASE";
+  }
+  if (
+    receiptType === "INVENTORY_PURCHASE" &&
+    (!createExpense || receiptPurpose === "INVENTORY_PURCHASE") &&
+    !projectId
+  ) {
+    return "STOCK_PURCHASE";
+  }
+  return "PROJECT_PURCHASE";
+}
+
+function mapRequisitionTypeToWorkflowType(
+  requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE"
+): ReceiptWorkflowType {
+  if (requisitionType === "MAINTENANCE_PURCHASE") {
+    return "MAINTENANCE_PURCHASE";
+  }
+  if (requisitionType === "INVENTORY_STOCK_UP") {
+    return "STOCK_PURCHASE";
+  }
+  return "PROJECT_PURCHASE";
+}
+
+function formatWorkflowTypeLabel(value: ReceiptWorkflowType) {
+  if (value === "PROJECT_PURCHASE") return "Project Purchase (Live Work)";
+  if (value === "MAINTENANCE_PURCHASE") return "Maintenance Purchase (Rig Repair)";
+  if (value === "STOCK_PURCHASE") return "Stock Purchase (Inventory)";
+  return "Internal Transfer";
 }
 
 function resolveCreateExpenseByPurpose({
