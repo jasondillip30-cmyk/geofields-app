@@ -543,6 +543,7 @@ export function ReceiptIntakePanel({
     }
     return receiptWorkflowChoice;
   }, [receiptWorkflowChoice, review]);
+  const requisitionContextLocked = requisitionLocked && Boolean(initialRequisition);
   const requiresAllocation = useMemo(() => {
     return activeWorkflowChoice === "PROJECT_PURCHASE" || activeWorkflowChoice === "MAINTENANCE_PURCHASE";
   }, [activeWorkflowChoice]);
@@ -1361,7 +1362,9 @@ export function ReceiptIntakePanel({
         <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 1</p>
-            <p className="text-slate-600">Select workflow type</p>
+            <p className="text-slate-600">
+              {requisitionContextLocked ? "Prefilled from requisition" : "Select workflow type"}
+            </p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 2</p>
@@ -1373,7 +1376,9 @@ export function ReceiptIntakePanel({
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 4</p>
-            <p className="text-slate-600">Link context (required)</p>
+            <p className="text-slate-600">
+              {requisitionContextLocked ? "Context locked from requisition" : "Link context (required)"}
+            </p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 5</p>
@@ -1381,71 +1386,73 @@ export function ReceiptIntakePanel({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 1 — What type of receipt is this?</p>
-          <p className="mt-1 text-xs text-slate-600">
-            Select the business flow before scanning so posting and review rules apply correctly.
-          </p>
-          {requisitionLocked && (
-            <p className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs text-indigo-900">
-              Receipt type is locked from requisition{" "}
+        {requisitionContextLocked ? (
+          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">
+              Step 1 — Skipped (prefilled from approved requisition)
+            </p>
+            <p className="mt-1 text-xs text-indigo-900">
+              Workflow type is locked from requisition{" "}
               <span className="font-semibold">
                 {initialRequisition?.requisitionCode || initialRequisition?.id.slice(-8)}
-              </span>
-              .
+              </span>{" "}
+              to keep purchase posting aligned.
             </p>
-          )}
-          <div className="mt-2 grid gap-2 md:grid-cols-2">
-            <button
-              type="button"
-              onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
-              disabled={requisitionLocked}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                activeWorkflowChoice === "PROJECT_PURCHASE"
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              Project Purchase (Live Work)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
-              disabled={requisitionLocked}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                activeWorkflowChoice === "MAINTENANCE_PURCHASE"
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              Maintenance Purchase (Rig Repair)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
-              disabled={requisitionLocked}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                activeWorkflowChoice === "STOCK_PURCHASE"
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              Stock Purchase (Inventory)
-            </button>
-            <button
-              type="button"
-              onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
-              disabled={requisitionLocked}
-              className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                activeWorkflowChoice === "INTERNAL_TRANSFER"
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              } disabled:cursor-not-allowed disabled:opacity-60`}
-            >
-              Internal Transfer
-            </button>
           </div>
-        </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 1 — What type of receipt is this?</p>
+            <p className="mt-1 text-xs text-slate-600">
+              Select the business flow before scanning so posting and review rules apply correctly.
+            </p>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                  activeWorkflowChoice === "PROJECT_PURCHASE"
+                    ? "border-brand-300 bg-brand-50 text-brand-800"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                Project Purchase (Live Work)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                  activeWorkflowChoice === "MAINTENANCE_PURCHASE"
+                    ? "border-brand-300 bg-brand-50 text-brand-800"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                Maintenance Purchase (Rig Repair)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                  activeWorkflowChoice === "STOCK_PURCHASE"
+                    ? "border-brand-300 bg-brand-50 text-brand-800"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                Stock Purchase (Inventory)
+              </button>
+              <button
+                type="button"
+                onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                  activeWorkflowChoice === "INTERNAL_TRANSFER"
+                    ? "border-brand-300 bg-brand-50 text-brand-800"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                Internal Transfer
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Upload / scan receipt</p>
@@ -1881,9 +1888,13 @@ export function ReceiptIntakePanel({
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 4 — Link context (required)</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {requisitionContextLocked ? "Step 4 — Context linked from requisition" : "Step 4 — Link context (required)"}
+              </p>
               <p className="mt-1 text-xs text-slate-600">
-                Link this receipt to the right project, rig, or inventory context before posting.
+                {requisitionContextLocked
+                  ? "Context is prefilled from the approved requisition and locked to prevent posting mismatches."
+                  : "Link this receipt to the right project, rig, or inventory context before posting."}
               </p>
               {review.requisitionId && (
                 <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
@@ -1978,7 +1989,7 @@ export function ReceiptIntakePanel({
                     }
                     applyWorkflowChoice(normalizedWorkflowChoice);
                   }}
-                  disabled={requisitionLocked}
+                  disabled={requisitionContextLocked}
                   options={[
                     { value: "PROJECT_PURCHASE", label: "Project Purchase (Live Work)" },
                     { value: "MAINTENANCE_PURCHASE", label: "Maintenance Purchase (Rig Repair)" },
@@ -2005,7 +2016,11 @@ export function ReceiptIntakePanel({
                         : current
                     )
                   }
-                  disabled={activeWorkflowChoice === "STOCK_PURCHASE" || activeWorkflowChoice === "INTERNAL_TRANSFER"}
+                  disabled={
+                    requisitionContextLocked ||
+                    activeWorkflowChoice === "STOCK_PURCHASE" ||
+                    activeWorkflowChoice === "INTERNAL_TRANSFER"
+                  }
                   options={[
                     { value: "", label: "No client" },
                     ...clients.map((client) => ({ value: client.id, label: client.name }))
@@ -2016,6 +2031,7 @@ export function ReceiptIntakePanel({
                   value={review.projectId}
                   onChange={(value) => setReview((current) => (current ? { ...current, projectId: value } : current))}
                   disabled={
+                    requisitionContextLocked ||
                     review.requisitionType === "INVENTORY_STOCK_UP" ||
                     activeWorkflowChoice === "STOCK_PURCHASE" ||
                     activeWorkflowChoice === "INTERNAL_TRANSFER"
@@ -2037,7 +2053,11 @@ export function ReceiptIntakePanel({
                   label="Link Rig"
                   value={review.rigId}
                   onChange={(value) => setReview((current) => (current ? { ...current, rigId: value } : current))}
-                  disabled={activeWorkflowChoice === "STOCK_PURCHASE" || activeWorkflowChoice === "INTERNAL_TRANSFER"}
+                  disabled={
+                    requisitionContextLocked ||
+                    activeWorkflowChoice === "STOCK_PURCHASE" ||
+                    activeWorkflowChoice === "INTERNAL_TRANSFER"
+                  }
                   options={[
                     {
                       value: "",
@@ -2056,6 +2076,7 @@ export function ReceiptIntakePanel({
                     onChange={(value) =>
                       setReview((current) => (current ? { ...current, maintenanceRequestId: value } : current))
                     }
+                    disabled={requisitionContextLocked}
                     options={[
                       { value: "", label: "No maintenance request selected" },
                       ...maintenanceRequests.map((request) => ({

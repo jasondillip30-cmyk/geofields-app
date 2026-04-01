@@ -183,6 +183,27 @@ interface RequisitionPrefill {
   maintenanceRequestId: string | null;
 }
 
+type ReceiptEntryMode = "REQUISITION" | "MANUAL";
+
+interface ApprovedRequisitionRow {
+  id: string;
+  requisitionCode: string;
+  type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+  status: "SUBMITTED" | "APPROVED" | "REJECTED" | "PURCHASE_COMPLETED";
+  submittedAt: string;
+  context: {
+    clientId: string | null;
+    projectId: string | null;
+    rigId: string | null;
+    maintenanceRequestId: string | null;
+  };
+  totals: {
+    estimatedTotalCost: number;
+    approvedTotalCost: number;
+    actualPostedCost: number;
+  };
+}
+
 export default function InventoryReceiptIntakePage() {
   return (
     <Suspense fallback={<InventoryReceiptIntakeFallback />}>
@@ -198,7 +219,7 @@ function InventoryReceiptIntakePageContent() {
   const { filters } = useAnalyticsFilters();
   const currentView = (searchParams.get("view") || "").toLowerCase() === "history" ? "history" : "scan";
   const activeSubmissionId = searchParams.get("submissionId") || "";
-  const requisitionPrefill = useMemo<RequisitionPrefill | null>(() => {
+  const urlRequisitionPrefill = useMemo<RequisitionPrefill | null>(() => {
     const requisitionId = normalizeOptionalId(searchParams.get("requisitionId"));
     if (!requisitionId) {
       return null;
@@ -218,6 +239,13 @@ function InventoryReceiptIntakePageContent() {
     };
   }, [searchParams]);
 
+  const [entryMode, setEntryMode] = useState<ReceiptEntryMode>("REQUISITION");
+  const [selectedRequisitionId, setSelectedRequisitionId] = useState<string>(
+    () => urlRequisitionPrefill?.id || ""
+  );
+  const [approvedRequisitions, setApprovedRequisitions] = useState<ApprovedRequisitionRow[]>([]);
+  const [requisitionLookupError, setRequisitionLookupError] = useState<string | null>(null);
+
   const [clients, setClients] = useState<ReferenceClient[]>([]);
   const [projects, setProjects] = useState<ReferenceProject[]>([]);
   const [rigs, setRigs] = useState<ReferenceRig[]>([]);
@@ -232,6 +260,59 @@ function InventoryReceiptIntakePageContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
+
+  const selectedApprovedRequisition = useMemo(
+    () => approvedRequisitions.find((row) => row.id === selectedRequisitionId) || null,
+    [approvedRequisitions, selectedRequisitionId]
+  );
+  const selectedRequisitionPrefill = useMemo<RequisitionPrefill | null>(() => {
+    if (!selectedRequisitionId) {
+      return null;
+    }
+    if (urlRequisitionPrefill?.id === selectedRequisitionId) {
+      return urlRequisitionPrefill;
+    }
+    if (!selectedApprovedRequisition) {
+      return null;
+    }
+    return {
+      id: selectedApprovedRequisition.id,
+      requisitionCode: selectedApprovedRequisition.requisitionCode,
+      type: selectedApprovedRequisition.type,
+      clientId: selectedApprovedRequisition.context.clientId,
+      projectId: selectedApprovedRequisition.context.projectId,
+      rigId: selectedApprovedRequisition.context.rigId,
+      maintenanceRequestId: selectedApprovedRequisition.context.maintenanceRequestId
+    };
+  }, [selectedApprovedRequisition, selectedRequisitionId, urlRequisitionPrefill]);
+  const activeRequisitionPrefill = useMemo<RequisitionPrefill | null>(
+    () => (entryMode === "REQUISITION" ? selectedRequisitionPrefill : null),
+    [entryMode, selectedRequisitionPrefill]
+  );
+  const selectedRequisitionSummary = useMemo(() => {
+    if (!selectedRequisitionPrefill) {
+      return null;
+    }
+    const clientName = clients.find((entry) => entry.id === selectedRequisitionPrefill.clientId)?.name || "-";
+    const projectName = projects.find((entry) => entry.id === selectedRequisitionPrefill.projectId)?.name || "-";
+    const rigCode = rigs.find((entry) => entry.id === selectedRequisitionPrefill.rigId)?.rigCode || "-";
+    return {
+      type: formatRequisitionType(selectedRequisitionPrefill.type),
+      clientName,
+      projectName,
+      rigCode
+    };
+  }, [clients, projects, rigs, selectedRequisitionPrefill]);
+  const canRenderReceiptPanel =
+    entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
+
+  useEffect(() => {
+    if (!urlRequisitionPrefill) {
+      return;
+    }
+    setEntryMode("REQUISITION");
+    setSelectedRequisitionId(urlRequisitionPrefill.id);
+  }, [urlRequisitionPrefill]);
 
   const selectedClientLabel = useMemo(() => {
     if (filters.clientId === "all") {
@@ -257,8 +338,21 @@ function InventoryReceiptIntakePageContent() {
       if (filters.clientId !== "all") movementQuery.set("clientId", filters.clientId);
       if (filters.rigId !== "all") movementQuery.set("rigId", filters.rigId);
       const submissionsQuery = new URLSearchParams(movementQuery);
+      const requisitionsQuery = new URLSearchParams(movementQuery);
+      requisitionsQuery.set("status", "APPROVED");
 
-      const [clientsRes, projectsRes, rigsRes, suppliersRes, locationsRes, itemsRes, maintenanceRes, movementsRes, submissionsRes] =
+      const [
+        clientsRes,
+        projectsRes,
+        rigsRes,
+        suppliersRes,
+        locationsRes,
+        itemsRes,
+        maintenanceRes,
+        movementsRes,
+        submissionsRes,
+        requisitionsRes
+      ] =
         await Promise.all([
           fetch("/api/clients", { cache: "no-store" }),
           fetch("/api/projects", { cache: "no-store" }),
@@ -268,10 +362,22 @@ function InventoryReceiptIntakePageContent() {
           fetch("/api/inventory/items", { cache: "no-store" }),
           fetch("/api/maintenance-requests", { cache: "no-store" }),
           fetch(`/api/inventory/movements?${movementQuery.toString()}`, { cache: "no-store" }),
-          fetch(`/api/inventory/receipt-intake/submissions?${submissionsQuery.toString()}`, { cache: "no-store" })
+          fetch(`/api/inventory/receipt-intake/submissions?${submissionsQuery.toString()}`, { cache: "no-store" }),
+          fetch(`/api/requisitions?${requisitionsQuery.toString()}`, { cache: "no-store" })
         ]);
 
-      const [clientsPayload, projectsPayload, rigsPayload, suppliersPayload, locationsPayload, itemsPayload, maintenancePayload, movementsPayload, submissionsPayload] =
+      const [
+        clientsPayload,
+        projectsPayload,
+        rigsPayload,
+        suppliersPayload,
+        locationsPayload,
+        itemsPayload,
+        maintenancePayload,
+        movementsPayload,
+        submissionsPayload,
+        requisitionsPayload
+      ] =
         await Promise.all([
           clientsRes.ok ? clientsRes.json() : Promise.resolve({ data: [] }),
           projectsRes.ok ? projectsRes.json() : Promise.resolve({ data: [] }),
@@ -281,7 +387,8 @@ function InventoryReceiptIntakePageContent() {
           itemsRes.ok ? itemsRes.json() : Promise.resolve({ data: [] }),
           maintenanceRes.ok ? maintenanceRes.json() : Promise.resolve({ data: [] }),
           movementsRes.ok ? movementsRes.json() : Promise.resolve({ data: [] }),
-          submissionsRes.ok ? submissionsRes.json() : Promise.resolve({ data: [] })
+          submissionsRes.ok ? submissionsRes.json() : Promise.resolve({ data: [] }),
+          requisitionsRes.ok ? requisitionsRes.json() : Promise.resolve({ data: [] })
         ]);
 
       setClients((clientsPayload.data || []).map((entry: { id: string; name: string }) => ({ id: entry.id, name: entry.name })));
@@ -327,6 +434,37 @@ function InventoryReceiptIntakePageContent() {
           summary: entry.summary
         }))
       );
+      setApprovedRequisitions(
+        ((requisitionsPayload.data || []) as ApprovedRequisitionRow[])
+          .filter((entry) => entry.status === "APPROVED")
+          .map((entry) => ({
+            id: entry.id,
+            requisitionCode: entry.requisitionCode,
+            type: entry.type,
+            status: entry.status,
+            submittedAt: entry.submittedAt,
+            context: {
+              clientId: entry.context?.clientId || null,
+              projectId: entry.context?.projectId || null,
+              rigId: entry.context?.rigId || null,
+              maintenanceRequestId: entry.context?.maintenanceRequestId || null
+            },
+            totals: {
+              estimatedTotalCost: Number(entry.totals?.estimatedTotalCost || 0),
+              approvedTotalCost: Number(entry.totals?.approvedTotalCost || 0),
+              actualPostedCost: Number(entry.totals?.actualPostedCost || 0)
+            }
+          }))
+      );
+      if (!requisitionsRes.ok) {
+        setRequisitionLookupError(
+          requisitionsRes.status === 403
+            ? "Approved requisitions are not available for your role. Use manual entry when no requisition is assigned."
+            : "Could not load approved requisitions right now. You can continue with manual entry."
+        );
+      } else {
+        setRequisitionLookupError(null);
+      }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Failed to load receipt intake workspace.");
     } finally {
@@ -619,10 +757,85 @@ function InventoryReceiptIntakePageContent() {
                 Submissions from your role are saved as <span className="font-semibold">Pending review</span>. A manager/admin must review and finalize posting.
               </p>
             )}
-            {requisitionPrefill && (
+            <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Entry Point</p>
+              <p className="mt-1 text-xs text-slate-600">
+                Start from an approved requisition whenever possible. Use manual entry only when no requisition exists.
+              </p>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setEntryMode("REQUISITION")}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    entryMode === "REQUISITION"
+                      ? "border-brand-300 bg-brand-50 text-brand-800"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Start from Approved Requisition
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEntryMode("MANUAL")}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    entryMode === "MANUAL"
+                      ? "border-brand-300 bg-brand-50 text-brand-800"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Manual Entry (No Requisition)
+                </button>
+              </div>
+              {entryMode === "REQUISITION" && (
+                <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                  <label className="text-xs text-ink-700">
+                    <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
+                    <select
+                      value={selectedRequisitionId}
+                      onChange={(event) => setSelectedRequisitionId(event.target.value)}
+                      className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800"
+                    >
+                      <option value="">Select approved requisition</option>
+                      {urlRequisitionPrefill &&
+                        !approvedRequisitions.some((entry) => entry.id === urlRequisitionPrefill.id) && (
+                          <option value={urlRequisitionPrefill.id}>
+                            {urlRequisitionPrefill.requisitionCode} • {formatRequisitionType(urlRequisitionPrefill.type)}
+                          </option>
+                        )}
+                      {approvedRequisitions.map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.requisitionCode} • {formatRequisitionType(entry.type)} • {formatCurrency(entry.totals.approvedTotalCost)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {requisitionLookupError && (
+                    <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                      {requisitionLookupError}
+                    </p>
+                  )}
+                  {selectedRequisitionSummary ? (
+                    <p className="mt-2 text-xs text-indigo-900">
+                      Workflow and context will be prefilled and locked from requisition{" "}
+                      <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>
+                      {" • "}
+                      {selectedRequisitionSummary.type} • Project:{" "}
+                      <span className="font-semibold">{selectedRequisitionSummary.projectName}</span> • Rig:{" "}
+                      <span className="font-semibold">{selectedRequisitionSummary.rigCode}</span> • Client:{" "}
+                      <span className="font-semibold">{selectedRequisitionSummary.clientName}</span>
+                    </p>
+                  ) : (
+                    <p className="mt-2 text-xs text-indigo-900">
+                      Select an approved requisition to start purchase receipt intake, or switch to manual entry.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+            {activeRequisitionPrefill && (
               <p className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
                 Purchase stage linked to requisition{" "}
-                <span className="font-semibold">{requisitionPrefill.requisitionCode}</span>. Complete receipt review to post final cost.
+                <span className="font-semibold">{activeRequisitionPrefill.requisitionCode}</span>. Receipt type and context are prefilled for posting consistency.
               </p>
             )}
             {submissionLoading && (
@@ -630,24 +843,31 @@ function InventoryReceiptIntakePageContent() {
                 Loading selected submission...
               </p>
             )}
-            <ReceiptIntakePanel
-              renderCard={false}
-              canManage={canManage}
-              items={items}
-              suppliers={suppliers}
-              locations={locations}
-              maintenanceRequests={maintenanceRequests}
-              clients={clients}
-              projects={projects}
-              rigs={rigs}
-              defaultClientId={requisitionPrefill?.clientId || (filters.clientId !== "all" ? filters.clientId : "")}
-              defaultRigId={requisitionPrefill?.rigId || (filters.rigId !== "all" ? filters.rigId : "")}
-              initialRequisition={requisitionPrefill}
-              activeSubmission={activeSubmission}
-              onCompleted={async () => {
-                await loadData();
-              }}
-            />
+            {canRenderReceiptPanel ? (
+              <ReceiptIntakePanel
+                key={`${entryMode}:${activeRequisitionPrefill?.id || "manual"}`}
+                renderCard={false}
+                canManage={canManage}
+                items={items}
+                suppliers={suppliers}
+                locations={locations}
+                maintenanceRequests={maintenanceRequests}
+                clients={clients}
+                projects={projects}
+                rigs={rigs}
+                defaultClientId={activeRequisitionPrefill?.clientId || (filters.clientId !== "all" ? filters.clientId : "")}
+                defaultRigId={activeRequisitionPrefill?.rigId || (filters.rigId !== "all" ? filters.rigId : "")}
+                initialRequisition={activeRequisitionPrefill}
+                activeSubmission={activeSubmission}
+                onCompleted={async () => {
+                  await loadData();
+                }}
+              />
+            ) : (
+              <div className="rounded-lg border border-dashed border-indigo-300 bg-indigo-50 px-3 py-3 text-sm text-indigo-900">
+                Select an approved requisition above to continue with receipt posting.
+              </div>
+            )}
           </Card>
           </section>
         )}
@@ -835,4 +1055,14 @@ function normalizeRequisitionType(value: string | null) {
     return value;
   }
   return null;
+}
+
+function formatRequisitionType(value: RequisitionPrefill["type"]) {
+  if (value === "LIVE_PROJECT_PURCHASE") {
+    return "Project Purchase";
+  }
+  if (value === "MAINTENANCE_PURCHASE") {
+    return "Maintenance Purchase";
+  }
+  return "Stock Purchase";
 }
