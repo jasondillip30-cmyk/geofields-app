@@ -7,6 +7,41 @@ import { prisma } from "@/lib/prisma";
 
 const PROJECT_SETUP_REPORT_TYPE = "PROJECT_SETUP_PROFILE";
 
+const projectListInclude = Prisma.validator<Prisma.ProjectDefaultArgs>()({
+  include: {
+    client: {
+      select: { id: true, name: true }
+    },
+    assignedRig: {
+      select: { id: true, rigCode: true }
+    },
+    backupRig: {
+      select: { id: true, rigCode: true }
+    },
+    summaryReports: {
+      where: { reportType: PROJECT_SETUP_REPORT_TYPE },
+      orderBy: [{ reportDate: "desc" }, { updatedAt: "desc" }],
+      take: 1,
+      select: {
+        payloadJson: true
+      }
+    },
+    budgetPlans: {
+      where: {
+        scopeType: "PROJECT",
+        isActive: true
+      },
+      orderBy: [{ periodStart: "desc" }, { updatedAt: "desc" }],
+      take: 1,
+      select: {
+        amount: true
+      }
+    }
+  }
+});
+
+type ProjectRecordWithSetup = Prisma.ProjectGetPayload<typeof projectListInclude>;
+
 interface ParsedProjectSetupProfile {
   expectedMeters: number | null;
   contractReferenceUrl: string;
@@ -42,36 +77,7 @@ export async function GET(request: NextRequest) {
 
   const projects = await prisma.project.findMany({
     orderBy: { createdAt: "desc" },
-    include: {
-      client: {
-        select: { id: true, name: true }
-      },
-      assignedRig: {
-        select: { id: true, rigCode: true }
-      },
-      backupRig: {
-        select: { id: true, rigCode: true }
-      },
-      summaryReports: {
-        where: { reportType: PROJECT_SETUP_REPORT_TYPE },
-        orderBy: [{ reportDate: "desc" }, { updatedAt: "desc" }],
-        take: 1,
-        select: {
-          payloadJson: true
-        }
-      },
-      budgetPlans: {
-        where: {
-          scopeType: "PROJECT",
-          isActive: true
-        },
-        orderBy: [{ periodStart: "desc" }, { updatedAt: "desc" }],
-        take: 1,
-        select: {
-          amount: true
-        }
-      }
-    }
+    ...projectListInclude
   });
 
   const mappedProjects = projects.map(mapProjectRecord);
@@ -296,7 +302,7 @@ function parseProjectSetupProfileFromReport(payloadJson: string | null): ParsedP
   }
 }
 
-function mapProjectRecord(project: any) {
+function mapProjectRecord(project: ProjectRecordWithSetup) {
   const setupReport = project.summaryReports[0] || null;
   const activeBudget = project.budgetPlans[0] || null;
   const setupProfile = parseProjectSetupProfileFromReport(setupReport?.payloadJson || null);
