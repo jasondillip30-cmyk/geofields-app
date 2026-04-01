@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import type { NextRequest, NextResponse } from "next/server";
 
+import { resolveAuthSecretBytes } from "@/lib/auth/secret";
 import type { UserRole } from "@/lib/types";
 
 export const SESSION_COOKIE_NAME = "gf_session";
@@ -15,22 +16,18 @@ export interface AuthSession {
 
 interface SessionJwtPayload extends JWTPayload, AuthSession {}
 
-function getJwtSecret() {
-  const secret = process.env.AUTH_SECRET || "dev-secret-change-me";
-  return new TextEncoder().encode(secret);
-}
-
 export async function signSessionToken(session: AuthSession) {
   return new SignJWT(session as unknown as JWTPayload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
-    .sign(getJwtSecret());
+    .sign(resolveAuthSecretBytes());
 }
 
 export async function verifySessionToken(token: string): Promise<AuthSession | null> {
+  const secret = resolveAuthSecretBytes();
   try {
-    const { payload } = await jwtVerify(token, getJwtSecret());
+    const { payload } = await jwtVerify(token, secret);
     const typed = payload as unknown as SessionJwtPayload;
     if (!typed.userId || !typed.role || !typed.email || !typed.name) {
       return null;
@@ -41,7 +38,7 @@ export async function verifySessionToken(token: string): Promise<AuthSession | n
       name: typed.name,
       role: typed.role
     };
-  } catch (_error) {
+  } catch {
     return null;
   }
 }

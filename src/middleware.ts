@@ -2,7 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { canAccess } from "@/lib/auth/permissions";
 import { getPermissionForPath } from "@/lib/auth/route-permissions";
-import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+import { AuthConfigurationError } from "@/lib/auth/secret";
+import { verifyEdgeSessionToken } from "@/lib/auth/session-edge";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 
 const publicPaths = ["/login", "/unauthorized"];
 
@@ -21,6 +23,7 @@ function isPublicAsset(pathname: string) {
 
 export async function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const isApiRoute = pathname.startsWith("/api/");
 
   if (isPublicAsset(pathname) || isPublicPath(pathname)) {
     return NextResponse.next();
@@ -32,19 +35,37 @@ export async function middleware(request: NextRequest) {
 
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
+    if (isApiRoute) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);
   }
 
-  const session = await verifySessionToken(token);
+  let session = null;
+  try {
+    session = await verifyEdgeSessionToken(token);
+  } catch (error) {
+    if (error instanceof AuthConfigurationError) {
+      const message = "Server auth configuration error: missing AUTH_SECRET.";
+      return isApiRoute
+        ? NextResponse.json({ message }, { status: 500 })
+        : new NextResponse(message, { status: 500 });
+    }
+    throw error;
+  }
+
   if (!session) {
+    if (isApiRoute) {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
+    }
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", `${pathname}${search}`);
     return NextResponse.redirect(loginUrl);
   }
 
-  if (pathname.startsWith("/api/")) {
+  if (isApiRoute) {
     return NextResponse.next();
   }
 

@@ -173,6 +173,16 @@ interface ReceiptSubmissionDetail {
   };
 }
 
+interface RequisitionPrefill {
+  id: string;
+  requisitionCode: string;
+  type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+  clientId: string | null;
+  projectId: string | null;
+  rigId: string | null;
+  maintenanceRequestId: string | null;
+}
+
 export default function InventoryReceiptIntakePage() {
   return (
     <Suspense fallback={<InventoryReceiptIntakeFallback />}>
@@ -188,6 +198,25 @@ function InventoryReceiptIntakePageContent() {
   const { filters } = useAnalyticsFilters();
   const currentView = (searchParams.get("view") || "").toLowerCase() === "history" ? "history" : "scan";
   const activeSubmissionId = searchParams.get("submissionId") || "";
+  const requisitionPrefill = useMemo<RequisitionPrefill | null>(() => {
+    const requisitionId = normalizeOptionalId(searchParams.get("requisitionId"));
+    if (!requisitionId) {
+      return null;
+    }
+    const type = normalizeRequisitionType(searchParams.get("requisitionType"));
+    if (!type) {
+      return null;
+    }
+    return {
+      id: requisitionId,
+      requisitionCode: normalizeOptionalId(searchParams.get("requisitionCode")) || requisitionId.slice(-8),
+      type,
+      clientId: normalizeOptionalId(searchParams.get("clientId")),
+      projectId: normalizeOptionalId(searchParams.get("projectId")),
+      rigId: normalizeOptionalId(searchParams.get("rigId")),
+      maintenanceRequestId: normalizeOptionalId(searchParams.get("maintenanceRequestId"))
+    };
+  }, [searchParams]);
 
   const [clients, setClients] = useState<ReferenceClient[]>([]);
   const [projects, setProjects] = useState<ReferenceProject[]>([]);
@@ -590,6 +619,12 @@ function InventoryReceiptIntakePageContent() {
                 Submissions from your role are saved as <span className="font-semibold">Pending review</span>. A manager/admin must review and finalize posting.
               </p>
             )}
+            {requisitionPrefill && (
+              <p className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+                Purchase stage linked to requisition{" "}
+                <span className="font-semibold">{requisitionPrefill.requisitionCode}</span>. Complete receipt review to post final cost.
+              </p>
+            )}
             {submissionLoading && (
               <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                 Loading selected submission...
@@ -605,8 +640,9 @@ function InventoryReceiptIntakePageContent() {
               clients={clients}
               projects={projects}
               rigs={rigs}
-              defaultClientId={filters.clientId !== "all" ? filters.clientId : ""}
-              defaultRigId={filters.rigId !== "all" ? filters.rigId : ""}
+              defaultClientId={requisitionPrefill?.clientId || (filters.clientId !== "all" ? filters.clientId : "")}
+              defaultRigId={requisitionPrefill?.rigId || (filters.rigId !== "all" ? filters.rigId : "")}
+              initialRequisition={requisitionPrefill}
               activeSubmission={activeSubmission}
               onCompleted={async () => {
                 await loadData();
@@ -780,4 +816,23 @@ function toIsoDate(value: string) {
     return value;
   }
   return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeOptionalId(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed !== "all" ? trimmed : null;
+}
+
+function normalizeRequisitionType(value: string | null) {
+  if (
+    value === "LIVE_PROJECT_PURCHASE" ||
+    value === "INVENTORY_STOCK_UP" ||
+    value === "MAINTENANCE_PURCHASE"
+  ) {
+    return value;
+  }
+  return null;
 }

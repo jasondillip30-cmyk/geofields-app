@@ -19,22 +19,19 @@ import {
 } from "lucide-react";
 
 import { canAccess } from "@/lib/auth/permissions";
-import { inventoryNavChildren, navItems } from "@/lib/navigation";
+import { inventoryNavChildren, navItems, setupNavChildren } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { useRole } from "@/components/layout/role-provider";
 
 const iconMap: Record<string, typeof LayoutDashboard> = {
-  "Company Dashboard": LayoutDashboard,
-  "Executive Overview": LayoutDashboard,
-  "Alerts Center": ClipboardList,
-  "Data Quality Center": ClipboardList,
+  Dashboard: LayoutDashboard,
   Clients: Factory,
   Projects: ClipboardList,
   "Drilling Reports": Drill,
-  "Breakdown Reports": Drill,
+  Breakdowns: Drill,
   Revenue: BarChart3,
   Approvals: ClipboardList,
-  Expenses: Gauge,
+  "Requisitions / Costs": Gauge,
   "Cost Tracking": Gauge,
   "Budget vs Actual": Gauge,
   Inventory: Boxes,
@@ -43,44 +40,37 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   "Stock Movements": ClipboardList,
   "Receipt Intake": ClipboardList,
   Issues: ClipboardList,
-  Suppliers: Factory,
+  Vendors: Factory,
   Locations: Factory,
   Profit: BarChart3,
-  Forecasting: BarChart3,
   "Activity Log": ClipboardList,
   Rigs: HardHat,
   Employees: Settings,
-  Maintenance: Wrench,
-  "Mechanics Directory": Settings,
-  "Summary Reports": ClipboardList
+  Maintenance: Wrench
 };
 
 const navGroups: Array<{ title: string; labels: string[] }> = [
   {
-    title: "Overview",
-    labels: ["Company Dashboard", "Executive Overview"]
-  },
-  {
-    title: "Operations",
+    title: "Core Workflow",
     labels: [
-      "Clients",
+      "Dashboard",
       "Projects",
-      "Employees",
-      "Drilling Reports",
-      "Breakdown Reports",
       "Rigs",
+      "Drilling Reports",
+      "Requisitions / Costs",
+      "Breakdowns",
       "Maintenance",
-      "Mechanics Directory",
-      "Inventory"
+      "Inventory",
+      "Approvals"
     ]
   },
   {
-    title: "Finance",
-    labels: ["Revenue", "Expenses", "Cost Tracking", "Budget vs Actual", "Profit", "Forecasting"]
+    title: "Profitability",
+    labels: ["Revenue", "Cost Tracking", "Budget vs Actual", "Profit"]
   },
   {
-    title: "Governance",
-    labels: ["Approvals", "Alerts Center", "Data Quality Center", "Activity Log", "Summary Reports"]
+    title: "System",
+    labels: ["Activity Log"]
   }
 ];
 
@@ -88,6 +78,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
   const pathname = usePathname();
   const { role, loading } = useRole();
   const [inventoryExpanded, setInventoryExpanded] = useState(false);
+  const [setupExpanded, setSetupExpanded] = useState(false);
 
   const visibleNavItems = useMemo(
     () => (role ? navItems.filter((item) => canAccess(role, item.permission)) : []),
@@ -97,15 +88,33 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
     () => (role ? inventoryNavChildren.filter((item) => canAccess(role, item.permission)) : []),
     [role]
   );
+  const visibleSetupChildren = useMemo(
+    () => (role ? setupNavChildren.filter((item) => canAccess(role, item.permission)) : []),
+    [role]
+  );
   const visibleNavByLabel = useMemo(
     () => new Map(visibleNavItems.map((item) => [item.label, item])),
     [visibleNavItems]
   );
 
-  const inventoryRouteActive = pathname.startsWith("/inventory");
+  const inventoryRouteActive =
+    pathname === "/inventory" ||
+    pathname.startsWith("/inventory/items") ||
+    pathname.startsWith("/inventory/stock-movements") ||
+    pathname.startsWith("/inventory/receipt-intake") ||
+    pathname.startsWith("/inventory/issues");
   const activeInventoryChildHref = resolveActiveInventoryChildHref({
     pathname,
     children: visibleInventoryChildren
+  });
+  const setupRouteActive =
+    pathname.startsWith("/clients") ||
+    pathname.startsWith("/employees") ||
+    pathname.startsWith("/inventory/suppliers") ||
+    pathname.startsWith("/inventory/locations");
+  const activeSetupChildHref = resolveActiveSetupChildHref({
+    pathname,
+    children: visibleSetupChildren
   });
 
   useEffect(() => {
@@ -128,8 +137,31 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
     if (typeof window === "undefined") {
       return;
     }
+    const saved = window.localStorage.getItem("geofields.setupSidebarExpanded");
+    if (saved === "1") {
+      setSetupExpanded(true);
+      return;
+    }
+    if (saved === "0") {
+      setSetupExpanded(false);
+      return;
+    }
+    setSetupExpanded(false);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
     window.localStorage.setItem("geofields.inventorySidebarExpanded", inventoryExpanded ? "1" : "0");
   }, [inventoryExpanded]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem("geofields.setupSidebarExpanded", setupExpanded ? "1" : "0");
+  }, [setupExpanded]);
 
   return (
     <aside
@@ -141,7 +173,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
       <div className={cn("flex flex-col lg:h-full", sidebarHidden && "lg:hidden")}>
         <div className="border-b border-slate-200 px-5 py-5">
           <p className="font-display text-xl text-ink-900">GeoFields</p>
-          <p className="text-sm text-slate-600">Operations Dashboard</p>
+          <p className="text-sm text-slate-600">Drilling Profitability</p>
         </div>
 
         <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4">
@@ -252,6 +284,66 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                 </div>
               );
             })}
+
+          {!loading && visibleSetupChildren.length > 0 ? (
+            <div className="space-y-1.5">
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Setup</p>
+              <div className="space-y-1">
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setSetupExpanded((current) => !current)}
+                    className={cn(
+                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
+                      setupRouteActive
+                        ? "border border-brand-200 bg-brand-50 text-brand-900 shadow-sm"
+                        : "border border-transparent text-ink-700 hover:bg-slate-100"
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Settings size={16} />
+                      Setup
+                    </span>
+                    {setupExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  </button>
+                  <div
+                    className={cn(
+                      "grid transition-[grid-template-rows,opacity] duration-300 ease-out",
+                      setupExpanded ? "mt-1 grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                    )}
+                  >
+                    <div className="overflow-hidden">
+                      <div className="ml-4 space-y-0.5 border-l border-slate-200/90 pl-2.5">
+                        {visibleSetupChildren.map((child) => {
+                          const isActive = child.href === activeSetupChildHref;
+                          return (
+                            <Link
+                              key={child.href}
+                              href={child.href}
+                              className={cn(
+                                "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
+                                isActive
+                                  ? "bg-brand-100/80 font-medium text-brand-900 shadow-sm"
+                                  : "text-ink-700 hover:bg-slate-100"
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  "h-1.5 w-1.5 rounded-full",
+                                  isActive ? "bg-brand-700" : "bg-slate-300"
+                                )}
+                              />
+                              {child.label}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </nav>
       </div>
     </aside>
@@ -269,10 +361,23 @@ function resolveActiveInventoryChildHref({
   if (pathname === "/inventory/items") return "/inventory/items";
   if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
   if (pathname === "/inventory/issues") return "/inventory/issues";
-  if (pathname === "/inventory/suppliers") return "/inventory/suppliers";
-  if (pathname === "/inventory/locations") return "/inventory/locations";
   if (pathname !== "/inventory") return "";
 
   const overview = children.find((child) => child.href === "/inventory");
   return overview ? overview.href : "";
+}
+
+function resolveActiveSetupChildHref({
+  pathname,
+  children
+}: {
+  pathname: string;
+  children: Array<{ href: string }>;
+}) {
+  if (pathname.startsWith("/clients")) return "/clients";
+  if (pathname.startsWith("/employees")) return "/employees";
+  if (pathname.startsWith("/inventory/suppliers")) return "/inventory/suppliers";
+  if (pathname.startsWith("/inventory/locations")) return "/inventory/locations";
+  const firstChild = children[0];
+  return firstChild ? firstChild.href : "";
 }

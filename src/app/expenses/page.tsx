@@ -12,6 +12,7 @@ import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/fi
 import { useRole } from "@/components/layout/role-provider";
 import { BarCategoryChart } from "@/components/charts/bar-category-chart";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
+import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { DataTable } from "@/components/ui/table";
@@ -928,6 +929,28 @@ function ExpensesPageContent() {
         <FilterScopeBanner filters={filters} />
 
         <section
+          id="expenses-requisition-section"
+          className={cn(
+            "gf-section",
+            focusedSectionId === "expenses-requisition-section" &&
+              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+          )}
+        >
+          <RequisitionWorkflowCard
+            filters={filters}
+            currentUserRole={user?.role}
+            clients={clients}
+            projects={projects}
+            rigs={rigs}
+            onWorkflowChanged={async () => {
+              await loadExpenseData();
+              window.localStorage.setItem("gf:profit-updated-at", String(Date.now()));
+              window.dispatchEvent(new Event("gf:profit-updated"));
+            }}
+          />
+        </section>
+
+        <section
           id="expenses-focus-panel-section"
           className={cn(
             "gf-section",
@@ -1012,10 +1035,13 @@ function ExpensesPageContent() {
           )}
         >
           <SectionHeader
-            title={isEditMode ? "Update Expense Entry" : "Create Expense Entry"}
-            description="Controlled manual entry workflow for operational expense tracking."
+            title={isEditMode ? "Update Direct Cost Entry" : "Direct Cost Entry (Exception Flow)"}
+            description="Use requisition workflow first for standard purchases. Use direct entry only when requisition-first is not practical."
           />
           <Card subtitle="Available to roles with expense entry access. Entries are saved live to database.">
+            <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Recommended flow: <span className="font-semibold">Requisition → Approval → Purchase/Receipt → Posted Cost</span>. Direct entry is retained for exceptions and legacy adjustments.
+            </p>
             <form onSubmit={submitExpense} className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
             <Input
               label="Date"

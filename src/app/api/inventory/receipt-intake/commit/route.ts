@@ -8,12 +8,16 @@ import {
   parseDateOrNull,
   parseInventoryCategory,
   parseNumeric,
-  resolveExpenseApprovalStatus,
   resolveExpenseCategoryFromInventoryCategory,
   roundCurrency
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 import { parseReceiptSubmissionPayload, type ReceiptSubmissionStatus } from "@/lib/receipt-intake-submission";
+import {
+  mapRequisitionToReceiptClassification,
+  parsePurchaseRequisitionPayload,
+  PURCHASE_REQUISITION_REPORT_TYPE
+} from "@/lib/requisition-workflow";
 
 interface IntakeLinePayload {
   id?: string;
@@ -36,6 +40,7 @@ interface IntakeLinePayload {
 }
 
 interface IntakeCommitPayload {
+  requisitionId?: string | null;
   submissionId?: string | null;
   receipt?: {
     url?: string;
@@ -188,6 +193,10 @@ export async function POST(request: NextRequest) {
   const canManage = canAccess(auth.session.role, "inventory:manage");
 
   const body = (await request.json().catch(() => null)) as IntakeCommitPayload | null;
+  const requisitionId =
+    typeof body?.requisitionId === "string" && body.requisitionId.trim().length > 0
+      ? body.requisitionId.trim()
+      : null;
   const submissionId =
     typeof body?.submissionId === "string" && body.submissionId.trim().length > 0
       ? body.submissionId.trim()
@@ -253,19 +262,19 @@ export async function POST(request: NextRequest) {
   const taxOffice = typeof body?.receipt?.taxOffice === "string" ? body.receipt.taxOffice.trim() : "";
   const ocrTextPreview =
     typeof body?.receipt?.ocrTextPreview === "string" ? body.receipt.ocrTextPreview.trim() : "";
-  const clientId =
+  let clientId =
     typeof body?.linkContext?.clientId === "string" && body.linkContext.clientId !== "all"
       ? body.linkContext.clientId
       : null;
-  const projectId =
+  let projectId =
     typeof body?.linkContext?.projectId === "string" && body.linkContext.projectId !== "all"
       ? body.linkContext.projectId
       : null;
-  const rigId =
+  let rigId =
     typeof body?.linkContext?.rigId === "string" && body.linkContext.rigId !== "all"
       ? body.linkContext.rigId
       : null;
-  const maintenanceRequestId =
+  let maintenanceRequestId =
     typeof body?.linkContext?.maintenanceRequestId === "string" &&
     body.linkContext.maintenanceRequestId !== "all"
       ? body.linkContext.maintenanceRequestId
@@ -361,7 +370,7 @@ export async function POST(request: NextRequest) {
     )
   );
 
-  const [existingItems, existingSupplier, existingLocationFrom, existingLocationTo, existingMaintenanceRequest] = await Promise.all([
+  const [existingItems, existingSupplier, existingLocationFrom, existingLocationTo, existingMaintenanceRequest, linkedRequisition] = await Promise.all([
     selectedItemIds.length
       ? prisma.inventoryItem.findMany({
           where: { id: { in: selectedItemIds } },
@@ -400,6 +409,12 @@ export async function POST(request: NextRequest) {
           where: { id: maintenanceRequestId },
           select: { id: true, status: true, requestCode: true }
         })
+      : Promise.resolve(null),
+    requisitionId
+      ? prisma.summaryReport.findUnique({
+          where: { id: requisitionId },
+          select: { id: true, reportType: true, payloadJson: true }
+        })
       : Promise.resolve(null)
   ]);
 
@@ -414,6 +429,86 @@ export async function POST(request: NextRequest) {
   }
   if (maintenanceRequestId && !existingMaintenanceRequest) {
     return NextResponse.json({ message: "Selected maintenance request was not found." }, { status: 404 });
+  }
+  const parsedRequisition = linkedRequisition
+    ? parsePurchaseRequisitionPayload(linkedRequisition.payloadJson)
+    : null;
+  if (requisitionId) {
+    if (!linkedRequisition || linkedRequisition.reportType !== PURCHASE_REQUISITION_REPORT_TYPE) {
+      return NextResponse.json({ message: "Linked requisition not found." }, { status: 404 });
+    }
+    if (!parsedRequisition) {
+      return NextResponse.json({ message: "Linked requisition payload is invalid." }, { status: 422 });
+    }
+    if (parsedRequisition.payload.status !== "APPROVED") {
+      return NextResponse.json(
+        {
+          message:
+            "Only approved requisitions can proceed to purchase and receipt posting."
+        },
+        { status: 409 }
+      );
+    }
+    const requisitionContext = parsedRequisition.payload.context;
+    if (requisitionContext.clientId && clientId && requisitionContext.clientId !== clientId) {
+      return NextResponse.json(
+        { message: "Linked requisition client does not match selected client." },
+        { status: 400 }
+      );
+    }
+    if (requisitionContext.projectId && projectId && requisitionContext.projectId !== projectId) {
+      return NextResponse.json(
+        { message: "Linked requisition project does not match selected project." },
+        { status: 400 }
+      );
+    }
+    if (requisitionContext.rigId && rigId && requisitionContext.rigId !== rigId) {
+      return NextResponse.json(
+        { message: "Linked requisition rig does not match selected rig." },
+        { status: 400 }
+      );
+    }
+    if (
+      requisitionContext.maintenanceRequestId &&
+      maintenanceRequestId &&
+      requisitionContext.maintenanceRequestId !== maintenanceRequestId
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Linked requisition maintenance request does not match selected maintenance request."
+        },
+        { status: 400 }
+      );
+    }
+
+    clientId = clientId || requisitionContext.clientId || null;
+    projectId = projectId || requisitionContext.projectId || null;
+    rigId = rigId || requisitionContext.rigId || null;
+    maintenanceRequestId =
+      maintenanceRequestId || requisitionContext.maintenanceRequestId || null;
+
+    if (parsedRequisition.payload.type === "INVENTORY_STOCK_UP" && projectId) {
+      return NextResponse.json(
+        {
+          message:
+            "Inventory stock-up requisitions cannot be posted as live project costs."
+        },
+        { status: 400 }
+      );
+    }
+
+    const expectedReceiptType = mapRequisitionToReceiptClassification(
+      parsedRequisition.payload.type
+    );
+    if (receiptType !== expectedReceiptType) {
+      return NextResponse.json(
+        {
+          message: `Linked requisition expects ${expectedReceiptType} receipt workflow.`
+        },
+        { status: 400 }
+      );
+    }
   }
 
   const existingItemById = new Map(existingItems.map((item) => [item.id, item]));
@@ -524,6 +619,7 @@ export async function POST(request: NextRequest) {
   });
 
   const submissionDraft = {
+    requisitionId,
     receiptType,
     receiptPurpose,
     createExpense,
@@ -630,6 +726,7 @@ export async function POST(request: NextRequest) {
       data: {
         submissionStatus: "PENDING_REVIEW",
         submissionId: submission.id,
+        requisitionId,
         receiptType,
         movementCount: 0,
         itemsCreatedCount: 0,
@@ -706,13 +803,10 @@ export async function POST(request: NextRequest) {
     let createdExpenseId: string | null = null;
 
     if (createExpense) {
-      const expenseApprovalStatus = resolveExpenseApprovalStatus({
-        role: auth.session.role,
-        linkedMaintenanceStatus: existingMaintenanceRequest?.status || null
-      });
-      const submittedAt = expenseApprovalStatus === "DRAFT" ? null : new Date();
-      const approvedAt = expenseApprovalStatus === "APPROVED" ? new Date() : null;
-      const approvedById = expenseApprovalStatus === "APPROVED" ? auth.session.userId : null;
+      const expenseApprovalStatus = "APPROVED" as const;
+      const submittedAt = new Date();
+      const approvedAt = new Date();
+      const approvedById = auth.session.userId;
       const isEvidenceOnlyPurpose = receiptPurpose === "EVIDENCE_ONLY";
       const expenseCategory = resolveExpenseCategoryForReceiptType({
         receiptType,
@@ -992,6 +1086,57 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  if (requisitionId && linkedRequisition && parsedRequisition) {
+    const postedAtIso = new Date().toISOString();
+    const postedCost = roundCurrency(
+      (receiptTotal && receiptTotal > 0
+        ? receiptTotal
+        : normalizedLines.reduce((sum, line) => sum + line.lineTotal, 0)) || 0
+    );
+    const nextRequisitionPayload = {
+      ...parsedRequisition.payload,
+      status: "PURCHASE_COMPLETED" as const,
+      totals: {
+        ...parsedRequisition.payload.totals,
+        actualPostedCost: postedCost
+      },
+      purchase: {
+        receiptSubmissionId: submissionId || null,
+        receiptNumber: receiptNumber || traReceiptNumber || invoiceReference || null,
+        supplierName: result.supplierName || receiptSupplierName || null,
+        expenseId: result.createdExpenseId || null,
+        movementCount: result.createdMovements.length,
+        postedAt: postedAtIso
+      }
+    };
+
+    await prisma.summaryReport.update({
+      where: { id: requisitionId },
+      data: {
+        payloadJson: JSON.stringify(nextRequisitionPayload),
+        reportDate: new Date()
+      }
+    });
+
+    await recordAuditLog({
+      module: "expenses",
+      entityType: "purchase_requisition",
+      entityId: requisitionId,
+      action: "purchase_complete",
+      description: `${auth.session.name} completed requisition purchase posting ${nextRequisitionPayload.requisitionCode}.`,
+      before: {
+        status: parsedRequisition.payload.status
+      },
+      after: {
+        status: nextRequisitionPayload.status,
+        expenseId: nextRequisitionPayload.purchase.expenseId,
+        movementCount: nextRequisitionPayload.purchase.movementCount,
+        actualPostedCost: nextRequisitionPayload.totals.actualPostedCost
+      },
+      actor: auditActorFromSession(auth.session)
+    });
+  }
+
   return NextResponse.json({
     success: true,
     message:
@@ -999,8 +1144,9 @@ export async function POST(request: NextRequest) {
         ? `Saved with ${result.createdMovements.length} stock-in movement(s).`
         : outcomeReasons[0] || "Saved as receipt evidence only.",
     data: {
-        submissionStatus: submissionId ? "FINALIZED" : null,
-        submissionId: submissionId || null,
+      submissionStatus: submissionId ? "FINALIZED" : null,
+      submissionId: submissionId || null,
+      requisitionId,
       receiptType,
       supplier: result.supplierName,
       movementCount: result.createdMovements.length,

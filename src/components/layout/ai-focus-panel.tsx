@@ -23,6 +23,7 @@ import {
   decisionSupportCommandHints,
   parseDecisionSupportCommand
 } from "@/lib/ai/decision-support";
+import { isAssistantExperienceEnabled } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
 
 interface AiFocusPanelProps {
@@ -47,6 +48,10 @@ interface FocusPanelItem {
 }
 
 export function AiFocusPanel({ context, pageKey, className }: AiFocusPanelProps) {
+  if (!isAssistantExperienceEnabled()) {
+    return null;
+  }
+
   const pathname = usePathname();
   const router = useRouter();
   const { role } = useRole();

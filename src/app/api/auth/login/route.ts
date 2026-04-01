@@ -1,6 +1,7 @@
 import { compare } from "bcryptjs";
 import { NextResponse } from "next/server";
 
+import { AuthConfigurationError } from "@/lib/auth/secret";
 import { signSessionToken, setSessionCookie } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 
@@ -26,12 +27,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Invalid login credentials." }, { status: 401 });
   }
 
-  const token = await signSessionToken({
-    userId: user.id,
-    email: user.email,
-    name: user.fullName,
-    role: user.role
-  });
+  let token: string;
+  try {
+    token = await signSessionToken({
+      userId: user.id,
+      email: user.email,
+      name: user.fullName,
+      role: user.role
+    });
+  } catch (error) {
+    if (error instanceof AuthConfigurationError) {
+      return NextResponse.json(
+        { message: "Server auth configuration error: missing AUTH_SECRET." },
+        { status: 500 }
+      );
+    }
+    throw error;
+  }
 
   const response = NextResponse.json({
     user: {

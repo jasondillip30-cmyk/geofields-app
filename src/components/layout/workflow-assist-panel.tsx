@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, CircleHelp, ClipboardCheck, Lightbulb, ListChecks } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
+import { isAssistantExperienceEnabled } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
 
 type WorkflowAssistTone = "indigo" | "amber" | "emerald" | "slate";
@@ -25,6 +26,10 @@ export function WorkflowAssistPanel({
   model: WorkflowAssistModel | null;
   className?: string;
 }) {
+  if (!isAssistantExperienceEnabled()) {
+    return null;
+  }
+
   if (!model) {
     return null;
   }

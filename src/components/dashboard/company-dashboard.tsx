@@ -14,6 +14,7 @@ import { ActualVsForecastChart } from "@/components/charts/actual-vs-forecast-ch
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
 import { getBucketDateRange } from "@/lib/drilldown";
+import { isDashboardSmartRecommendationsEnabled } from "@/lib/feature-flags";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
 interface FinancialPoint {
@@ -159,6 +160,7 @@ export function CompanyDashboard() {
     clients: new Map(),
     rigs: new Map()
   });
+  const smartRecommendationsEnabled = isDashboardSmartRecommendationsEnabled();
   const inFlightFilterKeyRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const hasLoadedSummaryRef = useRef(false);
@@ -492,8 +494,8 @@ export function CompanyDashboard() {
         takeActionHref = buildHref("/inventory", rigOverrides);
         viewDetailsHref = buildHref("/inventory", rigOverrides);
       } else if (has("approval", "approved", "rejected", "pending")) {
-        takeActionHref = buildHref("/activity-log", { module: "approvals", action: "submit" });
-        viewDetailsHref = buildHref("/activity-log", { module: "approvals" });
+        takeActionHref = buildHref("/approvals");
+        viewDetailsHref = buildHref("/approvals");
       } else if (has("rig action", "reassign", "standby", "downtime")) {
         takeActionHref = buildHref("/maintenance", rigOverrides);
         viewDetailsHref = buildHref("/forecasting", rigOverrides);
@@ -541,6 +543,10 @@ export function CompanyDashboard() {
   const hasTopRevenueRigTarget = Boolean(topRevenueRigId) && isMeaningfulEntity(summary.snapshot?.topRevenueRig);
   const hasTopForecastRigTarget = Boolean(topForecastRigId) && isMeaningfulEntity(summary.snapshot?.topForecastRig);
   const hasScopeFilters = hasActiveScopeFilters(filters);
+  const breakdownRigCount = useMemo(
+    () => summary.rigStatusData.find((entry) => entry.status.toUpperCase() === "BREAKDOWN")?.value || 0,
+    [summary.rigStatusData]
+  );
   const grossMarginPct = useMemo(() => {
     const revenue = summary.snapshot?.totalRevenue ?? 0;
     if (revenue <= 0) {
@@ -683,8 +689,8 @@ export function CompanyDashboard() {
       {loading ? (
         <section className="gf-section">
           <SectionHeader
-            title="Primary Financial KPIs"
-            description="Loading management-level financial performance."
+            title="Drilling Profitability KPIs"
+            description="Loading drilling-focused financial performance."
           />
           <DashboardSummarySkeleton count={4} />
         </section>
@@ -692,30 +698,30 @@ export function CompanyDashboard() {
         <>
           <section className="gf-section">
             <SectionHeader
-              title="Primary Financial KPIs"
-              description="Core company financial outcomes for the selected scope."
+              title="Drilling Profitability KPIs"
+              description="Core drilling revenue, cost, and margin outcomes for the selected scope."
             />
             <div className="gf-kpi-grid-primary">
               <MetricCard
-                label="Total Revenue"
+                label={hasScopeFilters ? "Revenue (Scope)" : "Total Revenue"}
                 value={formatCurrency(summary.snapshot?.totalRevenue ?? 0)}
                 tone="good"
                 href={buildHref("/revenue")}
               />
               <MetricCard
-                label="Total Expenses"
+                label={hasScopeFilters ? "Costs (Scope)" : "Total Costs"}
                 value={formatCurrency(summary.snapshot?.totalExpenses ?? 0)}
                 tone="warn"
                 href={buildHref("/expenses")}
               />
               <MetricCard
-                label="Gross Profit"
+                label={hasScopeFilters ? "Profit (Scope)" : "Gross Profit"}
                 value={formatCurrency(summary.snapshot?.grossProfit ?? 0)}
                 tone={(summary.snapshot?.grossProfit ?? 0) >= 0 ? "good" : "danger"}
                 href={buildHref("/profit")}
               />
               <MetricCard
-                label="Profit Margin"
+                label={hasScopeFilters ? "Margin (Scope)" : "Profit Margin"}
                 value={`${grossMarginPct.toFixed(1)}%`}
                 tone={grossMarginTone}
                 href={buildHref("/profit")}
@@ -758,6 +764,12 @@ export function CompanyDashboard() {
                 href={buildHref("/rigs", { status: "MAINTENANCE" })}
               />
               <MetricCard
+                label="Current Breakdowns"
+                value={String(breakdownRigCount)}
+                tone={breakdownRigCount > 0 ? "danger" : "good"}
+                href={buildHref("/rigs", { status: "BREAKDOWN" })}
+              />
+              <MetricCard
                 label="Total Meters Drilled"
                 value={formatNumber(summary.snapshot?.totalMeters ?? 0)}
                 href={buildHref("/drilling-reports")}
@@ -766,13 +778,13 @@ export function CompanyDashboard() {
                 label="Pending Approvals"
                 value={String(summary.snapshot?.pendingApprovals ?? 0)}
                 tone={(summary.snapshot?.pendingApprovals ?? 0) > 0 ? "warn" : "good"}
-                href={buildHref("/activity-log", { module: "approvals", action: "submit" })}
+                href={buildHref("/approvals")}
               />
               <MetricCard
                 label="Approved Today"
                 value={String(summary.snapshot?.approvedToday ?? 0)}
                 tone={(summary.snapshot?.approvedToday ?? 0) > 0 ? "good" : "neutral"}
-                href={buildHref("/activity-log", { action: "approve", from: todayIso(), to: todayIso() })}
+                href={buildHref("/approvals")}
               />
             </div>
           </section>
@@ -830,117 +842,119 @@ export function CompanyDashboard() {
         </>
       )}
 
-      <section className="gf-section">
-        <SectionHeader
-          title="Smart Recommendations"
-          description="Prioritized actions generated from live performance, cost, and forecast signals."
-        />
-        <Card
-          title={`Smart Recommendations (${recommendationCounts.total})`}
-          subtitle={loading ? "Suggested actions based on live performance and forecast" : recommendationSubtitle}
-          action={
-            !loading && recommendationCounts.total > 0 ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setRecommendationsToggleTouched(true);
-                  setRecommendationsExpanded((current) => !current);
-                }}
-                className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-ink-700 hover:bg-slate-50"
-              >
-                <span>{recommendationsExpanded ? "Collapse" : "Expand"}</span>
-                {recommendationsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              </button>
-            ) : undefined
-          }
-        >
-          {loading ? (
-            <p className="text-sm text-ink-600">Building recommendations...</p>
-          ) : recommendationCounts.total === 0 ? (
-            <p className="text-sm text-ink-600">No recommendations available for the current filter scope.</p>
-          ) : !recommendationsExpanded ? (
-            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-700">
-                  {recommendationCounts.critical} critical
-                </span>
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
-                  {recommendationCounts.warning} warning
-                </span>
-                <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">
-                  {recommendationCounts.opportunity} opportunity
-                </span>
+      {smartRecommendationsEnabled ? (
+        <section className="gf-section">
+          <SectionHeader
+            title="Smart Recommendations"
+            description="Prioritized actions generated from live performance, cost, and forecast signals."
+          />
+          <Card
+            title={`Smart Recommendations (${recommendationCounts.total})`}
+            subtitle={loading ? "Suggested actions based on live performance and forecast" : recommendationSubtitle}
+            action={
+              !loading && recommendationCounts.total > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRecommendationsToggleTouched(true);
+                    setRecommendationsExpanded((current) => !current);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                >
+                  <span>{recommendationsExpanded ? "Collapse" : "Expand"}</span>
+                  {recommendationsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </button>
+              ) : undefined
+            }
+          >
+            {loading ? (
+              <p className="text-sm text-ink-600">Building recommendations...</p>
+            ) : recommendationCounts.total === 0 ? (
+              <p className="text-sm text-ink-600">No recommendations available for the current filter scope.</p>
+            ) : !recommendationsExpanded ? (
+              <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-wide">
+                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-red-700">
+                    {recommendationCounts.critical} critical
+                  </span>
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
+                    {recommendationCounts.warning} warning
+                  </span>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-700">
+                    {recommendationCounts.opportunity} opportunity
+                  </span>
+                </div>
+                <p className="text-xs text-ink-600">Recommendations are collapsed to keep the dashboard compact.</p>
               </div>
-              <p className="text-xs text-ink-600">Recommendations are collapsed to keep the dashboard compact.</p>
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              {summary.recommendations.map((item, index) => {
-                const targets = resolveRecommendationTargets(item);
-                const primaryHref = item.primaryActionLabel === "Take Action" ? targets.takeActionHref : targets.viewDetailsHref;
-                const secondaryLabel = item.secondaryActionLabel;
-                let secondaryHref: string | null = null;
-                if (secondaryLabel) {
-                  secondaryHref = secondaryLabel === "Take Action" ? targets.takeActionHref : targets.viewDetailsHref;
-                  if (secondaryHref === primaryHref) {
-                    secondaryHref = secondaryLabel === "Take Action" ? targets.viewDetailsHref : targets.takeActionHref;
+            ) : (
+              <div className="space-y-1.5">
+                {summary.recommendations.map((item, index) => {
+                  const targets = resolveRecommendationTargets(item);
+                  const primaryHref = item.primaryActionLabel === "Take Action" ? targets.takeActionHref : targets.viewDetailsHref;
+                  const secondaryLabel = item.secondaryActionLabel;
+                  let secondaryHref: string | null = null;
+                  if (secondaryLabel) {
+                    secondaryHref = secondaryLabel === "Take Action" ? targets.takeActionHref : targets.viewDetailsHref;
+                    if (secondaryHref === primaryHref) {
+                      secondaryHref = secondaryLabel === "Take Action" ? targets.viewDetailsHref : targets.takeActionHref;
+                    }
                   }
-                }
-                const actionPreview = item.actions.slice(0, 2).join(" • ");
+                  const actionPreview = item.actions.slice(0, 2).join(" • ");
 
-                return (
-                  <div
-                    key={`${item.title}-${index}`}
-                    className={`rounded-md border px-3 py-2 ${recommendationToneClass[item.tone]}`}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <p className="text-[11px] font-semibold uppercase tracking-wide">{item.title}</p>
-                          <span
-                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityToneClass[item.priority]}`}
-                          >
-                            {item.priority}
-                          </span>
-                          {item.estimatedImpact !== null && (
-                            <span className="text-[11px] font-medium text-ink-700">
-                              Impact: +{formatCurrency(item.estimatedImpact)}
+                  return (
+                    <div
+                      key={`${item.title}-${index}`}
+                      className={`rounded-md border px-3 py-2 ${recommendationToneClass[item.tone]}`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide">{item.title}</p>
+                            <span
+                              className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${priorityToneClass[item.priority]}`}
+                            >
+                              {item.priority}
                             </span>
-                          )}
+                            {item.estimatedImpact !== null && (
+                              <span className="text-[11px] font-medium text-ink-700">
+                                Impact: +{formatCurrency(item.estimatedImpact)}
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-xs leading-5">{item.message}</p>
+                          {actionPreview && <p className="mt-1 text-[11px] text-ink-700">Next: {actionPreview}</p>}
                         </div>
-                        <p className="mt-0.5 text-xs leading-5">{item.message}</p>
-                        {actionPreview && <p className="mt-1 text-[11px] text-ink-700">Next: {actionPreview}</p>}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            router.push(primaryHref);
-                          }}
-                          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-ink-800 hover:bg-slate-50"
-                        >
-                          {item.primaryActionLabel}
-                        </button>
-                        {secondaryLabel && secondaryHref && (
+                        <div className="flex shrink-0 items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => {
-                              router.push(secondaryHref);
+                              router.push(primaryHref);
                             }}
-                            className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-ink-700 hover:bg-slate-100"
+                            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-ink-800 hover:bg-slate-50"
                           >
-                            {secondaryLabel}
+                            {item.primaryActionLabel}
                           </button>
-                        )}
+                          {secondaryLabel && secondaryHref && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                router.push(secondaryHref);
+                              }}
+                              className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-ink-700 hover:bg-slate-100"
+                            >
+                              {secondaryLabel}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </Card>
-      </section>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </section>
+      ) : null}
 
       <section className="gf-section">
         <SectionHeader

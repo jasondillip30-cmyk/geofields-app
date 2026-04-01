@@ -13,28 +13,24 @@ export interface NavChildItem {
 }
 
 export const navItems: NavItem[] = [
-  { href: "/", label: "Company Dashboard", permission: "dashboard:view" },
-  { href: "/executive-overview", label: "Executive Overview", permission: "finance:view" },
-  { href: "/alerts-center", label: "Alerts Center", permission: "finance:view" },
-  { href: "/data-quality/linkage-center", label: "Data Quality Center", permission: "finance:view" },
-  { href: "/clients", label: "Clients", permission: "clients:view" },
+  { href: "/", label: "Dashboard", permission: "dashboard:view" },
   { href: "/projects", label: "Projects", permission: "projects:view" },
-  { href: "/employees", label: "Employees", permission: "employees:view" },
+  { href: "/rigs", label: "Rigs", permission: "rigs:view" },
   { href: "/drilling-reports", label: "Drilling Reports", permission: "drilling:view" },
+  { href: "/expenses", label: "Requisitions / Costs", permission: "expenses:manual" },
+  { href: "/breakdowns", label: "Breakdowns", permission: "breakdowns:view" },
+  { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
+  { href: "/inventory", label: "Inventory", permission: "inventory:view" },
   { href: "/approvals", label: "Approvals", permission: "reports:view" },
-  { href: "/breakdowns", label: "Breakdown Reports", permission: "breakdowns:view" },
   { href: "/revenue", label: "Revenue", permission: "finance:view" },
-  { href: "/expenses", label: "Expenses", permission: "expenses:manual" },
   { href: "/cost-tracking", label: "Cost Tracking", permission: "finance:view" },
   { href: "/cost-tracking/budget-vs-actual", label: "Budget vs Actual", permission: "finance:view" },
-  { href: "/inventory", label: "Inventory", permission: "inventory:view" },
   { href: "/profit", label: "Profit", permission: "finance:view" },
-  { href: "/forecasting", label: "Forecasting", permission: "finance:view" },
   { href: "/activity-log", label: "Activity Log", permission: "reports:view" },
-  { href: "/rigs", label: "Rigs", permission: "rigs:view" },
-  { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
-  { href: "/mechanics", label: "Mechanics Directory", permission: "mechanics:view" },
-  { href: "/reports", label: "Summary Reports", permission: "reports:view" }
+  { href: "/clients", label: "Clients", permission: "clients:view" },
+  { href: "/employees", label: "Employees", permission: "employees:view" },
+  { href: "/inventory/suppliers", label: "Vendors", permission: "inventory:view" },
+  { href: "/inventory/locations", label: "Locations", permission: "inventory:view" }
 ];
 
 export const inventoryNavChildren: NavChildItem[] = [
@@ -42,8 +38,13 @@ export const inventoryNavChildren: NavChildItem[] = [
   { href: "/inventory/items", label: "Items", permission: "inventory:view" },
   { href: "/inventory/stock-movements", label: "Stock Movements", permission: "inventory:view" },
   { href: "/inventory/receipt-intake", label: "Receipt Intake", permission: "inventory:view" },
-  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" },
-  { href: "/inventory/suppliers", label: "Suppliers", permission: "inventory:view" },
+  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" }
+];
+
+export const setupNavChildren: NavChildItem[] = [
+  { href: "/clients", label: "Clients", permission: "clients:view" },
+  { href: "/employees", label: "Employees", permission: "employees:view" },
+  { href: "/inventory/suppliers", label: "Vendors", permission: "inventory:view" },
   { href: "/inventory/locations", label: "Locations", permission: "inventory:view" }
 ];
 

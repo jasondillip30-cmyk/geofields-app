@@ -23,8 +23,8 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
   {
     test: (pathname) => pathname === "/",
     meta: {
-      title: "Company Dashboard",
-      subtitle: "Executive view of drilling operations, financial performance, and approvals."
+      title: "Dashboard",
+      subtitle: "Drilling-first operations dashboard: rigs, projects, costs, revenue, and profitability."
     }
   },
   {
@@ -59,7 +59,7 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/projects"),
     meta: {
       title: "Projects",
-      subtitle: "Project execution tracking, rig assignment, and delivery performance."
+      subtitle: "Project profitability center across drilling progress, revenue, costs, and rig assignment."
     }
   },
   {
@@ -79,8 +79,8 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
   {
     test: (pathname) => pathname.startsWith("/expenses"),
     meta: {
-      title: "Expenses",
-      subtitle: "Cost controls and expense visibility across operations."
+      title: "Requisitions / Costs",
+      subtitle: "Requisition-to-cost workspace for operational purchases and project-linked spending."
     }
   },
   {
@@ -108,7 +108,21 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/inventory/receipt-intake"),
     meta: {
       title: "Receipt Intake",
-      subtitle: "Receipt-driven intake with duplicate checks and linked record workflows."
+      subtitle: "Guided receipt workflow for requisition fulfillment, stock-up, and expense-only records."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/inventory/suppliers"),
+    meta: {
+      title: "Vendors",
+      subtitle: "Setup registry for supplier/vendor master data used in purchases and receipts."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/inventory/locations"),
+    meta: {
+      title: "Locations",
+      subtitle: "Setup registry for inventory storage and transfer locations."
     }
   },
   {
@@ -122,14 +136,14 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/rigs"),
     meta: {
       title: "Rigs",
-      subtitle: "Rig status, utilization, and lifecycle performance."
+      subtitle: "Rig status and profitability visibility across active, idle, maintenance, and breakdown states."
     }
   },
   {
     test: (pathname) => pathname.startsWith("/maintenance"),
     meta: {
       title: "Maintenance",
-      subtitle: "Workshop requests, repair tracking, and rig condition oversight."
+      subtitle: "Breakdown and repair workflow linked to rig status, downtime, and active projects."
     }
   },
   {

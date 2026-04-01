@@ -1,0 +1,915 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+
+import type { AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { Card } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/table";
+import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
+import { formatCurrency } from "@/lib/utils";
+
+type RequisitionType =
+  | "LIVE_PROJECT_PURCHASE"
+  | "INVENTORY_STOCK_UP"
+  | "MAINTENANCE_PURCHASE";
+
+type RequisitionStatus =
+  | "SUBMITTED"
+  | "APPROVED"
+  | "REJECTED"
+  | "PURCHASE_COMPLETED";
+
+interface RequisitionLineItem {
+  id: string;
+  description: string;
+  quantity: number;
+  estimatedUnitCost: number;
+  estimatedTotalCost: number;
+  notes: string | null;
+}
+
+interface RequisitionRow {
+  id: string;
+  requisitionCode: string;
+  type: RequisitionType;
+  status: RequisitionStatus;
+  category: string;
+  subcategory: string | null;
+  notes: string | null;
+  submittedAt: string;
+  submittedBy: {
+    userId: string;
+    name: string;
+    role: string;
+  };
+  context: {
+    clientId: string | null;
+    projectId: string | null;
+    rigId: string | null;
+    maintenanceRequestId: string | null;
+  };
+  lineItems: RequisitionLineItem[];
+  totals: {
+    estimatedTotalCost: number;
+    approvedTotalCost: number;
+    actualPostedCost: number;
+  };
+  approval: {
+    approvedAt: string | null;
+    approvedBy: {
+      userId: string;
+      name: string;
+      role: string;
+    } | null;
+    rejectedAt: string | null;
+    rejectedBy: {
+      userId: string;
+      name: string;
+      role: string;
+    } | null;
+    rejectionReason: string | null;
+    lineItemMode: "FULL_ONLY";
+  };
+  purchase: {
+    receiptSubmissionId: string | null;
+    receiptNumber: string | null;
+    supplierName: string | null;
+    expenseId: string | null;
+    movementCount: number;
+    postedAt: string | null;
+  };
+}
+
+interface MaintenanceOption {
+  id: string;
+  requestCode: string;
+  rigId: string;
+}
+
+interface RequisitionFormLine {
+  id: string;
+  description: string;
+  quantity: string;
+  estimatedUnitCost: string;
+  notes: string;
+}
+
+interface RequisitionWorkflowCardProps {
+  filters: AnalyticsFilters;
+  currentUserRole: string | null | undefined;
+  clients: Array<{ id: string; name: string }>;
+  projects: Array<{ id: string; name: string; clientId: string }>;
+  rigs: Array<{ id: string; name: string }>;
+  onWorkflowChanged?: () => Promise<void> | void;
+}
+
+const initialFormLine = (): RequisitionFormLine => ({
+  id: `line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  description: "",
+  quantity: "1",
+  estimatedUnitCost: "",
+  notes: ""
+});
+
+const initialFormState = {
+  type: "LIVE_PROJECT_PURCHASE" as RequisitionType,
+  clientId: "",
+  projectId: "",
+  rigId: "",
+  maintenanceRequestId: "",
+  category: "Materials",
+  subcategory: "",
+  notes: "",
+  lines: [initialFormLine()]
+};
+
+export function RequisitionWorkflowCard({
+  filters,
+  currentUserRole,
+  clients,
+  projects,
+  rigs,
+  onWorkflowChanged
+}: RequisitionWorkflowCardProps) {
+  const canApprove = canManageExpenseApprovalActions(currentUserRole);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [actingId, setActingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<RequisitionStatus | "all">("all");
+  const [rows, setRows] = useState<RequisitionRow[]>([]);
+  const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceOption[]>([]);
+  const [statusNotes, setStatusNotes] = useState<Record<string, string>>({});
+  const [form, setForm] = useState(initialFormState);
+
+  const filteredProjects = useMemo(() => {
+    if (!form.clientId) {
+      return projects;
+    }
+    return projects.filter((project) => project.clientId === form.clientId);
+  }, [form.clientId, projects]);
+
+  const filteredMaintenanceOptions = useMemo(() => {
+    if (!form.rigId) {
+      return maintenanceOptions;
+    }
+    return maintenanceOptions.filter((entry) => entry.rigId === form.rigId);
+  }, [form.rigId, maintenanceOptions]);
+
+  const estimatedTotal = useMemo(
+    () =>
+      form.lines.reduce((sum, line) => {
+        const quantity = Number(line.quantity);
+        const unitCost = Number(line.estimatedUnitCost);
+        if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) {
+          return sum;
+        }
+        return sum + quantity * unitCost;
+      }, 0),
+    [form.lines]
+  );
+
+  const pendingCount = useMemo(
+    () => rows.filter((row) => row.status === "SUBMITTED").length,
+    [rows]
+  );
+  const approvedReadyCount = useMemo(
+    () => rows.filter((row) => row.status === "APPROVED").length,
+    [rows]
+  );
+  const completedCount = useMemo(
+    () => rows.filter((row) => row.status === "PURCHASE_COMPLETED").length,
+    [rows]
+  );
+
+  const loadRequisitions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const query = new URLSearchParams();
+      if (filters.from) query.set("from", filters.from);
+      if (filters.to) query.set("to", filters.to);
+      if (filters.clientId !== "all") query.set("clientId", filters.clientId);
+      if (filters.rigId !== "all") query.set("rigId", filters.rigId);
+      if (statusFilter !== "all") query.set("status", statusFilter);
+      const response = await fetch(`/api/requisitions?${query.toString()}`, {
+        cache: "no-store"
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { data?: RequisitionRow[]; message?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to load requisitions.");
+      }
+      setRows(Array.isArray(payload?.data) ? payload.data : []);
+    } catch (loadError) {
+      setRows([]);
+      setError(
+        loadError instanceof Error ? loadError.message : "Failed to load requisitions."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [filters.clientId, filters.from, filters.rigId, filters.to, statusFilter]);
+
+  useEffect(() => {
+    void loadRequisitions();
+  }, [loadRequisitions]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/maintenance-requests?status=SUBMITTED", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              data?: Array<{
+                id: string;
+                requestCode?: string;
+                rigId?: string;
+              }>;
+            }
+          | null;
+        if (!response.ok || cancelled) {
+          return;
+        }
+        const mapped = Array.isArray(payload?.data)
+          ? payload.data.map((entry) => ({
+              id: entry.id,
+              requestCode: entry.requestCode || entry.id,
+              rigId: entry.rigId || ""
+            }))
+          : [];
+        setMaintenanceOptions(mapped);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setMaintenanceOptions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const createRequisition = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      setError(null);
+      setNotice(null);
+
+      const lines = form.lines
+        .map((line, index) => ({
+          id: line.id || `line-${index + 1}`,
+          description: line.description.trim(),
+          quantity: Number(line.quantity),
+          estimatedUnitCost: Number(line.estimatedUnitCost),
+          estimatedTotalCost:
+            Number(line.quantity) > 0 && Number(line.estimatedUnitCost) >= 0
+              ? Number(line.quantity) * Number(line.estimatedUnitCost)
+              : 0,
+          notes: line.notes.trim() || null
+        }))
+        .filter(
+          (line) =>
+            line.description &&
+            Number.isFinite(line.quantity) &&
+            line.quantity > 0 &&
+            Number.isFinite(line.estimatedUnitCost) &&
+            line.estimatedUnitCost >= 0
+        );
+
+      if (lines.length === 0) {
+        setError("Add at least one valid line item with quantity and estimated unit cost.");
+        return;
+      }
+
+      if (form.type === "LIVE_PROJECT_PURCHASE" && !form.projectId) {
+        setError("Live project purchase requisitions require a project.");
+        return;
+      }
+      if (form.type === "MAINTENANCE_PURCHASE" && !form.rigId) {
+        setError("Maintenance purchase requisitions require a rig.");
+        return;
+      }
+
+      setSaving(true);
+      try {
+        const response = await fetch("/api/requisitions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: form.type,
+            clientId: form.clientId || null,
+            projectId: form.projectId || null,
+            rigId: form.rigId || null,
+            maintenanceRequestId: form.maintenanceRequestId || null,
+            category: form.category,
+            subcategory: form.subcategory || null,
+            notes: form.notes || null,
+            lineItems: lines
+          })
+        });
+
+        const payload = (await response.json().catch(() => null)) as
+          | { message?: string }
+          | null;
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to create requisition.");
+        }
+
+        setNotice(
+          "Requisition submitted. Next step is manager approval, then receipt/purchase posting."
+        );
+        setForm(initialFormState);
+        await loadRequisitions();
+        if (onWorkflowChanged) {
+          await onWorkflowChanged();
+        }
+      } catch (submitError) {
+        setError(
+          submitError instanceof Error
+            ? submitError.message
+            : "Failed to create requisition."
+        );
+      } finally {
+        setSaving(false);
+      }
+    },
+    [form, loadRequisitions, onWorkflowChanged]
+  );
+
+  const updateRequisitionStatus = useCallback(
+    async (requisitionId: string, action: "approve" | "reject" | "reopen") => {
+      const note = (statusNotes[requisitionId] || "").trim();
+      if (action === "reject" && note.length < 3) {
+        setError("Enter a rejection reason (minimum 3 characters).");
+        return;
+      }
+
+      setActingId(requisitionId);
+      setError(null);
+      setNotice(null);
+      try {
+        const response = await fetch(`/api/requisitions/${requisitionId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            reason: action === "reject" ? note : undefined
+          })
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | { message?: string }
+          | null;
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to update requisition.");
+        }
+        setStatusNotes((current) => ({ ...current, [requisitionId]: "" }));
+        setNotice(
+          action === "approve"
+            ? "Requisition approved. Continue to purchase/receipt stage."
+            : action === "reject"
+              ? "Requisition rejected and returned to requester."
+              : "Requisition reopened to submitted state."
+        );
+        await loadRequisitions();
+      } catch (updateError) {
+        setError(
+          updateError instanceof Error
+            ? updateError.message
+            : "Failed to update requisition."
+        );
+      } finally {
+        setActingId(null);
+      }
+    },
+    [loadRequisitions, statusNotes]
+  );
+
+  const requisitionRows = useMemo(
+    () =>
+      rows.map((row) => {
+        const receiptUrl = buildReceiptIntakeHref(row);
+        return [
+          row.requisitionCode,
+          formatRequisitionType(row.type),
+          <StatusChip key={`${row.id}-status`} status={row.status} />,
+          row.context.projectId ? lookupProjectName(projects, row.context.projectId) : "-",
+          row.context.rigId ? lookupRigName(rigs, row.context.rigId) : "-",
+          row.lineItems.length,
+          formatCurrency(row.totals.estimatedTotalCost),
+          row.status === "PURCHASE_COMPLETED"
+            ? formatCurrency(row.totals.actualPostedCost)
+            : "-",
+          formatIsoDate(row.submittedAt),
+          <div key={`${row.id}-actions`} className="flex max-w-[320px] flex-wrap gap-2">
+            {row.status === "APPROVED" && (
+              <Link
+                href={receiptUrl}
+                className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
+              >
+                Start purchase / receipt
+              </Link>
+            )}
+            {row.status === "PURCHASE_COMPLETED" && (
+              <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
+                Posted
+              </span>
+            )}
+            {canApprove && row.status === "SUBMITTED" && (
+              <>
+                <input
+                  type="text"
+                  value={statusNotes[row.id] || ""}
+                  onChange={(event) =>
+                    setStatusNotes((current) => ({
+                      ...current,
+                      [row.id]: event.target.value
+                    }))
+                  }
+                  placeholder="Reject reason"
+                  className="w-40 rounded-md border border-slate-200 px-2 py-1 text-xs"
+                />
+                <button
+                  type="button"
+                  disabled={actingId === row.id}
+                  onClick={() => void updateRequisitionStatus(row.id, "approve")}
+                  className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  disabled={actingId === row.id}
+                  onClick={() => void updateRequisitionStatus(row.id, "reject")}
+                  className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
+                >
+                  Reject
+                </button>
+              </>
+            )}
+            {canApprove && row.status === "REJECTED" && (
+              <button
+                type="button"
+                disabled={actingId === row.id}
+                onClick={() => void updateRequisitionStatus(row.id, "reopen")}
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                Reopen
+              </button>
+            )}
+          </div>
+        ];
+      }),
+    [actingId, canApprove, projects, rigs, rows, statusNotes, updateRequisitionStatus]
+  );
+
+  return (
+    <section id="expenses-requisition-workflow" className="space-y-4">
+      {notice && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {notice}
+        </div>
+      )}
+      {error && (
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          {error}
+        </div>
+      )}
+
+      <Card
+        title="Guided Purchasing Workflow"
+        subtitle="Requisition → Approval → Purchase/Receipt → Posted Cost"
+      >
+        <div className="mb-3 grid gap-2 text-xs text-slate-700 md:grid-cols-4">
+          <WorkflowStep title="1. Requisition" note="Create request with estimated line items." />
+          <WorkflowStep title="2. Approval" note="Manager/Admin approves or rejects." />
+          <WorkflowStep title="3. Purchase/Receipt" note="Upload receipt against approved requisition." />
+          <WorkflowStep title="4. Posted Cost" note="Cost posts only after receipt confirmation." />
+        </div>
+        <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          Line-item partial approvals are not yet enabled in v1. Current mode is{" "}
+          <span className="font-semibold">full requisition approval</span>.
+        </p>
+        <form onSubmit={createRequisition} className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <SelectInput
+            label="Requisition Type"
+            value={form.type}
+            onChange={(value) =>
+              setForm((current) => {
+                const nextType = value as RequisitionType;
+                return {
+                  ...current,
+                  type: nextType,
+                  projectId: nextType === "INVENTORY_STOCK_UP" ? "" : current.projectId,
+                  maintenanceRequestId:
+                    nextType === "MAINTENANCE_PURCHASE" ? current.maintenanceRequestId : ""
+                };
+              })
+            }
+            options={[
+              { value: "LIVE_PROJECT_PURCHASE", label: "Live project purchase" },
+              { value: "INVENTORY_STOCK_UP", label: "Inventory stock-up" },
+              { value: "MAINTENANCE_PURCHASE", label: "Maintenance purchase" }
+            ]}
+          />
+          <SelectInput
+            label="Client"
+            value={form.clientId}
+            onChange={(value) =>
+              setForm((current) => ({
+                ...current,
+                clientId: value,
+                projectId:
+                  value && current.projectId && !projects.some((project) => project.id === current.projectId && project.clientId === value)
+                    ? ""
+                    : current.projectId
+              }))
+            }
+            options={[
+              { value: "", label: "No client" },
+              ...clients.map((client) => ({ value: client.id, label: client.name }))
+            ]}
+          />
+          <SelectInput
+            label={form.type === "INVENTORY_STOCK_UP" ? "Project (disabled for stock-up)" : "Project"}
+            value={form.projectId}
+            onChange={(value) =>
+              setForm((current) => ({
+                ...current,
+                projectId: value
+              }))
+            }
+            disabled={form.type === "INVENTORY_STOCK_UP"}
+            options={[
+              { value: "", label: form.type === "LIVE_PROJECT_PURCHASE" ? "Select project" : "No project" },
+              ...filteredProjects.map((project) => ({
+                value: project.id,
+                label: project.name
+              }))
+            ]}
+          />
+          <SelectInput
+            label={form.type === "MAINTENANCE_PURCHASE" ? "Rig (required)" : "Rig"}
+            value={form.rigId}
+            onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
+            options={[
+              { value: "", label: form.type === "MAINTENANCE_PURCHASE" ? "Select rig" : "No rig" },
+              ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
+            ]}
+          />
+          {form.type === "MAINTENANCE_PURCHASE" && (
+            <SelectInput
+              label="Maintenance Request (optional)"
+              value={form.maintenanceRequestId}
+              onChange={(value) =>
+                setForm((current) => ({ ...current, maintenanceRequestId: value }))
+              }
+              options={[
+                { value: "", label: "No maintenance request" },
+                ...filteredMaintenanceOptions.map((option) => ({
+                  value: option.id,
+                  label: option.requestCode
+                }))
+              ]}
+            />
+          )}
+          <TextInput
+            label="Category"
+            value={form.category}
+            onChange={(value) => setForm((current) => ({ ...current, category: value }))}
+            required
+          />
+          <TextInput
+            label="Subcategory"
+            value={form.subcategory}
+            onChange={(value) => setForm((current) => ({ ...current, subcategory: value }))}
+          />
+          <label className="text-sm text-ink-700 md:col-span-2 lg:col-span-4">
+            <span className="mb-1 block">Reason / Notes</span>
+            <textarea
+              value={form.notes}
+              onChange={(event) =>
+                setForm((current) => ({ ...current, notes: event.target.value }))
+              }
+              className="w-full rounded-lg border border-slate-200 px-3 py-2"
+              placeholder="Why this purchase is needed"
+            />
+          </label>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2 lg:col-span-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Line Items</p>
+            <div className="mt-2 space-y-2">
+              {form.lines.map((line) => (
+                <div key={line.id} className="grid gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-12">
+                  <input
+                    value={line.description}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        lines: current.lines.map((entry) =>
+                          entry.id === line.id
+                            ? { ...entry, description: event.target.value }
+                            : entry
+                        )
+                      }))
+                    }
+                    placeholder="Description"
+                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-5"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={line.quantity}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        lines: current.lines.map((entry) =>
+                          entry.id === line.id
+                            ? { ...entry, quantity: event.target.value }
+                            : entry
+                        )
+                      }))
+                    }
+                    placeholder="Qty"
+                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={line.estimatedUnitCost}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        lines: current.lines.map((entry) =>
+                          entry.id === line.id
+                            ? { ...entry, estimatedUnitCost: event.target.value }
+                            : entry
+                        )
+                      }))
+                    }
+                    placeholder="Est. unit cost"
+                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                  />
+                  <input
+                    value={line.notes}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        lines: current.lines.map((entry) =>
+                          entry.id === line.id ? { ...entry, notes: event.target.value } : entry
+                        )
+                      }))
+                    }
+                    placeholder="Line note (optional)"
+                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        lines:
+                          current.lines.length <= 1
+                            ? current.lines
+                            : current.lines.filter((entry) => entry.id !== line.id)
+                      }))
+                    }
+                    className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 md:col-span-1"
+                    disabled={form.lines.length <= 1}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() =>
+                  setForm((current) => ({
+                    ...current,
+                    lines: [...current.lines, initialFormLine()]
+                  }))
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Add line item
+              </button>
+              <p className="text-xs text-slate-700">
+                Estimated requisition total:{" "}
+                <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 md:col-span-2 lg:col-span-4">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+            >
+              {saving ? "Submitting..." : "Submit Requisition"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm(initialFormState)}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Reset
+            </button>
+          </div>
+        </form>
+      </Card>
+
+      <Card
+        title="Requisition Queue"
+        subtitle="Track submitted, approved, and posted requisitions."
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-700">
+          <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+            Pending approval: {pendingCount}
+          </span>
+          <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
+            Approved, awaiting receipt: {approvedReadyCount}
+          </span>
+          <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
+            Posted cost complete: {completedCount}
+          </span>
+          <label className="ml-auto flex items-center gap-2">
+            <span className="uppercase tracking-wide text-slate-500">Status</span>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(
+                  event.target.value === "all"
+                    ? "all"
+                    : (event.target.value as RequisitionStatus)
+                )
+              }
+              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+            >
+              <option value="all">All</option>
+              <option value="SUBMITTED">Submitted</option>
+              <option value="APPROVED">Approved</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="PURCHASE_COMPLETED">Purchase completed</option>
+            </select>
+          </label>
+        </div>
+        {loading ? (
+          <p className="text-sm text-slate-600">Loading requisitions...</p>
+        ) : rows.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            No requisitions found for the selected filters.
+          </p>
+        ) : (
+          <DataTable
+            columns={[
+              "Requisition",
+              "Type",
+              "Status",
+              "Project",
+              "Rig",
+              "Lines",
+              "Estimated",
+              "Posted",
+              "Submitted",
+              "Actions"
+            ]}
+            rows={requisitionRows}
+          />
+        )}
+      </Card>
+    </section>
+  );
+}
+
+function WorkflowStep({ title, note }: { title: string; note: string }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
+      <p className="font-semibold text-slate-800">{title}</p>
+      <p className="text-slate-600">{note}</p>
+    </div>
+  );
+}
+
+function SelectInput({
+  label,
+  value,
+  onChange,
+  options,
+  disabled = false
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="text-sm text-ink-700">
+      <span className="mb-1 block">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        disabled={disabled}
+        className="w-full rounded-lg border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+      >
+        {options.map((option) => (
+          <option key={`${label}-${option.value}`} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function TextInput({
+  label,
+  value,
+  onChange,
+  required = false
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+}) {
+  return (
+    <label className="text-sm text-ink-700">
+      <span className="mb-1 block">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        className="w-full rounded-lg border border-slate-200 px-3 py-2"
+      />
+    </label>
+  );
+}
+
+function formatRequisitionType(type: RequisitionType) {
+  if (type === "LIVE_PROJECT_PURCHASE") return "Live project";
+  if (type === "MAINTENANCE_PURCHASE") return "Maintenance";
+  return "Inventory stock-up";
+}
+
+function lookupProjectName(
+  projects: Array<{ id: string; name: string }>,
+  projectId: string
+) {
+  return projects.find((project) => project.id === projectId)?.name || projectId;
+}
+
+function lookupRigName(rigs: Array<{ id: string; name: string }>, rigId: string) {
+  return rigs.find((rig) => rig.id === rigId)?.name || rigId;
+}
+
+function formatIsoDate(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value || "-";
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function buildReceiptIntakeHref(row: RequisitionRow) {
+  const query = new URLSearchParams();
+  query.set("requisitionId", row.id);
+  query.set("requisitionCode", row.requisitionCode);
+  query.set("requisitionType", row.type);
+  if (row.context.clientId) {
+    query.set("clientId", row.context.clientId);
+  }
+  if (row.context.projectId) {
+    query.set("projectId", row.context.projectId);
+  }
+  if (row.context.rigId) {
+    query.set("rigId", row.context.rigId);
+  }
+  if (row.context.maintenanceRequestId) {
+    query.set("maintenanceRequestId", row.context.maintenanceRequestId);
+  }
+  return `/inventory/receipt-intake?${query.toString()}`;
+}
+
+function StatusChip({ status }: { status: RequisitionStatus }) {
+  const style =
+    status === "PURCHASE_COMPLETED"
+      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+      : status === "APPROVED"
+        ? "border-indigo-300 bg-indigo-100 text-indigo-800"
+        : status === "REJECTED"
+          ? "border-red-300 bg-red-100 text-red-800"
+          : "border-amber-300 bg-amber-100 text-amber-800";
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${style}`}>
+      {status === "PURCHASE_COMPLETED"
+        ? "Posted cost"
+        : status.charAt(0) + status.slice(1).toLowerCase()}
+    </span>
+  );
+}

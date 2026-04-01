@@ -70,10 +70,21 @@ export default function RigsPage() {
   const [expensesByRig, setExpensesByRig] = useState<ExpenseRigBucket[]>([]);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
-  const visibleRigs = useMemo(
-    () => (statusFilter === "ALL" ? rigs : rigs.filter((rig) => rig.status === statusFilter)),
-    [rigs, statusFilter]
-  );
+  const visibleRigs = useMemo(() => {
+    if (statusFilter === "ALL") {
+      return rigs;
+    }
+    if (statusFilter === "NEEDS_ATTENTION") {
+      return rigs.filter(
+        (rig) =>
+          rig.status === "BREAKDOWN" ||
+          rig.status === "MAINTENANCE" ||
+          ["POOR", "CRITICAL"].includes(rig.condition.toUpperCase()) ||
+          rig.conditionScore < 45
+      );
+    }
+    return rigs.filter((rig) => rig.status === statusFilter);
+  }, [rigs, statusFilter]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -82,7 +93,7 @@ export default function RigsPage() {
 
     const searchParams = new URLSearchParams(window.location.search);
     const raw = (searchParams.get("status") || "").toUpperCase();
-    setStatusFilter(["ACTIVE", "IDLE", "MAINTENANCE", "BREAKDOWN"].includes(raw) ? raw : "ALL");
+    setStatusFilter(["ACTIVE", "IDLE", "MAINTENANCE", "BREAKDOWN", "NEEDS_ATTENTION"].includes(raw) ? raw : "ALL");
   }, [pathname]);
 
   const loadRigs = useCallback(async () => {
@@ -448,13 +459,32 @@ export default function RigsPage() {
     }
   }
 
-  async function deleteRig(id: string) {
-    if (!window.confirm("Delete this rig?")) {
+  async function markRigOutOfService(rig: RigRecord) {
+    if (
+      !window.confirm(
+        `Mark ${rig.rigCode} as out of service? This keeps historical data and sets status to IDLE with CRITICAL condition.`
+      )
+    ) {
       return;
     }
-
-    const response = await fetch(`/api/rigs/${id}`, {
-      method: "DELETE"
+    const response = await fetch(`/api/rigs/${rig.id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        rigCode: rig.rigCode,
+        model: rig.model,
+        serialNumber: rig.serialNumber,
+        photoUrl: rig.photoUrl || "",
+        acquisitionDate: rig.acquisitionDate ? rig.acquisitionDate.slice(0, 10) : "",
+        status: "IDLE",
+        condition: "CRITICAL",
+        conditionScore: Math.min(rig.conditionScore, 30),
+        totalHoursWorked: rig.totalHoursWorked,
+        totalMetersDrilled: rig.totalMetersDrilled,
+        totalLifetimeDays: rig.totalLifetimeDays
+      })
     });
     if (response.ok) {
       await loadRigs();
@@ -483,6 +513,8 @@ export default function RigsPage() {
                 ? isScoped
                   ? "Rigs in Scope"
                   : "Total Rigs"
+                : statusFilter === "NEEDS_ATTENTION"
+                  ? "Rigs Needing Attention"
                 : `Rigs (${statusFilter})`
             }
             value={String(visibleRigs.length)}
@@ -499,6 +531,22 @@ export default function RigsPage() {
             value={String(visibleRigs.filter((rig) => rig.status === "BREAKDOWN").length)}
             tone="danger"
           />
+        </section>
+
+        <section className="flex flex-wrap items-center gap-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rig focus</label>
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-ink-700"
+          >
+            <option value="ALL">All rigs</option>
+            <option value="ACTIVE">Active</option>
+            <option value="IDLE">Idle</option>
+            <option value="MAINTENANCE">Maintenance</option>
+            <option value="BREAKDOWN">Breakdown</option>
+            <option value="NEEDS_ATTENTION">Needs attention</option>
+          </select>
         </section>
 
         <AccessGate permission="rigs:manage">
@@ -595,10 +643,10 @@ export default function RigsPage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50"
-                      onClick={() => void deleteRig(rig.id)}
+                      className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
+                      onClick={() => void markRigOutOfService(rig)}
                     >
-                      Delete
+                      Mark Out of Service
                     </button>
                   </div>
                 ])}

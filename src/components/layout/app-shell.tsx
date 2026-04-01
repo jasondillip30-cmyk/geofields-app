@@ -8,11 +8,13 @@ import { CopilotActionContextToast } from "@/components/layout/copilot-action-co
 import { GlobalAiCopilot } from "@/components/layout/global-ai-copilot";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { isAssistantExperienceEnabled } from "@/lib/feature-flags";
 
 const SIDEBAR_HIDDEN_STORAGE_KEY = "gf:sidebar-hidden";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const assistantExperienceEnabled = isAssistantExperienceEnabled();
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -44,8 +46,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               </main>
             </div>
           </div>
-          <GlobalAiCopilot />
-          <CopilotActionContextToast />
+          {assistantExperienceEnabled ? <GlobalAiCopilot /> : null}
+          {assistantExperienceEnabled ? <CopilotActionContextToast /> : null}
         </AiCopilotProvider>
       </AnalyticsFiltersProvider>
     </div>

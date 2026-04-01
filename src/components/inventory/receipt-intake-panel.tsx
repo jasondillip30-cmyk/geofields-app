@@ -35,6 +35,15 @@ interface ReceiptIntakePanelProps {
   rigs: Array<{ id: string; rigCode: string }>;
   defaultClientId?: string;
   defaultRigId?: string;
+  initialRequisition?: {
+    id: string;
+    requisitionCode: string;
+    type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+    clientId?: string | null;
+    projectId?: string | null;
+    rigId?: string | null;
+    maintenanceRequestId?: string | null;
+  } | null;
   activeSubmission?: {
     id: string;
     status: "SUBMITTED" | "APPROVED" | "REJECTED";
@@ -44,6 +53,7 @@ interface ReceiptIntakePanelProps {
         | "MAINTENANCE_LINKED_PURCHASE"
         | "EXPENSE_ONLY"
         | "INTERNAL_TRANSFER";
+      requisitionId?: string | null;
       expenseOnlyCategory?: "TRAVEL" | "FOOD" | "FUEL" | "MISC";
       receiptPurpose?:
         | "INVENTORY_PURCHASE"
@@ -129,6 +139,9 @@ interface ReviewLineState {
 }
 
 interface ReviewState {
+  requisitionId: string;
+  requisitionCode: string;
+  requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE" | "";
   receiptUrl: string;
   receiptFileName: string;
   supplierId: string;
@@ -301,6 +314,7 @@ export function ReceiptIntakePanel({
   rigs,
   defaultClientId = "all",
   defaultRigId = "all",
+  initialRequisition = null,
   activeSubmission = null,
   renderCard = true,
   onCompleted
@@ -342,6 +356,14 @@ export function ReceiptIntakePanel({
   const canPreviewReceiptImage = Boolean(
     receiptPreviewUrl && receiptFile?.type.toLowerCase().startsWith("image/")
   );
+  const requisitionLocked = Boolean(initialRequisition);
+  const requisitionClassification = useMemo(
+    () =>
+      initialRequisition
+        ? mapRequisitionTypeToReceiptClassification(initialRequisition.type)
+        : null,
+    [initialRequisition]
+  );
 
   useEffect(() => {
     let timeoutId: number | undefined;
@@ -368,6 +390,21 @@ export function ReceiptIntakePanel({
   }, [receiptPreviewUrl]);
 
   useEffect(() => {
+    if (!initialRequisition || review || activeSubmission) {
+      return;
+    }
+    if (requisitionClassification && receiptClassification !== requisitionClassification) {
+      setReceiptClassification(requisitionClassification);
+    }
+  }, [
+    activeSubmission,
+    initialRequisition,
+    receiptClassification,
+    requisitionClassification,
+    review
+  ]);
+
+  useEffect(() => {
     if (!activeSubmission) {
       setActiveSubmissionId(null);
       return;
@@ -381,7 +418,8 @@ export function ReceiptIntakePanel({
     const hydrated = buildReviewStateFromSubmission({
       submission: activeSubmission,
       defaultClientId,
-      defaultRigId
+      defaultRigId,
+      initialRequisition
     });
     setReview(hydrated);
     setReceiptClassification(hydrated.receiptClassification);
@@ -634,7 +672,8 @@ export function ReceiptIntakePanel({
           receiptFileName: receiptFile.name,
           defaultClientId,
           defaultRigId,
-          receiptClassification
+          receiptClassification,
+          initialRequisition
         });
         setReview(nextReview);
         const intakeMessage = calmMessage(
@@ -672,7 +711,8 @@ export function ReceiptIntakePanel({
           response.ok
             ? readPayloadMessage(payload, "Some fields need review. You can continue manually.")
             : readApiError(response, payload, "Some fields need review. You can continue manually."),
-        receiptClassification
+        receiptClassification,
+        initialRequisition
       });
       setReview(fallbackReview);
       setNoticeTone("WARNING");
@@ -694,7 +734,8 @@ export function ReceiptIntakePanel({
           (scanError instanceof Error && scanError.message
             ? scanError.message
             : "Some fields need review. You can continue manually."),
-        receiptClassification
+        receiptClassification,
+        initialRequisition
       });
       setReview(fallbackReview);
       setNoticeTone("WARNING");
@@ -759,6 +800,7 @@ export function ReceiptIntakePanel({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          requisitionId: nextReview.requisitionId || null,
           submissionId: activeSubmissionId,
           receipt: {
             url: nextReview.receiptUrl,
@@ -1292,48 +1334,61 @@ export function ReceiptIntakePanel({
           <p className="mt-1 text-xs text-slate-600">
             Select the business flow before scanning so posting and review rules apply correctly.
           </p>
+          {requisitionLocked && (
+            <p className="mt-2 rounded border border-indigo-200 bg-indigo-50 px-2 py-1.5 text-xs text-indigo-900">
+              Receipt type is locked from requisition{" "}
+              <span className="font-semibold">
+                {initialRequisition?.requisitionCode || initialRequisition?.id.slice(-8)}
+              </span>
+              .
+            </p>
+          )}
           <div className="mt-2 grid gap-2 md:grid-cols-2">
             <button
               type="button"
               onClick={() => setReceiptClassification("INVENTORY_PURCHASE")}
+              disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                 receiptClassification === "INVENTORY_PURCHASE"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
             >
               Inventory purchase (stock)
             </button>
             <button
               type="button"
               onClick={() => setReceiptClassification("MAINTENANCE_LINKED_PURCHASE")}
+              disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                 receiptClassification === "MAINTENANCE_LINKED_PURCHASE"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
             >
               Maintenance-linked purchase
             </button>
             <button
               type="button"
               onClick={() => setReceiptClassification("EXPENSE_ONLY")}
+              disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                 receiptClassification === "EXPENSE_ONLY"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
             >
               Expense only (non-inventory)
             </button>
             <button
               type="button"
               onClick={() => setReceiptClassification("INTERNAL_TRANSFER")}
+              disabled={requisitionLocked}
               className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                 receiptClassification === "INTERNAL_TRANSFER"
                   ? "border-brand-300 bg-brand-50 text-brand-800"
                   : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              } disabled:cursor-not-allowed disabled:opacity-60`}
             >
               Internal transfer
             </button>
@@ -1758,6 +1813,15 @@ export function ReceiptIntakePanel({
               <p className="mt-1 text-xs text-slate-600">
                 Confirm allocation and posting intent, then submit for review (staff) or finalize (manager/admin).
               </p>
+              {review.requisitionId && (
+                <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
+                  Linked requisition:{" "}
+                  <span className="font-semibold">
+                    {review.requisitionCode || review.requisitionId.slice(-8)}
+                  </span>
+                  . This purchase will post back to the requisition workflow when saved.
+                </p>
+              )}
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-sm font-semibold text-slate-800">Receipt Approval Card</p>
@@ -1877,8 +1941,15 @@ export function ReceiptIntakePanel({
                   label="Link Project"
                   value={review.projectId}
                   onChange={(value) => setReview((current) => (current ? { ...current, projectId: value } : current))}
+                  disabled={review.requisitionType === "INVENTORY_STOCK_UP"}
                   options={[
-                    { value: "", label: "No project" },
+                    {
+                      value: "",
+                      label:
+                        review.requisitionType === "INVENTORY_STOCK_UP"
+                          ? "Project disabled for stock-up requisition"
+                          : "No project"
+                    },
                     ...filteredProjects.map((project) => ({ value: project.id, label: project.name }))
                   ]}
                 />
@@ -1964,6 +2035,11 @@ export function ReceiptIntakePanel({
               {allocationPreview !== "ALLOCATED" && (
                 <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
                   Needs allocation: project/client are not fully assigned yet. You can save now and update allocation later.
+                </p>
+              )}
+              {review.requisitionType === "INVENTORY_STOCK_UP" && (
+                <p className="mt-2 rounded border border-sky-200 bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
+                  Stock-up requisition linked: this receipt is treated as inventory replenishment and not as live project spend.
                 </p>
               )}
             </div>
@@ -2253,12 +2329,14 @@ function SelectField({
   label,
   value,
   onChange,
-  options
+  options,
+  disabled = false
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   options: Array<{ value: string; label: string }>;
+  disabled?: boolean;
 }) {
   return (
     <label className="text-xs text-ink-700">
@@ -2266,7 +2344,8 @@ function SelectField({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+        disabled={disabled}
+        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-100"
       >
         {options.map((option) => (
           <option key={`${label}-${option.value}`} value={option.value}>
@@ -2688,18 +2767,30 @@ function isLikelyNonInventoryLine(description: string) {
 function buildReviewStateFromSubmission({
   submission,
   defaultClientId,
-  defaultRigId
+  defaultRigId,
+  initialRequisition
 }: {
   submission: NonNullable<ReceiptIntakePanelProps["activeSubmission"]>;
   defaultClientId: string;
   defaultRigId: string;
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
 }): ReviewState {
   const draft = submission.draft || {};
   const receipt = draft.receipt || {};
   const linkContext = draft.linkContext || {};
   const normalizedClassification = normalizeReceiptClassification(asString(draft.receiptType));
-  const receiptConfig = resolveReceiptConfig(normalizedClassification);
   const submittedLines = Array.isArray(draft.lines) ? draft.lines : [];
+  const requisitionFromDraft = asString(draft.requisitionId);
+  const requisitionLink = resolveRequisitionLink({
+    requisitionId: requisitionFromDraft,
+    initialRequisition
+  });
+  const effectiveClassification = requisitionLink.type
+    ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
+    : normalizedClassification;
+  const receiptConfig = requisitionLink.type
+    ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
+    : resolveReceiptConfig(effectiveClassification);
   const lines = applyReceiptClassificationLineDefaults(
     submittedLines.map((line, index) => {
       const description = asString(line.description) || "Submitted receipt line";
@@ -2736,11 +2827,14 @@ function buildReviewStateFromSubmission({
       newItemMinimumStockLevel: String(Number(line.newItem?.minimumStockLevel ?? 0) || 0)
     };
     }),
-    normalizedClassification
+    effectiveClassification
   );
 
   const receiptPurposeRaw = asString(draft.receiptPurpose);
   return {
+    requisitionId: requisitionLink.id,
+    requisitionCode: requisitionLink.code,
+    requisitionType: requisitionLink.type,
     receiptUrl: asString(receipt.url),
     receiptFileName: asString(receipt.fileName) || "Submitted receipt",
     supplierId: asString(receipt.supplierId),
@@ -2773,20 +2867,27 @@ function buildReviewStateFromSubmission({
     subtotal: toNumericString(receipt.subtotal),
     tax: toNumericString(receipt.tax),
     total: toNumericString(receipt.total),
-    clientId: asString(linkContext.clientId) || defaultClientId,
-    projectId: asString(linkContext.projectId),
-    rigId: asString(linkContext.rigId) || defaultRigId,
-    maintenanceRequestId: asString(linkContext.maintenanceRequestId),
+    clientId: requisitionLink.clientId || asString(linkContext.clientId) || defaultClientId,
+    projectId: requisitionLink.projectId || asString(linkContext.projectId),
+    rigId: requisitionLink.rigId || asString(linkContext.rigId) || defaultRigId,
+    maintenanceRequestId:
+      requisitionLink.maintenanceRequestId || asString(linkContext.maintenanceRequestId),
     locationFromId: asString(linkContext.locationFromId),
     locationToId: asString(linkContext.locationToId),
     expenseOnlyCategory: resolveExpenseOnlyCategory(asString(draft.expenseOnlyCategory)) || "",
     createExpense:
-      typeof draft.createExpense === "boolean" ? draft.createExpense : receiptConfig.createExpense,
+      requisitionLink.type
+        ? receiptConfig.createExpense
+        : typeof draft.createExpense === "boolean"
+          ? draft.createExpense
+          : receiptConfig.createExpense,
     receiptPurpose:
-      receiptPurposeRaw.length > 0
+      requisitionLink.type
+        ? receiptConfig.receiptPurpose
+        : receiptPurposeRaw.length > 0
         ? normalizeReceiptPurpose(receiptPurposeRaw)
         : receiptConfig.receiptPurpose,
-    receiptClassification: normalizedClassification,
+    receiptClassification: effectiveClassification,
     warnings: ["Loaded from pending submission. Review and finalize when ready."],
     extractionMethod: "SUBMISSION",
     scanStatus: "PARTIAL",
@@ -2839,7 +2940,8 @@ function buildReviewStateFromPayload({
   receiptFileName,
   defaultClientId,
   defaultRigId,
-  receiptClassification
+  receiptClassification,
+  initialRequisition
 }: {
   payload: {
     receipt?: { url?: string; fileName?: string };
@@ -2853,6 +2955,7 @@ function buildReviewStateFromPayload({
   defaultClientId: string;
   defaultRigId: string;
   receiptClassification: ReceiptClassification;
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
 }): ReviewState {
   const extracted = payload.extracted;
   const supplierSuggestion = asRecord(payload.supplierSuggestion) || {};
@@ -2892,9 +2995,21 @@ function buildReviewStateFromPayload({
       source: supplierFieldMaps.fieldSource.supplierName || "NONE"
     });
   }
-  const receiptConfig = resolveReceiptConfig(receiptClassification);
+  const requisitionLink = resolveRequisitionLink({
+    requisitionId: "",
+    initialRequisition
+  });
+  const effectiveClassification = requisitionLink.type
+    ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
+    : receiptClassification;
+  const receiptConfig = requisitionLink.type
+    ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
+    : resolveReceiptConfig(effectiveClassification);
 
   return {
+    requisitionId: requisitionLink.id,
+    requisitionCode: requisitionLink.code,
+    requisitionType: requisitionLink.type,
     receiptUrl: payload.receipt?.url || "",
     receiptFileName: payload.receipt?.fileName || receiptFileName,
     supplierId: asString(supplierSuggestion.supplierId),
@@ -2927,16 +3042,16 @@ function buildReviewStateFromPayload({
     subtotal: toNumericString(extractedHeader?.subtotal),
     tax: toNumericString(extractedHeader?.tax),
     total: toNumericString(extractedHeader?.total),
-    clientId: defaultClientId,
-    projectId: "",
-    rigId: defaultRigId,
-    maintenanceRequestId: "",
+    clientId: requisitionLink.clientId || defaultClientId,
+    projectId: requisitionLink.projectId || "",
+    rigId: requisitionLink.rigId || defaultRigId,
+    maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
     locationToId: "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,
-    receiptClassification,
+    receiptClassification: effectiveClassification,
     warnings: Array.isArray(extracted.warnings)
       ? Array.from(new Set(extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean)))
       : [],
@@ -2950,7 +3065,7 @@ function buildReviewStateFromPayload({
     debugCandidates: readDebugCandidates(extracted.debug),
     lines: applyReceiptClassificationLineDefaults(
       mapExtractedLines(extracted.lines),
-      receiptClassification
+      effectiveClassification
     )
   };
 }
@@ -2961,7 +3076,8 @@ function buildManualAssistReview({
   defaultClientId,
   defaultRigId,
   warning,
-  receiptClassification
+  receiptClassification,
+  initialRequisition
 }: {
   payload: unknown;
   receiptFileName: string;
@@ -2969,6 +3085,7 @@ function buildManualAssistReview({
   defaultRigId: string;
   warning: string;
   receiptClassification: ReceiptClassification;
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
 }): ReviewState {
   const root = asRecord(payload);
   const extracted = asRecord(root?.extracted);
@@ -3011,7 +3128,16 @@ function buildManualAssistReview({
       source: supplierFieldMaps.fieldSource.supplierName || "NONE"
     });
   }
-  const receiptConfig = resolveReceiptConfig(receiptClassification);
+  const requisitionLink = resolveRequisitionLink({
+    requisitionId: "",
+    initialRequisition
+  });
+  const effectiveClassification = requisitionLink.type
+    ? mapRequisitionTypeToReceiptClassification(requisitionLink.type)
+    : receiptClassification;
+  const receiptConfig = requisitionLink.type
+    ? resolveReceiptConfigForRequisitionType(requisitionLink.type)
+    : resolveReceiptConfig(effectiveClassification);
 
   const warnings = [
     calmMessage(warning),
@@ -3021,6 +3147,9 @@ function buildManualAssistReview({
   ];
 
   return {
+    requisitionId: requisitionLink.id,
+    requisitionCode: requisitionLink.code,
+    requisitionType: requisitionLink.type,
     receiptUrl: asString(receipt?.url),
     receiptFileName: asString(receipt?.fileName) || receiptFileName,
     supplierId: asString(supplierSuggestion?.supplierId),
@@ -3053,16 +3182,16 @@ function buildManualAssistReview({
     subtotal: toNumericString(extractedHeader?.subtotal),
     tax: toNumericString(extractedHeader?.tax),
     total: toNumericString(extractedHeader?.total),
-    clientId: defaultClientId,
-    projectId: "",
-    rigId: defaultRigId,
-    maintenanceRequestId: "",
+    clientId: requisitionLink.clientId || defaultClientId,
+    projectId: requisitionLink.projectId || "",
+    rigId: requisitionLink.rigId || defaultRigId,
+    maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
     locationToId: "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,
-    receiptClassification,
+    receiptClassification: effectiveClassification,
     warnings: Array.from(new Set(warnings.filter(Boolean))),
     extractionMethod: asString(extracted?.extractionMethod) || "UNKNOWN",
     scanStatus,
@@ -3074,7 +3203,7 @@ function buildManualAssistReview({
     debugCandidates: readDebugCandidates(extracted?.debug),
     lines: applyReceiptClassificationLineDefaults(
       mapExtractedLines(extracted?.lines),
-      receiptClassification
+      effectiveClassification
     )
   };
 }
@@ -3118,6 +3247,90 @@ function resolveReceiptConfig(receiptClassification: ReceiptClassification): {
   return {
     receiptPurpose: "INVENTORY_PURCHASE",
     createExpense: false
+  };
+}
+
+function resolveReceiptConfigForRequisitionType(
+  requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE"
+): {
+  receiptPurpose: ReceiptPurpose;
+  createExpense: boolean;
+} {
+  if (requisitionType === "INVENTORY_STOCK_UP") {
+    return {
+      receiptPurpose: "INVENTORY_PURCHASE",
+      createExpense: false
+    };
+  }
+  return {
+    receiptPurpose: "INVENTORY_AND_EXPENSE",
+    createExpense: true
+  };
+}
+
+function mapRequisitionTypeToReceiptClassification(
+  requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE"
+): ReceiptClassification {
+  if (requisitionType === "MAINTENANCE_PURCHASE") {
+    return "MAINTENANCE_LINKED_PURCHASE";
+  }
+  return "INVENTORY_PURCHASE";
+}
+
+function resolveRequisitionLink({
+  requisitionId,
+  initialRequisition
+}: {
+  requisitionId: string;
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+}): {
+  id: string;
+  code: string;
+  type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE" | "";
+  clientId: string;
+  projectId: string;
+  rigId: string;
+  maintenanceRequestId: string;
+} {
+  const normalizedId = requisitionId.trim();
+  if (normalizedId) {
+    return {
+      id: normalizedId,
+      code: initialRequisition?.id === normalizedId ? initialRequisition.requisitionCode : "",
+      type:
+        initialRequisition?.id === normalizedId
+          ? initialRequisition.type
+          : "",
+      clientId:
+        initialRequisition?.id === normalizedId ? initialRequisition.clientId || "" : "",
+      projectId:
+        initialRequisition?.id === normalizedId ? initialRequisition.projectId || "" : "",
+      rigId: initialRequisition?.id === normalizedId ? initialRequisition.rigId || "" : "",
+      maintenanceRequestId:
+        initialRequisition?.id === normalizedId
+          ? initialRequisition.maintenanceRequestId || ""
+          : ""
+    };
+  }
+  if (!initialRequisition) {
+    return {
+      id: "",
+      code: "",
+      type: "",
+      clientId: "",
+      projectId: "",
+      rigId: "",
+      maintenanceRequestId: ""
+    };
+  }
+  return {
+    id: initialRequisition.id,
+    code: initialRequisition.requisitionCode,
+    type: initialRequisition.type,
+    clientId: initialRequisition.clientId || "",
+    projectId: initialRequisition.projectId || "",
+    rigId: initialRequisition.rigId || "",
+    maintenanceRequestId: initialRequisition.maintenanceRequestId || ""
   };
 }
 
