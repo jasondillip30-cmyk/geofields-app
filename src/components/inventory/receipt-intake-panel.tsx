@@ -253,7 +253,12 @@ interface ReviewState {
 
 type ExtractState = "IDLE" | "UPLOADING" | "PROCESSING" | "SUCCESS" | "FAILED";
 type NoticeTone = "SUCCESS" | "WARNING";
-type RequisitionComparisonStatus = "MATCHED" | "PARTIAL_MATCH" | "MISMATCH" | "NEEDS_REVIEW";
+type RequisitionComparisonStatus =
+  | "MATCHED"
+  | "CLOSE_MATCH"
+  | "MISMATCH"
+  | "SCAN_FAILED"
+  | "MANUAL_ENTRY";
 type WorkflowStage =
   | "READY_TO_SCAN"
   | "CAPTURING"
@@ -302,6 +307,8 @@ interface RequisitionComparisonResult {
   label: string;
   message: string;
   canInspectScannedDetails: boolean;
+  scanTrustLabel: string;
+  scanTrustMessage: string;
   headerRows: Array<{
     label: string;
     approved: string;
@@ -1765,7 +1772,11 @@ export function ReceiptIntakePanel({
                     ? "border-emerald-300 bg-emerald-50 text-emerald-900"
                     : requisitionComparison.status === "MISMATCH"
                       ? "border-red-300 bg-red-50 text-red-900"
-                      : "border-amber-300 bg-amber-50 text-amber-900"
+                      : requisitionComparison.status === "SCAN_FAILED"
+                        ? "border-amber-300 bg-amber-50 text-amber-900"
+                        : requisitionComparison.status === "MANUAL_ENTRY"
+                          ? "border-slate-300 bg-slate-50 text-slate-800"
+                          : "border-amber-300 bg-amber-50 text-amber-900"
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1781,12 +1792,20 @@ export function ReceiptIntakePanel({
                   )}
                 </div>
                 <p className="mt-1">{requisitionComparison.message}</p>
+                <p className="mt-1 text-[11px] opacity-90">
+                  <span className="font-semibold">{requisitionComparison.scanTrustLabel}:</span>{" "}
+                  {requisitionComparison.scanTrustMessage}
+                </p>
               </div>
             )}
             {showScannedDetails && requisitionComparison && (
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
                   Approved vs Scanned Comparison
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  Scanned values below come from the uploaded receipt/QR extraction, so you can confirm whether the
+                  correct receipt was scanned.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="min-w-full text-xs text-slate-800">
@@ -3265,8 +3284,14 @@ function hasMeaningfulExtractedPayload(extracted: Record<string, unknown>) {
   const header = asRecord(extracted.header);
   const qr = asRecord(extracted.qr);
   const qrParsedFields = asRecord(qr?.parsedFields);
-  const rawLines = Array.isArray(extracted.lines) ? extracted.lines : [];
-  if (rawLines.length > 0) {
+  const extractedLines = mapExtractedLines(extracted.lines);
+  if (extractedLines.some((line) => isMeaningfulSnapshotLine({
+    id: line.id,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal
+  }))) {
     return true;
   }
 
@@ -3311,35 +3336,74 @@ function hasMeaningfulExtractedPayload(extracted: Record<string, unknown>) {
     }
   }
 
-  if (typeof qr?.rawValue === "string" && qr.rawValue.trim().length > 0) {
-    return true;
+  const qrHasDecodedCore =
+    qr?.decodeStatus === "DECODED" ||
+    qr?.parseStatus === "PARSED" ||
+    qr?.fieldsParseStatus === "SUCCESS" ||
+    qr?.lineItemsParseStatus === "SUCCESS";
+  if (qrHasDecodedCore) {
+    const hasQrIdentityFields = [
+      asString(qrParsedFields?.verificationCode),
+      asString(qrParsedFields?.traReceiptNumber),
+      asString(qrParsedFields?.tin),
+      asString(qrParsedFields?.receiptNumber),
+      asString(qrParsedFields?.supplierName)
+    ].some((value) => value.trim().length > 0);
+    if (hasQrIdentityFields) {
+      return true;
+    }
   }
-  if (typeof extracted.rawTextPreview === "string" && extracted.rawTextPreview.trim().length >= 20) {
+
+  const qrLookup = asRecord(asRecord(qr?.stages)?.verificationLookup);
+  if (asString(qrLookup?.status).toUpperCase() === "SUCCESS") {
     return true;
   }
   return false;
 }
 
 function hasMeaningfulReviewData(review: ReviewState) {
-  if (review.lines.length > 0) {
+  const meaningfulScannedLines = review.scannedSnapshot.lines.filter((line) => isMeaningfulSnapshotLine(line));
+  if (meaningfulScannedLines.length > 0) {
     return true;
   }
   if (
-    review.supplierName ||
-    review.receiptNumber ||
+    review.scannedSnapshot.supplierName ||
+    review.scannedSnapshot.receiptNumber ||
+    review.scannedSnapshot.receiptDate ||
     review.verificationCode ||
     review.traReceiptNumber ||
     review.serialNumber ||
-    review.invoiceReference ||
-    review.rawQrValue
+    review.tin ||
+    review.vrn
   ) {
     return true;
   }
-  return (
-    Number(review.total || 0) > 0 ||
-    Number(review.subtotal || 0) > 0 ||
-    Number(review.tax || 0) > 0
-  );
+  if (Number(review.scannedSnapshot.total || 0) > 0) {
+    return true;
+  }
+  const qrHasDecodedCore =
+    review.qrDecodeStatus === "DECODED" ||
+    review.qrParseStatus === "PARSED" ||
+    review.qrFieldsParseStatus === "SUCCESS" ||
+    review.qrLineItemsParseStatus === "SUCCESS";
+  if (
+    qrHasDecodedCore &&
+    (review.verificationCode.trim().length > 0 || review.traReceiptNumber.trim().length > 0)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isMeaningfulSnapshotLine(line: ReceiptSnapshotLine) {
+  const normalizedDescription = normalizeLineDescription(line.description);
+  const hasUsefulDescription =
+    normalizedDescription.length > 0 && normalizedDescription !== "unparsed receipt item";
+  const hasNumericSignals =
+    Number(line.quantity || 0) > 0 ||
+    Number(line.unitPrice || 0) > 0 ||
+    Number(line.lineTotal || 0) > 0;
+  return hasUsefulDescription || hasNumericSignals;
 }
 
 function mapExtractedLines(linesValue: unknown): ReviewLineState[] {
@@ -4663,20 +4727,21 @@ function evaluateRequisitionComparison(
   }
 
   const approvedLines = mapRequisitionSnapshotLines(initialRequisition);
-  const scannedLines = review.scannedSnapshot.lines;
+  const scannedLines = review.scannedSnapshot.lines.filter((line) => isMeaningfulSnapshotLine(line));
   const approvedSupplier = normalizeSupplierName(asString(initialRequisition?.requestedVendorName));
   const scannedSupplier = normalizeSupplierName(review.scannedSnapshot.supplierName);
   const approvedTotalValue = resolveRequisitionEstimatedTotal(initialRequisition);
   const scannedTotalValue = Number(review.scannedSnapshot.total || 0);
-  const totalMismatch =
-    approvedTotalValue > 0 &&
-    scannedTotalValue > 0 &&
-    !numbersClose(approvedTotalValue, scannedTotalValue, Math.max(1, approvedTotalValue * 0.03));
-  const supplierMismatch =
-    approvedSupplier.length > 0 &&
-    scannedSupplier.length > 0 &&
-    approvedSupplier !== scannedSupplier;
-  const lineMismatch = evaluateLineMismatch(approvedLines, scannedLines);
+  const scanTrust = resolveScanTrustState(review, scannedLines);
+  const supplierComparison = compareTextSimilarity(approvedSupplier, scannedSupplier, {
+    matchedThreshold: 0.84,
+    closeThreshold: 0.62
+  });
+  const totalComparison = compareNumericSimilarity(approvedTotalValue, scannedTotalValue, {
+    matchedToleranceRatio: 0.03,
+    closeToleranceRatio: 0.1
+  });
+  const lineComparison = evaluateLineComparison(approvedLines, scannedLines);
   const missingCriticalFields = [
     !review.scannedSnapshot.supplierName ? "supplier" : "",
     !review.scannedSnapshot.receiptNumber ? "receipt number" : "",
@@ -4689,12 +4754,30 @@ function evaluateRequisitionComparison(
       label: "Supplier",
       approved: approvedSupplier || "-",
       scanned: review.scannedSnapshot.supplierName || "-",
-      mismatch: supplierMismatch
+      mismatch: supplierComparison.level === "MISMATCH"
     },
     {
       label: "Receipt Number",
       approved: "-",
       scanned: review.scannedSnapshot.receiptNumber || "-",
+      mismatch: false
+    },
+    {
+      label: "Control / TRA #",
+      approved: "-",
+      scanned: review.traReceiptNumber || "-",
+      mismatch: false
+    },
+    {
+      label: "Verification Code",
+      approved: "-",
+      scanned: review.verificationCode || "-",
+      mismatch: false
+    },
+    {
+      label: "TIN",
+      approved: "-",
+      scanned: review.tin || "-",
       mismatch: false
     },
     {
@@ -4709,59 +4792,91 @@ function evaluateRequisitionComparison(
       scanned: review.scannedSnapshot.total
         ? formatCurrency(Number(review.scannedSnapshot.total || 0))
         : "-",
-      mismatch: totalMismatch
+      mismatch: totalComparison.level === "MISMATCH"
     }
   ];
 
+  const canInspectScannedDetails =
+    scanTrust.meaningfulData &&
+    (scannedLines.length > 0 ||
+      review.scannedSnapshot.receiptNumber.trim().length > 0 ||
+      review.traReceiptNumber.trim().length > 0 ||
+      review.verificationCode.trim().length > 0 ||
+      review.tin.trim().length > 0 ||
+      Number(review.scannedSnapshot.total || 0) > 0);
+
+  const baseResult = {
+    scanTrustLabel: scanTrust.label,
+    scanTrustMessage: scanTrust.message,
+    headerRows,
+    approvedLines,
+    scannedLines
+  };
+
   if (review.scanFallbackMode === "SCAN_FAILURE") {
     return {
-      status: "NEEDS_REVIEW",
-      label: "Needs review",
+      status: "SCAN_FAILED",
+      label: "Scan failed — manual input required",
       message: SCAN_FALLBACK_MESSAGE,
       canInspectScannedDetails: false,
-      headerRows,
-      approvedLines,
-      scannedLines
+      ...baseResult
     };
   }
 
   if (review.scanFallbackMode === "MANUAL_ENTRY") {
     return {
-      status: "NEEDS_REVIEW",
-      label: "Needs review",
+      status: "MANUAL_ENTRY",
+      label: "Manual entry",
       message: "Manual receipt entry selected. Complete receipt fields and review before posting.",
       canInspectScannedDetails: false,
-      headerRows,
-      approvedLines,
-      scannedLines
+      ...baseResult
     };
   }
 
-  if (supplierMismatch || totalMismatch || lineMismatch) {
+  if (!scanTrust.meaningfulData) {
+    return {
+      status: "SCAN_FAILED",
+      label: "Scan failed — manual input required",
+      message: SCAN_FALLBACK_MESSAGE,
+      canInspectScannedDetails: false,
+      ...baseResult
+    };
+  }
+
+  const hardMismatch =
+    supplierComparison.level === "MISMATCH" ||
+    totalComparison.level === "MISMATCH" ||
+    lineComparison.level === "MISMATCH";
+
+  if (hardMismatch) {
     return {
       status: "MISMATCH",
       label: "Does not match requisition",
       message:
         "Scanned receipt does not match the approved requisition. Review differences before posting.",
-      canInspectScannedDetails: true,
-      headerRows,
-      approvedLines,
-      scannedLines
+      canInspectScannedDetails,
+      ...baseResult
     };
   }
 
-  if (review.scanStatus !== "COMPLETE" || missingCriticalFields.length > 0) {
+  const closeMatchSignals =
+    supplierComparison.level === "CLOSE_MATCH" ||
+    totalComparison.level === "CLOSE_MATCH" ||
+    lineComparison.level === "CLOSE_MATCH" ||
+    review.scanStatus !== "COMPLETE" ||
+    missingCriticalFields.length > 0;
+
+  if (closeMatchSignals) {
+    const missingFieldsMessage =
+      missingCriticalFields.length > 0
+        ? `Some fields need manual review: ${missingCriticalFields.join(", ")}.`
+        : "Scanned details are close to the approved requisition. Quick review is recommended.";
     return {
-      status: "PARTIAL_MATCH",
-      label: "Partial match",
-      message:
-        missingCriticalFields.length > 0
-          ? `Some fields need manual review: ${missingCriticalFields.join(", ")}.`
-          : "Some scanned receipt details are incomplete. Review before posting.",
-      canInspectScannedDetails: false,
-      headerRows,
-      approvedLines,
-      scannedLines
+      status: "CLOSE_MATCH",
+      label: "Close match — review recommended",
+      message: missingFieldsMessage,
+      canInspectScannedDetails,
+      ...baseResult
     };
   }
 
@@ -4770,9 +4885,7 @@ function evaluateRequisitionComparison(
     label: "Matched",
     message: "Scanned receipt details align with the approved requisition.",
     canInspectScannedDetails: false,
-    headerRows,
-    approvedLines,
-    scannedLines
+    ...baseResult
   };
 }
 
@@ -4793,58 +4906,293 @@ function mapRequisitionSnapshotLines(
     .filter((line) => line.description.length > 0);
 }
 
-function evaluateLineMismatch(
+type ComparisonSignalLevel = "MATCHED" | "CLOSE_MATCH" | "MISMATCH" | "UNAVAILABLE";
+
+function evaluateLineComparison(
   approvedLines: ReceiptSnapshotLine[],
   scannedLines: ReceiptSnapshotLine[]
 ) {
   if (approvedLines.length === 0 || scannedLines.length === 0) {
-    return false;
+    return { level: "UNAVAILABLE" as ComparisonSignalLevel };
   }
-  if (approvedLines.length !== scannedLines.length) {
-    return true;
+
+  const usedScannedIndices = new Set<number>();
+  let strongMatches = 0;
+  let closeMatches = 0;
+  let weakMatches = 0;
+
+  for (const approved of approvedLines) {
+    let bestIndex = -1;
+    let bestScore = -1;
+
+    scannedLines.forEach((scanned, index) => {
+      if (usedScannedIndices.has(index)) {
+        return;
+      }
+      const score = evaluateLinePairScore(approved, scanned);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex < 0) {
+      weakMatches += 1;
+      continue;
+    }
+    usedScannedIndices.add(bestIndex);
+    if (bestScore >= 0.82) {
+      strongMatches += 1;
+    } else if (bestScore >= 0.62) {
+      closeMatches += 1;
+    } else {
+      weakMatches += 1;
+    }
   }
-  for (let index = 0; index < approvedLines.length; index += 1) {
-    const approved = approvedLines[index];
-    const scanned = scannedLines[index];
-    if (!lineDescriptionLooksComparable(approved.description, scanned.description)) {
-      return true;
-    }
-    const approvedQty = Number(approved.quantity || 0);
-    const scannedQty = Number(scanned.quantity || 0);
-    if (!numbersClose(approvedQty, scannedQty, 0.05)) {
-      return true;
-    }
-    const approvedTotal = Number(approved.lineTotal || 0);
-    const scannedTotal = Number(scanned.lineTotal || 0);
-    if (approvedTotal > 0 && scannedTotal > 0 && !numbersClose(approvedTotal, scannedTotal, Math.max(1, approvedTotal * 0.03))) {
-      return true;
-    }
+
+  const extraScannedLines = Math.max(0, scannedLines.length - usedScannedIndices.size);
+  if (extraScannedLines > 1) {
+    weakMatches += extraScannedLines;
+  } else if (extraScannedLines === 1) {
+    closeMatches += 1;
   }
-  return false;
+
+  if (weakMatches > 0) {
+    return { level: "MISMATCH" as ComparisonSignalLevel };
+  }
+  if (closeMatches > 0) {
+    return { level: "CLOSE_MATCH" as ComparisonSignalLevel };
+  }
+  if (strongMatches > 0) {
+    return { level: "MATCHED" as ComparisonSignalLevel };
+  }
+  return { level: "UNAVAILABLE" as ComparisonSignalLevel };
 }
 
-function lineDescriptionLooksComparable(approved: string, scanned: string) {
+function evaluateLinePairScore(approved: ReceiptSnapshotLine, scanned: ReceiptSnapshotLine) {
+  const descriptionScore = lineDescriptionSimilarity(approved.description, scanned.description);
+  const quantityScore = comparisonLevelWeight(
+    compareNumericSimilarity(Number(approved.quantity || 0), Number(scanned.quantity || 0), {
+      matchedToleranceRatio: 0.05,
+      closeToleranceRatio: 0.2
+    }).level
+  );
+  const unitPriceScore = comparisonLevelWeight(
+    compareNumericSimilarity(Number(approved.unitPrice || 0), Number(scanned.unitPrice || 0), {
+      matchedToleranceRatio: 0.05,
+      closeToleranceRatio: 0.2
+    }).level
+  );
+  const totalScore = comparisonLevelWeight(
+    compareNumericSimilarity(Number(approved.lineTotal || 0), Number(scanned.lineTotal || 0), {
+      matchedToleranceRatio: 0.03,
+      closeToleranceRatio: 0.12
+    }).level
+  );
+
+  return descriptionScore * 0.55 + quantityScore * 0.15 + unitPriceScore * 0.1 + totalScore * 0.2;
+}
+
+function compareTextSimilarity(
+  approvedValue: string,
+  scannedValue: string,
+  thresholds: {
+    matchedThreshold: number;
+    closeThreshold: number;
+  }
+) {
+  if (!approvedValue || !scannedValue) {
+    return {
+      level: "UNAVAILABLE" as ComparisonSignalLevel,
+      similarity: 0
+    };
+  }
+
+  const similarity = lineDescriptionSimilarity(approvedValue, scannedValue);
+  if (similarity >= thresholds.matchedThreshold) {
+    return { level: "MATCHED" as ComparisonSignalLevel, similarity };
+  }
+  if (similarity >= thresholds.closeThreshold) {
+    return { level: "CLOSE_MATCH" as ComparisonSignalLevel, similarity };
+  }
+  return { level: "MISMATCH" as ComparisonSignalLevel, similarity };
+}
+
+function compareNumericSimilarity(
+  approvedValue: number,
+  scannedValue: number,
+  thresholds: {
+    matchedToleranceRatio: number;
+    closeToleranceRatio: number;
+  }
+) {
+  if (
+    !Number.isFinite(approvedValue) ||
+    !Number.isFinite(scannedValue) ||
+    approvedValue <= 0 ||
+    scannedValue <= 0
+  ) {
+    return {
+      level: "UNAVAILABLE" as ComparisonSignalLevel,
+      differenceRatio: 0
+    };
+  }
+
+  const differenceRatio = Math.abs(approvedValue - scannedValue) / Math.max(Math.abs(approvedValue), Math.abs(scannedValue), 1);
+  if (differenceRatio <= thresholds.matchedToleranceRatio) {
+    return { level: "MATCHED" as ComparisonSignalLevel, differenceRatio };
+  }
+  if (differenceRatio <= thresholds.closeToleranceRatio) {
+    return { level: "CLOSE_MATCH" as ComparisonSignalLevel, differenceRatio };
+  }
+  return { level: "MISMATCH" as ComparisonSignalLevel, differenceRatio };
+}
+
+function comparisonLevelWeight(level: ComparisonSignalLevel) {
+  if (level === "MATCHED") {
+    return 1;
+  }
+  if (level === "CLOSE_MATCH") {
+    return 0.72;
+  }
+  if (level === "UNAVAILABLE") {
+    return 0.55;
+  }
+  return 0;
+}
+
+function resolveScanTrustState(review: ReviewState, scannedLines: ReceiptSnapshotLine[]) {
+  if (review.scanFallbackMode === "SCAN_FAILURE") {
+    return {
+      meaningfulData: false,
+      label: "Scan failed",
+      message: "We could not read meaningful receipt or QR details from this file."
+    };
+  }
+  if (review.scanFallbackMode === "MANUAL_ENTRY") {
+    return {
+      meaningfulData: false,
+      label: "Manual entry",
+      message: "Manual receipt entry was selected, so there is no scan payload to compare."
+    };
+  }
+
+  const hasKeyFields =
+    review.scannedSnapshot.receiptNumber.trim().length > 0 ||
+    review.scannedSnapshot.supplierName.trim().length > 0 ||
+    review.scannedSnapshot.receiptDate.trim().length > 0 ||
+    Number(review.scannedSnapshot.total || 0) > 0;
+  const hasQrMetadata =
+    review.verificationCode.trim().length > 0 ||
+    review.traReceiptNumber.trim().length > 0 ||
+    review.tin.trim().length > 0 ||
+    review.vrn.trim().length > 0;
+  const qrDecodeSucceeded =
+    review.qrDecodeStatus === "DECODED" ||
+    review.qrParseStatus === "PARSED" ||
+    review.qrFieldsParseStatus === "SUCCESS" ||
+    review.qrLineItemsParseStatus === "SUCCESS";
+  const hasMeaningfulData = hasKeyFields || scannedLines.length > 0 || (qrDecodeSucceeded && hasQrMetadata);
+
+  if (!hasMeaningfulData) {
+    return {
+      meaningfulData: false,
+      label: "Scan failed",
+      message: "We could not read meaningful receipt or QR details from this file."
+    };
+  }
+
+  if (qrDecodeSucceeded) {
+    return {
+      meaningfulData: true,
+      label: "QR scanned",
+      message: "QR/receipt data was detected and mapped. Review highlighted differences before posting."
+    };
+  }
+
+  return {
+    meaningfulData: true,
+    label: "Scan captured",
+    message: "Receipt data was captured, but some details may still need review."
+  };
+}
+
+function lineDescriptionSimilarity(approved: string, scanned: string) {
   const approvedNormalized = normalizeLineDescription(approved);
   const scannedNormalized = normalizeLineDescription(scanned);
   if (!approvedNormalized || !scannedNormalized) {
-    return true;
+    return 0.5;
   }
-  return (
-    approvedNormalized === scannedNormalized ||
-    approvedNormalized.includes(scannedNormalized) ||
-    scannedNormalized.includes(approvedNormalized)
+  if (approvedNormalized === scannedNormalized) {
+    return 1;
+  }
+  if (approvedNormalized.includes(scannedNormalized) || scannedNormalized.includes(approvedNormalized)) {
+    return 0.92;
+  }
+
+  const approvedTokens = tokenizeNormalized(approvedNormalized);
+  const scannedTokens = tokenizeNormalized(scannedNormalized);
+  const tokenSimilarity = jaccardSimilarity(approvedTokens, scannedTokens);
+  const editSimilarity = levenshteinSimilarity(approvedNormalized, scannedNormalized);
+  return Math.max(tokenSimilarity, editSimilarity);
+}
+
+function tokenizeNormalized(value: string) {
+  return value
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1);
+}
+
+function jaccardSimilarity(leftTokens: string[], rightTokens: string[]) {
+  if (leftTokens.length === 0 || rightTokens.length === 0) {
+    return 0;
+  }
+  const left = new Set(leftTokens);
+  const right = new Set(rightTokens);
+  let overlap = 0;
+  left.forEach((token) => {
+    if (right.has(token)) {
+      overlap += 1;
+    }
+  });
+  return overlap / Math.max(left.size + right.size - overlap, 1);
+}
+
+function levenshteinSimilarity(left: string, right: string) {
+  if (!left || !right) {
+    return 0;
+  }
+  const distance = levenshteinDistance(left, right);
+  const maxLength = Math.max(left.length, right.length, 1);
+  return Math.max(0, 1 - distance / maxLength);
+}
+
+function levenshteinDistance(left: string, right: string) {
+  const matrix: number[][] = Array.from({ length: left.length + 1 }, () =>
+    Array.from({ length: right.length + 1 }, () => 0)
   );
+  for (let row = 0; row <= left.length; row += 1) {
+    matrix[row][0] = row;
+  }
+  for (let col = 0; col <= right.length; col += 1) {
+    matrix[0][col] = col;
+  }
+  for (let row = 1; row <= left.length; row += 1) {
+    for (let col = 1; col <= right.length; col += 1) {
+      const cost = left[row - 1] === right[col - 1] ? 0 : 1;
+      matrix[row][col] = Math.min(
+        matrix[row - 1][col] + 1,
+        matrix[row][col - 1] + 1,
+        matrix[row - 1][col - 1] + cost
+      );
+    }
+  }
+  return matrix[left.length][right.length];
 }
 
 function normalizeLineDescription(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function numbersClose(left: number, right: number, tolerance: number) {
-  if (!Number.isFinite(left) || !Number.isFinite(right)) {
-    return false;
-  }
-  return Math.abs(left - right) <= tolerance;
 }
 
 async function readJsonPayload(response: Response): Promise<unknown | null> {
