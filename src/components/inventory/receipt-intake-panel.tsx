@@ -247,6 +247,7 @@ type ReceiptWorkflowChoice =
   | "STOCK_PURCHASE"
   | "INTERNAL_TRANSFER";
 type ReceiptInputMethod = "SCAN" | "MANUAL";
+type ReceiptFollowUpStage = "SCAN" | "REVIEW" | "FINALIZE";
 
 interface QrCropSelection {
   x: number;
@@ -366,6 +367,7 @@ export function ReceiptIntakePanel({
   const [manualQrAssistEnabled, setManualQrAssistEnabled] = useState(false);
   const [qrAssistSelection, setQrAssistSelection] = useState<QrCropSelection | null>(null);
   const [drawingQrSelection, setDrawingQrSelection] = useState(false);
+  const [followUpStage, setFollowUpStage] = useState<ReceiptFollowUpStage>("SCAN");
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
   const extracting = extractState === "UPLOADING" || extractState === "PROCESSING";
@@ -459,6 +461,7 @@ export function ReceiptIntakePanel({
     setNoticeTone("WARNING");
     setNotice("Manual receipt mode started. Fill details directly, then finalize posting.");
     setError(null);
+    setFollowUpStage("REVIEW");
   }, [
     activeSubmission,
     defaultClientId,
@@ -498,6 +501,7 @@ export function ReceiptIntakePanel({
     setError(null);
     setDuplicatePrompt(null);
     setShowDuplicateReview(false);
+    setFollowUpStage("REVIEW");
   }, [activeSubmission, defaultClientId, defaultRigId]);
 
   useEffect(() => {
@@ -580,6 +584,22 @@ export function ReceiptIntakePanel({
     }
     return deriveManualFieldHints(review);
   }, [review]);
+  const criticalManualFieldHints = useMemo(() => {
+    if (!review) {
+      return [];
+    }
+    return deriveCriticalManualFieldHints(review);
+  }, [review]);
+  const needsManualReview = useMemo(() => {
+    if (!review) {
+      return false;
+    }
+    return (
+      review.scanStatus !== "COMPLETE" ||
+      manualFieldHints.length > 0 ||
+      criticalManualFieldHints.length > 0
+    );
+  }, [criticalManualFieldHints.length, manualFieldHints.length, review]);
 
   const workflowStage = resolveWorkflowStage({
     extractState,
@@ -599,6 +619,14 @@ export function ReceiptIntakePanel({
   const requiresAllocation = useMemo(() => {
     return activeWorkflowChoice === "PROJECT_PURCHASE" || activeWorkflowChoice === "MAINTENANCE_PURCHASE";
   }, [activeWorkflowChoice]);
+
+  useEffect(() => {
+    if (!review) {
+      setFollowUpStage("SCAN");
+      return;
+    }
+    setFollowUpStage((current) => (current === "FINALIZE" ? "FINALIZE" : "REVIEW"));
+  }, [manualInputSelected, review]);
 
   function applyWorkflowChoice(choice: ReceiptWorkflowChoice) {
     const workflowConfig = resolveWorkflowSelectionConfig(choice);
@@ -634,6 +662,9 @@ export function ReceiptIntakePanel({
     setQrAssistSelection(null);
     setDrawingQrSelection(false);
     qrSelectionStartRef.current = null;
+    if (!review) {
+      setFollowUpStage("SCAN");
+    }
   }
 
   function updateQrSelectionFromPoints(start: { x: number; y: number }, end: { x: number; y: number }) {
@@ -785,6 +816,7 @@ export function ReceiptIntakePanel({
           setNotice(intakeMessage);
         }
         setExtractState("SUCCESS");
+        setFollowUpStage("REVIEW");
         if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
           await commitReview(nextReview, { auto: true });
         }
@@ -809,6 +841,7 @@ export function ReceiptIntakePanel({
       setNotice("Review recommended. You can continue manually with the captured receipt.");
       setError(null);
       setExtractState("FAILED");
+      setFollowUpStage("REVIEW");
     } catch (scanError) {
       const timeoutMessage =
         scanError instanceof DOMException && scanError.name === "AbortError"
@@ -833,6 +866,7 @@ export function ReceiptIntakePanel({
       setNotice("Review recommended. You can continue manually with the captured receipt.");
       setError(null);
       setExtractState("FAILED");
+      setFollowUpStage("REVIEW");
     } finally {
       clearTimeout(timeoutId);
       setExtractState((current) =>
@@ -1012,6 +1046,7 @@ export function ReceiptIntakePanel({
         setQrAssistSelection(null);
         setDrawingQrSelection(false);
         qrSelectionStartRef.current = null;
+        setFollowUpStage("SCAN");
         await onCompleted();
         return;
       }
@@ -1073,6 +1108,7 @@ export function ReceiptIntakePanel({
       setQrAssistSelection(null);
       setDrawingQrSelection(false);
       qrSelectionStartRef.current = null;
+      setFollowUpStage("SCAN");
       await onCompleted();
     } catch (commitError) {
       setError(commitError instanceof Error ? commitError.message : "Could not finalize intake. Please review and try again.");
@@ -1386,201 +1422,133 @@ export function ReceiptIntakePanel({
           </div>
         )}
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Receipt Intake Status</p>
-            <span className={workflowBadgeClass(workflowStage)}>
-              {formatWorkflowStage(workflowStage)}
-            </span>
-          </div>
-          <p className="mt-1 text-xs text-slate-600">
-            {workflowHelpText(workflowStage)}
-          </p>
-          {lastSavedAllocationStatus && lastSavedAllocationStatus !== "ALLOCATED" && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-900">
-              <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold">
-                Needs allocation
-              </span>
-              <span>
-                Saved as {formatAllocationStatusLabel(lastSavedAllocationStatus)}. Project/client can be assigned later.
-              </span>
-              <Link href="/inventory" className="rounded border border-amber-400 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
-                Open inventory
-              </Link>
+        {followUpStage === "SCAN" && (
+          <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Scan receipt</p>
+              <span className={workflowBadgeClass(workflowStage)}>{formatWorkflowStage(workflowStage)}</span>
             </div>
-          )}
-        </div>
-
-        <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs sm:grid-cols-5">
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-            <p className="font-semibold text-slate-800">Step 1</p>
-            <p className="text-slate-600">
-              {requisitionContextLocked ? "Prefilled from requisition" : "Select workflow type"}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-            <p className="font-semibold text-slate-800">Step 2</p>
-            <p className="text-slate-600">
-              {manualInputSelected ? "Manual receipt entry" : "Upload and scan receipt"}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-            <p className="font-semibold text-slate-800">Step 3</p>
-            <p className="text-slate-600">Review extracted data</p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-            <p className="font-semibold text-slate-800">Step 4</p>
-            <p className="text-slate-600">
-              {requisitionContextLocked ? "Context locked from requisition" : "Link context (required)"}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-            <p className="font-semibold text-slate-800">Step 5</p>
-            <p className="text-slate-600">Submit / finalize</p>
-          </div>
-        </div>
-
-        {requisitionContextLocked ? (
-          <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">
-              Step 1 — Skipped (prefilled from approved requisition)
-            </p>
-            <p className="mt-1 text-xs text-indigo-900">
-              Workflow type is locked from requisition{" "}
-              <span className="font-semibold">
-                {initialRequisition?.requisitionCode || initialRequisition?.id.slice(-8)}
-              </span>{" "}
-              to keep purchase posting aligned.
-            </p>
-          </div>
-        ) : (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 1 — What type of receipt is this?</p>
-            <p className="mt-1 text-xs text-slate-600">
-              Select the business flow before scanning so posting and review rules apply correctly.
-            </p>
-            <div className="mt-2 grid gap-2 md:grid-cols-2">
+            <p className="text-xs text-slate-600">{workflowHelpText(workflowStage)}</p>
+            {lastSavedAllocationStatus && lastSavedAllocationStatus !== "ALLOCATED" && (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
+                <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold">
+                  Needs allocation
+                </span>
+                <span>
+                  Saved as {formatAllocationStatusLabel(lastSavedAllocationStatus)}. Project/client can be assigned later.
+                </span>
+                <Link href="/inventory" className="rounded border border-amber-400 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
+                  Open inventory
+                </Link>
+              </div>
+            )}
+            {requisitionContextLocked ? (
+              <p className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
+                Approved requisition{" "}
+                <span className="font-semibold">
+                  {initialRequisition?.requisitionCode || initialRequisition?.id.slice(-8)}
+                </span>{" "}
+                is already linked.
+              </p>
+            ) : (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Receipt workflow type</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      activeWorkflowChoice === "PROJECT_PURCHASE"
+                        ? "border-brand-300 bg-brand-50 text-brand-800"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    Project Purchase (Live Work)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      activeWorkflowChoice === "MAINTENANCE_PURCHASE"
+                        ? "border-brand-300 bg-brand-50 text-brand-800"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    Maintenance Purchase (Rig Repair)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      activeWorkflowChoice === "STOCK_PURCHASE"
+                        ? "border-brand-300 bg-brand-50 text-brand-800"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    Stock Purchase (Inventory)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
+                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                      activeWorkflowChoice === "INTERNAL_TRANSFER"
+                        ? "border-brand-300 bg-brand-50 text-brand-800"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    Internal Transfer
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+              <label className="text-xs text-ink-700">
+                <span className="mb-1 block uppercase tracking-wide text-slate-500">Receipt File (Image or PDF)</span>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  capture="environment"
+                  onChange={(event) =>
+                    handleReceiptFileChange(
+                      event.target.files && event.target.files.length > 0 ? event.target.files[0] : null
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                />
+              </label>
               <button
                 type="button"
-                onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
-                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                  activeWorkflowChoice === "PROJECT_PURCHASE"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
+                onClick={() => void handleExtract()}
+                disabled={!receiptFile || extracting || !receiptWorkflowChoice}
+                className="gf-btn-primary"
               >
-                Project Purchase (Live Work)
-              </button>
-              <button
-                type="button"
-                onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
-                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                  activeWorkflowChoice === "MAINTENANCE_PURCHASE"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                Maintenance Purchase (Rig Repair)
-              </button>
-              <button
-                type="button"
-                onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
-                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                  activeWorkflowChoice === "STOCK_PURCHASE"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                Stock Purchase (Inventory)
-              </button>
-              <button
-                type="button"
-                onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
-                className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                  activeWorkflowChoice === "INTERNAL_TRANSFER"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                Internal Transfer
+                {extractState === "UPLOADING"
+                  ? "Capturing..."
+                  : extractState === "PROCESSING"
+                    ? "Reading..."
+                    : manualInputSelected
+                      ? "Use File Assist"
+                      : "Scan Receipt"}
               </button>
             </div>
-          </div>
-        )}
-
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-            {manualInputSelected
-              ? "Step 2 — Manual receipt entry (file optional)"
-              : "Step 2 — Upload / scan receipt"}
-          </p>
-          <p className="mt-1 text-xs text-slate-600">
-            {manualInputSelected
-              ? "Manual mode lets you enter receipt details directly. Uploading a file is optional if you still want scan assistance."
-              : "Capture receipt data first, then we will guide context linking before posting."}
-          </p>
-        </div>
-
-        {manualInputSelected && (
-          <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-            Manual mode is active. Enter receipt details directly in the review section below, then finalize.
-          </p>
-        )}
-
-        <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-          <label className="text-xs text-ink-700">
-            <span className="mb-1 block uppercase tracking-wide text-slate-500">Receipt File (Image or PDF)</span>
-            <input
-              type="file"
-              accept="image/*,.pdf"
-              capture="environment"
-              onChange={(event) =>
-                handleReceiptFileChange(
-                  event.target.files && event.target.files.length > 0 ? event.target.files[0] : null
-                )
-              }
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => void handleExtract()}
-            disabled={!receiptFile || extracting || !receiptWorkflowChoice}
-            className="gf-btn-primary"
-          >
-            {extractState === "UPLOADING"
-              ? "Capturing..."
-              : extractState === "PROCESSING"
-                ? "Reading..."
-                : manualInputSelected
-                  ? "Use File Assist"
-                  : "Scan Receipt"}
-          </button>
-        </div>
-
-        {canManage ? (
-          <>
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
-              <input
-                type="checkbox"
-                checked={autoSaveEnabled}
-                onChange={(event) => setAutoSaveEnabled(event.target.checked)}
-              />
-              Auto Save when confidence is high
-            </label>
-            <p className="text-xs text-slate-600">
-              Scan works in assist mode: we prefill captured fields, keep review available, and only auto-finalize when confidence thresholds are met.
-            </p>
-          </>
-        ) : (
-          <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-            Your role can scan and submit receipts. Submissions are saved as pending review and are not posted to stock/accounting until approved by manager/admin.
-          </p>
-        )}
-        <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">
-            Optional scan helpers (QR assist + debug)
-          </summary>
+            {canManage ? (
+              <label className="inline-flex items-center gap-2 text-xs text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={autoSaveEnabled}
+                  onChange={(event) => setAutoSaveEnabled(event.target.checked)}
+                />
+                Auto-save when confidence is high
+              </label>
+            ) : (
+              <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                Your submission stays pending review until manager/admin finalizes posting.
+              </p>
+            )}
+            <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">
+                Advanced scan tools
+              </summary>
           <div className="mt-2 space-y-2">
             <label className="inline-flex items-center gap-2 text-xs text-slate-700">
               <input
@@ -1677,10 +1645,9 @@ export function ReceiptIntakePanel({
               </label>
             )}
           </div>
-        </details>
-        <p className="text-xs text-slate-600">
-          QR is checked first for official receipt metadata. OCR is used only for missing fields and line items.
-        </p>
+            </details>
+          </div>
+        )}
 
         {!review ? null : (
           <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
@@ -1690,11 +1657,22 @@ export function ReceiptIntakePanel({
               </div>
             )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 3 — Review extracted receipt data</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                {followUpStage === "REVIEW" ? "Step 3 — Review receipt data" : "Step 4 — Finalize posting"}
+              </p>
               <p className="mt-1 text-xs text-slate-600">
-                We prefill what was captured. Confirm values, then complete any business-context fields that cannot be inferred from the receipt image.
+                {followUpStage === "REVIEW"
+                  ? "Check captured values, then continue to posting."
+                  : "Confirm business context and finish posting."}
               </p>
             </div>
+            {needsManualReview && (
+              <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Some fields need manual review.
+                {criticalManualFieldHints.length > 0 ? ` ${criticalManualFieldHints.join(", ")}.` : ""}
+                {manualFieldHints.length > 0 ? ` ${manualFieldHints.join(", ")}.` : ""}
+              </p>
+            )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-800">Receipt Review</p>
@@ -1737,23 +1715,8 @@ export function ReceiptIntakePanel({
               </div>
               <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <p>
-                  <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, totals, and verification fields when confidence is sufficient.
+                  <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, and totals.
                 </p>
-                <p className="mt-1">
-                  <span className="font-semibold">Usually manual:</span>{" "}
-                  {activeWorkflowChoice === "PROJECT_PURCHASE"
-                    ? "project linkage, optional rig context, and allocation details."
-                    : activeWorkflowChoice === "MAINTENANCE_PURCHASE"
-                      ? "rig linkage, optional maintenance request, and allocation details."
-                      : activeWorkflowChoice === "STOCK_PURCHASE"
-                        ? "stock location and inventory line matching."
-                        : "from/to locations and inventory line matching."}
-                </p>
-                {manualFieldHints.length > 0 && (
-                  <p className="mt-1 text-amber-900">
-                    <span className="font-semibold">Still needed:</span> {manualFieldHints.join(", ")}.
-                  </p>
-                )}
               </div>
               {review.receiptUrl && (
                 <a
@@ -1767,7 +1730,8 @@ export function ReceiptIntakePanel({
               )}
             </div>
 
-            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+            {followUpStage === "REVIEW" && (
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-ink-900">Line Items</p>
                 <button
@@ -1953,27 +1917,56 @@ export function ReceiptIntakePanel({
                   </div>
                 ))
               )}
-            </div>
+              </div>
+            )}
 
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {requisitionContextLocked ? "Step 4 — Context linked from requisition" : "Step 4 — Link context (required)"}
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                {requisitionContextLocked
-                  ? "Context is prefilled from the approved requisition and locked to prevent posting mismatches."
-                  : "Link this receipt to the right project, rig, or inventory context before posting."}
-              </p>
-              {review.requisitionId && (
-                <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
-                  Linked requisition:{" "}
-                  <span className="font-semibold">
-                    {review.requisitionCode || review.requisitionId.slice(-8)}
-                  </span>
-                  . This purchase will post back to the requisition workflow when saved.
+            {followUpStage === "FINALIZE" && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {requisitionContextLocked ? "Step 4 — Context linked from requisition" : "Step 4 — Link context (required)"}
                 </p>
-              )}
-            </div>
+                <p className="mt-1 text-xs text-slate-600">
+                  {requisitionContextLocked
+                    ? "Context is prefilled from the approved requisition and locked to prevent posting mismatches."
+                    : "Link this receipt to the right project, rig, or inventory context before posting."}
+                </p>
+                {review.requisitionId && (
+                  <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
+                    Linked requisition:{" "}
+                    <span className="font-semibold">
+                      {review.requisitionCode || review.requisitionId.slice(-8)}
+                    </span>
+                    . This purchase will post back to the requisition workflow when saved.
+                  </p>
+                )}
+              </div>
+            )}
+            {followUpStage === "REVIEW" && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setFollowUpStage("FINALIZE")}
+                  className="gf-btn-primary"
+                >
+                  Continue to finalize
+                </button>
+                {!manualInputSelected && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReview(null);
+                      setFollowUpStage("SCAN");
+                    }}
+                    className="gf-btn-secondary"
+                  >
+                    Rescan receipt
+                  </button>
+                )}
+              </div>
+            )}
+
+            {followUpStage === "FINALIZE" && (
+              <>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-sm font-semibold text-slate-800">Context Linking</p>
               <p className="mt-1 text-xs text-slate-600">
@@ -2226,7 +2219,7 @@ export function ReceiptIntakePanel({
                 onClick={() => setShowTechnicalDetails((current) => !current)}
                 className="flex w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-wide text-slate-600"
               >
-                <span>{showTechnicalDetails ? "Hide QR & technical details" : "Show QR & technical details"}</span>
+                  <span>{showTechnicalDetails ? "Hide debug details" : "Show debug details"}</span>
                 <span>{showTechnicalDetails ? "▾" : "▸"}</span>
               </button>
               {showTechnicalDetails && (
@@ -2372,6 +2365,13 @@ export function ReceiptIntakePanel({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                onClick={() => setFollowUpStage("REVIEW")}
+                className="gf-btn-secondary"
+              >
+                Back to review
+              </button>
+              <button
+                type="button"
                 onClick={() => void handleCommit()}
                 disabled={saving}
                 className="gf-btn-primary w-full px-6 py-3 text-base sm:w-auto"
@@ -2392,6 +2392,8 @@ export function ReceiptIntakePanel({
                 Cancel Review
               </button>
             </div>
+              </>
+            )}
           </div>
         )}
         {focusedOverlayMounted && (
@@ -2986,6 +2988,62 @@ function asRecord(value: unknown) {
   return value as Record<string, unknown>;
 }
 
+function readStringFieldValue({
+  header,
+  qrParsedFields,
+  keys,
+  fallback = ""
+}: {
+  header: Record<string, unknown> | null | undefined;
+  qrParsedFields: Record<string, unknown> | null | undefined;
+  keys: string[];
+  fallback?: string;
+}) {
+  for (const source of [header, qrParsedFields]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+      }
+    }
+  }
+  return fallback;
+}
+
+function readNumericFieldValue({
+  header,
+  qrParsedFields,
+  keys,
+  fallback = 0
+}: {
+  header: Record<string, unknown> | null | undefined;
+  qrParsedFields: Record<string, unknown> | null | undefined;
+  keys: string[];
+  fallback?: number;
+}) {
+  for (const source of [header, qrParsedFields]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of keys) {
+      const raw = source[key];
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        return String(raw);
+      }
+      if (typeof raw === "string" && raw.trim().length > 0) {
+        const normalized = Number(raw.replace(/,/g, ""));
+        if (Number.isFinite(normalized)) {
+          return String(normalized);
+        }
+      }
+    }
+  }
+  return String(fallback);
+}
+
 function toNumericString(value: unknown) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? String(parsed) : "0";
@@ -3380,11 +3438,31 @@ function buildReviewStateFromPayload({
     receiptFileName: payload.receipt?.fileName || receiptFileName,
     supplierId: asString(supplierSuggestion.supplierId),
     supplierName: resolvedSupplierName,
-    tin: asString(extractedHeader?.tin),
-    vrn: asString(extractedHeader?.vrn),
-    serialNumber: asString(extractedHeader?.serialNumber),
-    receiptNumber: asString(extractedHeader?.receiptNumber),
-    verificationCode: asString(extractedHeader?.verificationCode),
+    tin: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["tin"]
+    }),
+    vrn: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["vrn", "vatNo"]
+    }),
+    serialNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["serialNumber", "serialNo", "serial"]
+    }),
+    receiptNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["receiptNumber", "receiptNo", "receipt"]
+    }),
+    verificationCode: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["verificationCode", "verifyCode", "code"]
+    }),
     verificationUrl: asString(qr?.verificationUrl),
     rawQrValue: asString(qr?.rawValue),
     qrContentType: normalizeQrContentType(qr?.contentType),
@@ -3398,16 +3476,58 @@ function buildReviewStateFromPayload({
     qrLookupReason: asString(qrLookup?.reason),
     qrFieldsParseStatus: normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus),
     qrLineItemsParseStatus: normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus),
-    receiptDate: asString(extractedHeader?.receiptDate) || new Date().toISOString().slice(0, 10),
-    receiptTime: asString(extractedHeader?.receiptTime),
-    traReceiptNumber: asString(extractedHeader?.traReceiptNumber),
-    invoiceReference: asString(extractedHeader?.invoiceReference),
-    paymentMethod: asString(extractedHeader?.paymentMethod),
-    taxOffice: asString(extractedHeader?.taxOffice),
-    currency: asString(extractedHeader?.currency) || "TZS",
-    subtotal: toNumericString(extractedHeader?.subtotal),
-    tax: toNumericString(extractedHeader?.tax),
-    total: toNumericString(extractedHeader?.total),
+    receiptDate:
+      readStringFieldValue({
+        header: extractedHeader,
+        qrParsedFields,
+        keys: ["receiptDate", "date"]
+      }) || new Date().toISOString().slice(0, 10),
+    receiptTime: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["receiptTime", "time"]
+    }),
+    traReceiptNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["traReceiptNumber", "zNo", "znumber", "zno"]
+    }),
+    invoiceReference: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["invoiceReference", "invoiceNo", "invoiceNumber", "invoice"]
+    }),
+    paymentMethod: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["paymentMethod", "payment"]
+    }),
+    taxOffice: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["taxOffice", "office"]
+    }),
+    currency:
+      readStringFieldValue({
+        header: extractedHeader,
+        qrParsedFields,
+        keys: ["currency"]
+      }) || "TZS",
+    subtotal: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["subtotal", "subTotal", "amountBeforeTax"]
+    }),
+    tax: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["tax", "vat"]
+    }),
+    total: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["total", "amount", "grossTotal"]
+    }),
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
@@ -3544,11 +3664,31 @@ function buildManualAssistReview({
     receiptFileName: asString(receipt?.fileName) || receiptFileName,
     supplierId: asString(supplierSuggestion?.supplierId),
     supplierName: resolvedSupplierName,
-    tin: asString(extractedHeader?.tin),
-    vrn: asString(extractedHeader?.vrn),
-    serialNumber: asString(extractedHeader?.serialNumber),
-    receiptNumber: asString(extractedHeader?.receiptNumber),
-    verificationCode: asString(extractedHeader?.verificationCode),
+    tin: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["tin"]
+    }),
+    vrn: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["vrn", "vatNo"]
+    }),
+    serialNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["serialNumber", "serialNo", "serial"]
+    }),
+    receiptNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["receiptNumber", "receiptNo", "receipt"]
+    }),
+    verificationCode: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["verificationCode", "verifyCode", "code"]
+    }),
     verificationUrl: asString(qr?.verificationUrl),
     rawQrValue: asString(qr?.rawValue),
     qrContentType: normalizeQrContentType(qr?.contentType),
@@ -3562,16 +3702,58 @@ function buildManualAssistReview({
     qrLookupReason: asString(qrLookup?.reason),
     qrFieldsParseStatus: normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus),
     qrLineItemsParseStatus: normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus),
-    receiptDate: asString(extractedHeader?.receiptDate) || new Date().toISOString().slice(0, 10),
-    receiptTime: asString(extractedHeader?.receiptTime),
-    traReceiptNumber: asString(extractedHeader?.traReceiptNumber),
-    invoiceReference: asString(extractedHeader?.invoiceReference),
-    paymentMethod: asString(extractedHeader?.paymentMethod),
-    taxOffice: asString(extractedHeader?.taxOffice),
-    currency: asString(extractedHeader?.currency) || "TZS",
-    subtotal: toNumericString(extractedHeader?.subtotal),
-    tax: toNumericString(extractedHeader?.tax),
-    total: toNumericString(extractedHeader?.total),
+    receiptDate:
+      readStringFieldValue({
+        header: extractedHeader,
+        qrParsedFields,
+        keys: ["receiptDate", "date"]
+      }) || new Date().toISOString().slice(0, 10),
+    receiptTime: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["receiptTime", "time"]
+    }),
+    traReceiptNumber: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["traReceiptNumber", "zNo", "znumber", "zno"]
+    }),
+    invoiceReference: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["invoiceReference", "invoiceNo", "invoiceNumber", "invoice"]
+    }),
+    paymentMethod: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["paymentMethod", "payment"]
+    }),
+    taxOffice: readStringFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["taxOffice", "office"]
+    }),
+    currency:
+      readStringFieldValue({
+        header: extractedHeader,
+        qrParsedFields,
+        keys: ["currency"]
+      }) || "TZS",
+    subtotal: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["subtotal", "subTotal", "amountBeforeTax"]
+    }),
+    tax: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["tax", "vat"]
+    }),
+    total: readNumericFieldValue({
+      header: extractedHeader,
+      qrParsedFields,
+      keys: ["total", "amount", "grossTotal"]
+    }),
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
@@ -4235,6 +4417,23 @@ function deriveManualFieldHints(review: ReviewState) {
     }
   } else if (!review.locationToId) {
     hints.push("Select stock location");
+  }
+  return hints;
+}
+
+function deriveCriticalManualFieldHints(review: ReviewState) {
+  const hints: string[] = [];
+  if (!review.supplierName.trim() && !review.supplierId.trim()) {
+    hints.push("Supplier");
+  }
+  if (!review.receiptNumber.trim()) {
+    hints.push("Receipt number");
+  }
+  if (Number(review.total || 0) <= 0) {
+    hints.push("Total amount");
+  }
+  if (!review.receiptDate.trim()) {
+    hints.push("Receipt date");
   }
   return hints;
 }

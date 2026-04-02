@@ -406,17 +406,20 @@ export function RequisitionWorkflowCard({
     () =>
       rows.map((row) => {
         const receiptUrl = buildReceiptIntakeHref(row);
+        const summary = buildRequisitionRowSummary({
+          row,
+          projects,
+          rigs
+        });
         return [
           row.requisitionCode,
-          formatRequisitionType(row.type),
           <StatusChip key={`${row.id}-status`} status={row.status} />,
-          row.context.projectId ? lookupProjectName(projects, row.context.projectId) : "-",
-          row.context.rigId ? lookupRigName(rigs, row.context.rigId) : "-",
-          row.lineItems.length,
+          <div key={`${row.id}-summary`} className="space-y-0.5 text-xs">
+            <p className="font-semibold text-slate-800">{summary.primary}</p>
+            <p className="text-slate-600">{summary.context}</p>
+            <p className="text-slate-600">{summary.items}</p>
+          </div>,
           formatCurrency(row.totals.estimatedTotalCost),
-          row.status === "PURCHASE_COMPLETED"
-            ? formatCurrency(row.totals.actualPostedCost)
-            : "-",
           formatIsoDate(row.submittedAt),
           <div key={`${row.id}-actions`} className="flex max-w-[320px] flex-wrap gap-2">
             {row.status === "APPROVED" && (
@@ -1010,13 +1013,9 @@ export function RequisitionWorkflowCard({
             <DataTable
               columns={[
                 "Requisition",
-                "Type",
                 "Status",
-                "Project",
-                "Rig",
-                "Lines",
+                "Summary",
                 "Estimated",
-                "Posted",
                 "Submitted",
                 "Actions"
               ]}
@@ -1083,6 +1082,35 @@ function TextInput({
       />
     </label>
   );
+}
+
+function buildRequisitionRowSummary({
+  row,
+  projects,
+  rigs
+}: {
+  row: RequisitionRow;
+  projects: Array<{ id: string; name: string }>;
+  rigs: Array<{ id: string; name: string }>;
+}) {
+  const typeLabel = formatRequisitionType(row.type);
+  const pathLabel =
+    row.type === "LIVE_PROJECT_PURCHASE" ? formatLiveProjectSpendType(row.liveProjectSpendType) : "";
+  const projectName = row.context.projectId ? lookupProjectName(projects, row.context.projectId) : "";
+  const rigName = row.context.rigId ? lookupRigName(rigs, row.context.rigId) : "";
+  const firstLine = row.lineItems[0]?.description?.trim() || "";
+  const extraLines = Math.max(0, row.lineItems.length - 1);
+
+  return {
+    primary: pathLabel && pathLabel !== "-" ? `${typeLabel} • ${pathLabel}` : typeLabel,
+    context:
+      [projectName ? `Project: ${projectName}` : "", rigName ? `Rig: ${rigName}` : ""]
+        .filter(Boolean)
+        .join(" • ") || "No linked project/rig context",
+    items: firstLine
+      ? `${firstLine}${extraLines > 0 ? ` +${extraLines} more item${extraLines > 1 ? "s" : ""}` : ""}`
+      : `${row.category}${row.subcategory ? ` / ${row.subcategory}` : ""}`
+  };
 }
 
 function formatRequisitionType(type: RequisitionType | "") {
