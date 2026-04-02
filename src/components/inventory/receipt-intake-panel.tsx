@@ -161,6 +161,14 @@ interface ReviewLineState {
   newItemMinimumStockLevel: string;
 }
 
+interface ReceiptSnapshotLine {
+  id: string;
+  description: string;
+  quantity: string;
+  unitPrice: string;
+  lineTotal: string;
+}
+
 interface ReviewState {
   requisitionId: string;
   requisitionCode: string;
@@ -232,11 +240,20 @@ interface ReviewState {
     score: number;
     textLength: number;
   }>;
+  scannedSnapshot: {
+    supplierName: string;
+    receiptNumber: string;
+    receiptDate: string;
+    total: string;
+    lines: ReceiptSnapshotLine[];
+  };
+  scanFallbackMode: "NONE" | "SCAN_FAILURE" | "MANUAL_ENTRY";
   lines: ReviewLineState[];
 }
 
 type ExtractState = "IDLE" | "UPLOADING" | "PROCESSING" | "SUCCESS" | "FAILED";
 type NoticeTone = "SUCCESS" | "WARNING";
+type RequisitionComparisonStatus = "MATCHED" | "PARTIAL_MATCH" | "MISMATCH" | "NEEDS_REVIEW";
 type WorkflowStage =
   | "READY_TO_SCAN"
   | "CAPTURING"
@@ -278,6 +295,21 @@ interface QrCropSelection {
 interface SaveReadiness {
   ready: boolean;
   reasons: string[];
+}
+
+interface RequisitionComparisonResult {
+  status: RequisitionComparisonStatus;
+  label: string;
+  message: string;
+  canInspectScannedDetails: boolean;
+  headerRows: Array<{
+    label: string;
+    approved: string;
+    scanned: string;
+    mismatch: boolean;
+  }>;
+  approvedLines: ReceiptSnapshotLine[];
+  scannedLines: ReceiptSnapshotLine[];
 }
 
 type LinkedRecordType = "RECEIPT_INTAKE" | "INVENTORY_ITEM" | "STOCK_MOVEMENT" | "EXPENSE";
@@ -387,6 +419,7 @@ export function ReceiptIntakePanel({
   const [qrAssistSelection, setQrAssistSelection] = useState<QrCropSelection | null>(null);
   const [drawingQrSelection, setDrawingQrSelection] = useState(false);
   const [followUpStage, setFollowUpStage] = useState<ReceiptFollowUpStage>("SCAN");
+  const [showScannedDetails, setShowScannedDetails] = useState(false);
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
   const extracting = extractState === "UPLOADING" || extractState === "PROCESSING";
@@ -472,6 +505,7 @@ export function ReceiptIntakePanel({
       defaultRigId,
       warning:
         "Manual entry selected. Complete receipt details directly and finalize when ready.",
+      fallbackMode: "MANUAL_ENTRY",
       receiptClassification: effectiveClassification,
       receiptWorkflowChoice: workflowChoice,
       initialRequisition
@@ -619,6 +653,10 @@ export function ReceiptIntakePanel({
       criticalManualFieldHints.length > 0
     );
   }, [criticalManualFieldHints.length, manualFieldHints.length, review]);
+  const requisitionComparison = useMemo(
+    () => evaluateRequisitionComparison(review, initialRequisition),
+    [initialRequisition, review]
+  );
 
   const workflowStage = resolveWorkflowStage({
     extractState,
@@ -646,6 +684,10 @@ export function ReceiptIntakePanel({
     }
     setFollowUpStage((current) => (current === "FINALIZE" ? "FINALIZE" : "REVIEW"));
   }, [manualInputSelected, review]);
+
+  useEffect(() => {
+    setShowScannedDetails(false);
+  }, [review?.receiptFileName, review?.requisitionId, review?.scanFallbackMode]);
 
   function applyWorkflowChoice(choice: ReceiptWorkflowChoice) {
     const workflowConfig = resolveWorkflowSelectionConfig(choice);
@@ -823,6 +865,7 @@ export function ReceiptIntakePanel({
             defaultClientId,
             defaultRigId,
             warning: SCAN_FALLBACK_MESSAGE,
+            fallbackMode: "SCAN_FAILURE",
             receiptClassification: selectedWorkflowConfig.classification,
             receiptWorkflowChoice,
             initialRequisition
@@ -872,6 +915,7 @@ export function ReceiptIntakePanel({
           response.ok
             ? readPayloadMessage(payload, SCAN_FALLBACK_MESSAGE)
             : readApiError(response, payload, SCAN_FALLBACK_MESSAGE),
+        fallbackMode: "SCAN_FAILURE",
         receiptClassification: selectedWorkflowConfig.classification,
         receiptWorkflowChoice,
         initialRequisition
@@ -897,6 +941,7 @@ export function ReceiptIntakePanel({
           (scanError instanceof Error && scanError.message
             ? scanError.message
             : SCAN_FALLBACK_MESSAGE),
+        fallbackMode: "SCAN_FAILURE",
         receiptClassification: selectedWorkflowConfig.classification,
         receiptWorkflowChoice,
         initialRequisition
@@ -1121,12 +1166,12 @@ export function ReceiptIntakePanel({
         if (allocationStatus === "UNALLOCATED") {
           setNoticeTone("WARNING");
           setNotice(
-            `${allocationMessage || "Saved successfully as Unallocated"} ${movementCount} stock-in movement(s) created (${formatCurrency(totalValue)}). You can assign project/client later.`
+            `${allocationMessage || "Saved with missing project/client context"} ${movementCount} stock-in movement(s) created (${formatCurrency(totalValue)}). You can complete linkage later.`
           );
         } else if (allocationStatus === "PARTIALLY_ALLOCATED") {
           setNoticeTone("WARNING");
           setNotice(
-            `${allocationMessage || "Saved as Partially allocated"} ${movementCount} stock-in movement(s) created (${formatCurrency(totalValue)}).`
+            `${allocationMessage || "Saved with partial project/client context"} ${movementCount} stock-in movement(s) created (${formatCurrency(totalValue)}).`
           );
         } else {
           setNoticeTone("SUCCESS");
@@ -1472,10 +1517,10 @@ export function ReceiptIntakePanel({
             {lastSavedAllocationStatus && lastSavedAllocationStatus !== "ALLOCATED" && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
                 <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold">
-                  Needs allocation
+                  Context link incomplete
                 </span>
                 <span>
-                  Saved as {formatAllocationStatusLabel(lastSavedAllocationStatus)}. Project/client can be assigned later.
+                  Saved with incomplete project/client linkage. You can complete context later.
                 </span>
                 <Link href="/inventory" className="rounded border border-amber-400 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
                   Open inventory
@@ -1713,6 +1758,95 @@ export function ReceiptIntakePanel({
                 {manualFieldHints.length > 0 ? ` ${manualFieldHints.join(", ")}.` : ""}
               </p>
             )}
+            {requisitionComparison && (
+              <div
+                className={`rounded-lg border px-3 py-2 text-xs ${
+                  requisitionComparison.status === "MATCHED"
+                    ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                    : requisitionComparison.status === "MISMATCH"
+                      ? "border-red-300 bg-red-50 text-red-900"
+                      : "border-amber-300 bg-amber-50 text-amber-900"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold">{requisitionComparison.label}</span>
+                  {requisitionComparison.canInspectScannedDetails && (
+                    <button
+                      type="button"
+                      onClick={() => setShowScannedDetails((current) => !current)}
+                      className="rounded border border-current bg-white/70 px-2 py-1 text-[11px] font-semibold"
+                    >
+                      {showScannedDetails ? "Hide scanned receipt details" : "View scanned receipt details"}
+                    </button>
+                  )}
+                </div>
+                <p className="mt-1">{requisitionComparison.message}</p>
+              </div>
+            )}
+            {showScannedDetails && requisitionComparison && (
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                  Approved vs Scanned Comparison
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-xs text-slate-800">
+                    <thead>
+                      <tr className="text-left text-slate-500">
+                        <th className="px-2 py-1 font-semibold">Field</th>
+                        <th className="px-2 py-1 font-semibold">Approved Requisition</th>
+                        <th className="px-2 py-1 font-semibold">Scanned Receipt</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {requisitionComparison.headerRows.map((row) => (
+                        <tr
+                          key={row.label}
+                          className={row.mismatch ? "bg-red-50/70 text-red-900" : "border-t border-slate-200"}
+                        >
+                          <td className="px-2 py-1 font-medium">{row.label}</td>
+                          <td className="px-2 py-1">{row.approved || "-"}</td>
+                          <td className="px-2 py-1">{row.scanned || "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="rounded border border-slate-200 bg-white p-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Approved Requisition Lines
+                    </p>
+                    {requisitionComparison.approvedLines.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-600">No requisition line items available.</p>
+                    ) : (
+                      <div className="mt-1 space-y-1 text-xs text-slate-700">
+                        {requisitionComparison.approvedLines.map((line) => (
+                          <p key={`approved-${line.id}`}>
+                            {line.description} • qty {line.quantity || "0"} • unit {line.unitPrice || "0"} • total {line.lineTotal || "0"}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded border border-slate-200 bg-white p-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Scanned Receipt Lines
+                    </p>
+                    {requisitionComparison.scannedLines.length === 0 ? (
+                      <p className="mt-1 text-xs text-slate-600">No line items extracted from scan.</p>
+                    ) : (
+                      <div className="mt-1 space-y-1 text-xs text-slate-700">
+                        {requisitionComparison.scannedLines.map((line) => (
+                          <p key={`scanned-${line.id}`}>
+                            {line.description} • qty {line.quantity || "0"} • unit {line.unitPrice || "0"} • total {line.lineTotal || "0"}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-800">Receipt Review</p>
@@ -1730,34 +1864,19 @@ export function ReceiptIntakePanel({
                 <p><span className="font-semibold">File:</span> {review.receiptFileName}</p>
                 <p><span className="font-semibold">Supplier:</span> {review.supplierName || "-"}</p>
                 <p><span className="font-semibold">Receipt #:</span> {review.receiptNumber || "-"}</p>
+                <p><span className="font-semibold">Receipt Date:</span> {review.receiptDate || "-"}</p>
                 <p><span className="font-semibold">Total:</span> {formatMoneyText(review.total, review.currency)}</p>
-                {requiresAllocation ? (
-                  <p>
-                    <span className="font-semibold">Allocation:</span>{" "}
-                    <span
-                      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                        allocationPreview === "ALLOCATED"
-                          ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-                          : "border-amber-300 bg-amber-100 text-amber-800"
-                      }`}
-                    >
-                      {formatAllocationStatusLabel(allocationPreview || "UNALLOCATED")}
-                    </span>
-                    {allocationPreview !== "ALLOCATED" && (
-                      <span className="ml-2 text-amber-800">Needs allocation</span>
-                    )}
-                  </p>
-                ) : (
-                  <p>
-                    <span className="font-semibold">Allocation:</span> Not required for this workflow
-                  </p>
-                )}
+                <p><span className="font-semibold">Verification:</span> {review.verificationCode || "-"}</p>
               </div>
               <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <p>
-                  {review.extractionMethod === "REQUISITION_FALLBACK" ? (
+                  {review.scanFallbackMode === "SCAN_FAILURE" ? (
                     <>
                       <span className="font-semibold">Auto-filled from approved requisition:</span> context, vendor, line items, and estimated totals.
+                    </>
+                  ) : review.scanFallbackMode === "MANUAL_ENTRY" ? (
+                    <>
+                      <span className="font-semibold">Manual receipt entry:</span> complete fields directly, then review and finalize posting.
                     </>
                   ) : (
                     <>
@@ -1817,12 +1936,13 @@ export function ReceiptIntakePanel({
                     }`}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                        <span className={readabilityBadgeClass(line.extractionConfidence as ReadabilityConfidence)}>
-                          {line.extractionConfidence}
-                        </span>
-                        <span>Match: {line.matchScore.toFixed(2)}</span>
-                      </div>
+                      <span className="text-xs text-slate-600">
+                        {line.mode === "MATCH"
+                          ? "Linked to existing inventory item"
+                          : line.mode === "NEW"
+                            ? "Create as new inventory item"
+                            : "Receipt evidence only"}
+                      </span>
                       <button
                         type="button"
                         onClick={() => removeLine(line.id)}
@@ -1948,12 +2068,6 @@ export function ReceiptIntakePanel({
                             label="New Item SKU (optional)"
                             value={line.newItemSku}
                             onChange={(value) => updateLine(line.id, { newItemSku: value.toUpperCase() })}
-                          />
-                          <InputField
-                            label="Min Stock"
-                            type="number"
-                            value={line.newItemMinimumStockLevel}
-                            onChange={(value) => updateLine(line.id, { newItemMinimumStockLevel: value })}
                           />
                         </>
                       ) : (
@@ -2251,7 +2365,7 @@ export function ReceiptIntakePanel({
               </p>
               {requiresAllocation && allocationPreview !== "ALLOCATED" && (
                 <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                  Needs allocation: project/client are not fully assigned yet. You can save now and update allocation later.
+                  Context link incomplete: project/client are not fully assigned yet. You can save now and complete linkage later.
                 </p>
               )}
               {review.requisitionType === "INVENTORY_STOCK_UP" && (
@@ -3092,6 +3206,35 @@ function readNumericFieldValue({
   return String(fallback);
 }
 
+function readNumericFieldValueOptional({
+  header,
+  qrParsedFields,
+  keys
+}: {
+  header: Record<string, unknown> | null | undefined;
+  qrParsedFields: Record<string, unknown> | null | undefined;
+  keys: string[];
+}) {
+  for (const source of [header, qrParsedFields]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of keys) {
+      const raw = source[key];
+      if (typeof raw === "number" && Number.isFinite(raw)) {
+        return String(raw);
+      }
+      if (typeof raw === "string" && raw.trim().length > 0) {
+        const normalized = Number(raw.replace(/,/g, ""));
+        if (Number.isFinite(normalized)) {
+          return String(normalized);
+        }
+      }
+    }
+  }
+  return "";
+}
+
 function toNumericString(value: unknown) {
   const parsed = Number(value ?? 0);
   return Number.isFinite(parsed) ? String(parsed) : "0";
@@ -3486,6 +3629,13 @@ function buildReviewStateFromSubmission({
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
       ? defaultRigId
       : "";
+  const scannedSnapshotLines = lines.map((line) => ({
+    id: line.id,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal
+  }));
   return {
     requisitionId: requisitionLink.id,
     requisitionCode: requisitionLink.code,
@@ -3577,6 +3727,14 @@ function buildReviewStateFromSubmission({
       partialEnrichment: false
     },
     debugCandidates: [],
+    scannedSnapshot: {
+      supplierName: normalizeSupplierName(asString(receipt.supplierName)),
+      receiptNumber: asString(receipt.receiptNumber),
+      receiptDate: asString(receipt.receiptDate),
+      total: toNumericString(receipt.total),
+      lines: scannedSnapshotLines
+    },
+    scanFallbackMode: "NONE",
     lines
   };
 }
@@ -3665,7 +3823,6 @@ function buildReviewStateFromPayload({
         receiptPurpose: workflowConfig.receiptPurpose,
         createExpense: workflowConfig.createExpense
       };
-  const requisitionEstimatedTotal = resolveRequisitionEstimatedTotal(initialRequisition);
   const requisitionFallbackLines = mapRequisitionLineItems(
     initialRequisition,
     effectiveClassification
@@ -3676,9 +3833,38 @@ function buildReviewStateFromPayload({
     initialRequisition,
     classification: effectiveClassification
   });
-  const fallbackSupplierName = normalizeSupplierName(
-    asString(initialRequisition?.requestedVendorName)
-  );
+  const scannedReceiptNumber = readStringFieldValue({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["receiptNumber", "receiptNo", "receipt"]
+  });
+  const scannedReceiptDate = readStringFieldValue({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["receiptDate", "date"]
+  });
+  const scannedSubtotal = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["subtotal", "subTotal", "amountBeforeTax"]
+  });
+  const scannedTax = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["tax", "vat"]
+  });
+  const scannedTotal = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["total", "amount", "grossTotal"]
+  });
+  const scannedSnapshotLines = extractedLines.map((line) => ({
+    id: line.id,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal
+  }));
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -3696,7 +3882,7 @@ function buildReviewStateFromPayload({
     receiptUrl: payload.receipt?.url || "",
     receiptFileName: payload.receipt?.fileName || receiptFileName,
     supplierId: asString(supplierSuggestion.supplierId),
-    supplierName: resolvedSupplierName || fallbackSupplierName,
+    supplierName: resolvedSupplierName,
     tin: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -3712,11 +3898,7 @@ function buildReviewStateFromPayload({
       qrParsedFields,
       keys: ["serialNumber", "serialNo", "serial"]
     }),
-    receiptNumber: readStringFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["receiptNumber", "receiptNo", "receipt"]
-    }),
+    receiptNumber: scannedReceiptNumber,
     verificationCode: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -3735,12 +3917,7 @@ function buildReviewStateFromPayload({
     qrLookupReason: asString(qrLookup?.reason),
     qrFieldsParseStatus: normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus),
     qrLineItemsParseStatus: normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus),
-    receiptDate:
-      readStringFieldValue({
-        header: extractedHeader,
-        qrParsedFields,
-        keys: ["receiptDate", "date"]
-      }) || new Date().toISOString().slice(0, 10),
+    receiptDate: scannedReceiptDate,
     receiptTime: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -3772,24 +3949,9 @@ function buildReviewStateFromPayload({
         qrParsedFields,
         keys: ["currency"]
       }) || "TZS",
-    subtotal: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["subtotal", "subTotal", "amountBeforeTax"],
-      fallback: requisitionEstimatedTotal
-    }),
-    tax: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["tax", "vat"],
-      fallback: 0
-    }),
-    total: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["total", "amount", "grossTotal"],
-      fallback: requisitionEstimatedTotal
-    }),
+    subtotal: scannedSubtotal,
+    tax: scannedTax,
+    total: scannedTotal,
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
@@ -3823,6 +3985,14 @@ function buildReviewStateFromPayload({
     rawTextPreview: asString(extracted.rawTextPreview),
     debugFlags: readDebugFlags(payload),
     debugCandidates: readDebugCandidates(extracted.debug),
+    scannedSnapshot: {
+      supplierName: resolvedSupplierName,
+      receiptNumber: scannedReceiptNumber,
+      receiptDate: scannedReceiptDate,
+      total: scannedTotal,
+      lines: scannedSnapshotLines
+    },
+    scanFallbackMode: "NONE",
     lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
 }
@@ -3833,6 +4003,7 @@ function buildManualAssistReview({
   defaultClientId,
   defaultRigId,
   warning,
+  fallbackMode,
   receiptClassification,
   receiptWorkflowChoice,
   initialRequisition
@@ -3842,6 +4013,7 @@ function buildManualAssistReview({
   defaultClientId: string;
   defaultRigId: string;
   warning: string;
+  fallbackMode: "SCAN_FAILURE" | "MANUAL_ENTRY";
   receiptClassification: ReceiptClassification;
   receiptWorkflowChoice: ReceiptWorkflowChoice | "";
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
@@ -3923,6 +4095,28 @@ function buildManualAssistReview({
   const fallbackSupplierName = normalizeSupplierName(
     asString(initialRequisition?.requestedVendorName)
   );
+  const scannedReceiptNumber = readStringFieldValue({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["receiptNumber", "receiptNo", "receipt"]
+  });
+  const scannedReceiptDate = readStringFieldValue({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["receiptDate", "date"]
+  });
+  const scannedTotal = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["total", "amount", "grossTotal"]
+  });
+  const scannedSnapshotLines = extractedLines.map((line) => ({
+    id: line.id,
+    description: line.description,
+    quantity: line.quantity,
+    unitPrice: line.unitPrice,
+    lineTotal: line.lineTotal
+  }));
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -4066,6 +4260,14 @@ function buildManualAssistReview({
     rawTextPreview: asString(extracted?.rawTextPreview),
     debugFlags: readDebugFlags(root),
     debugCandidates: readDebugCandidates(extracted?.debug),
+    scannedSnapshot: {
+      supplierName: resolvedSupplierName,
+      receiptNumber: scannedReceiptNumber,
+      receiptDate: scannedReceiptDate,
+      total: scannedTotal,
+      lines: scannedSnapshotLines
+    },
+    scanFallbackMode: fallbackMode,
     lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
 }
@@ -4452,14 +4654,197 @@ function normalizeAllocationStatus(value: unknown): IntakeAllocationStatus {
   return "UNALLOCATED";
 }
 
-function formatAllocationStatusLabel(status: IntakeAllocationStatus) {
-  if (status === "ALLOCATED") {
-    return "Allocated";
+function evaluateRequisitionComparison(
+  review: ReviewState | null,
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"]
+): RequisitionComparisonResult | null {
+  if (!review) {
+    return null;
   }
-  if (status === "PARTIALLY_ALLOCATED") {
-    return "Partially allocated";
+
+  const approvedLines = mapRequisitionSnapshotLines(initialRequisition);
+  const scannedLines = review.scannedSnapshot.lines;
+  const approvedSupplier = normalizeSupplierName(asString(initialRequisition?.requestedVendorName));
+  const scannedSupplier = normalizeSupplierName(review.scannedSnapshot.supplierName);
+  const approvedTotalValue = resolveRequisitionEstimatedTotal(initialRequisition);
+  const scannedTotalValue = Number(review.scannedSnapshot.total || 0);
+  const totalMismatch =
+    approvedTotalValue > 0 &&
+    scannedTotalValue > 0 &&
+    !numbersClose(approvedTotalValue, scannedTotalValue, Math.max(1, approvedTotalValue * 0.03));
+  const supplierMismatch =
+    approvedSupplier.length > 0 &&
+    scannedSupplier.length > 0 &&
+    approvedSupplier !== scannedSupplier;
+  const lineMismatch = evaluateLineMismatch(approvedLines, scannedLines);
+  const missingCriticalFields = [
+    !review.scannedSnapshot.supplierName ? "supplier" : "",
+    !review.scannedSnapshot.receiptNumber ? "receipt number" : "",
+    !review.scannedSnapshot.receiptDate ? "receipt date" : "",
+    !review.scannedSnapshot.total ? "total amount" : ""
+  ].filter(Boolean);
+
+  const headerRows: RequisitionComparisonResult["headerRows"] = [
+    {
+      label: "Supplier",
+      approved: approvedSupplier || "-",
+      scanned: review.scannedSnapshot.supplierName || "-",
+      mismatch: supplierMismatch
+    },
+    {
+      label: "Receipt Number",
+      approved: "-",
+      scanned: review.scannedSnapshot.receiptNumber || "-",
+      mismatch: false
+    },
+    {
+      label: "Receipt Date",
+      approved: "-",
+      scanned: review.scannedSnapshot.receiptDate || "-",
+      mismatch: false
+    },
+    {
+      label: "Total Amount",
+      approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
+      scanned: review.scannedSnapshot.total
+        ? formatCurrency(Number(review.scannedSnapshot.total || 0))
+        : "-",
+      mismatch: totalMismatch
+    }
+  ];
+
+  if (review.scanFallbackMode === "SCAN_FAILURE") {
+    return {
+      status: "NEEDS_REVIEW",
+      label: "Needs review",
+      message: SCAN_FALLBACK_MESSAGE,
+      canInspectScannedDetails: false,
+      headerRows,
+      approvedLines,
+      scannedLines
+    };
   }
-  return "Unallocated";
+
+  if (review.scanFallbackMode === "MANUAL_ENTRY") {
+    return {
+      status: "NEEDS_REVIEW",
+      label: "Needs review",
+      message: "Manual receipt entry selected. Complete receipt fields and review before posting.",
+      canInspectScannedDetails: false,
+      headerRows,
+      approvedLines,
+      scannedLines
+    };
+  }
+
+  if (supplierMismatch || totalMismatch || lineMismatch) {
+    return {
+      status: "MISMATCH",
+      label: "Does not match requisition",
+      message:
+        "Scanned receipt does not match the approved requisition. Review differences before posting.",
+      canInspectScannedDetails: true,
+      headerRows,
+      approvedLines,
+      scannedLines
+    };
+  }
+
+  if (review.scanStatus !== "COMPLETE" || missingCriticalFields.length > 0) {
+    return {
+      status: "PARTIAL_MATCH",
+      label: "Partial match",
+      message:
+        missingCriticalFields.length > 0
+          ? `Some fields need manual review: ${missingCriticalFields.join(", ")}.`
+          : "Some scanned receipt details are incomplete. Review before posting.",
+      canInspectScannedDetails: false,
+      headerRows,
+      approvedLines,
+      scannedLines
+    };
+  }
+
+  return {
+    status: "MATCHED",
+    label: "Matched",
+    message: "Scanned receipt details align with the approved requisition.",
+    canInspectScannedDetails: false,
+    headerRows,
+    approvedLines,
+    scannedLines
+  };
+}
+
+function mapRequisitionSnapshotLines(
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"]
+): ReceiptSnapshotLine[] {
+  if (!initialRequisition || !Array.isArray(initialRequisition.lineItems)) {
+    return [];
+  }
+  return initialRequisition.lineItems
+    .map((line, index) => ({
+      id: `rq-${line.id || index + 1}`,
+      description: String(line.description || "").trim(),
+      quantity: String(Number(line.quantity || 0)),
+      unitPrice: String(Number(line.estimatedUnitCost || 0)),
+      lineTotal: String(Number(line.estimatedTotalCost || 0))
+    }))
+    .filter((line) => line.description.length > 0);
+}
+
+function evaluateLineMismatch(
+  approvedLines: ReceiptSnapshotLine[],
+  scannedLines: ReceiptSnapshotLine[]
+) {
+  if (approvedLines.length === 0 || scannedLines.length === 0) {
+    return false;
+  }
+  if (approvedLines.length !== scannedLines.length) {
+    return true;
+  }
+  for (let index = 0; index < approvedLines.length; index += 1) {
+    const approved = approvedLines[index];
+    const scanned = scannedLines[index];
+    if (!lineDescriptionLooksComparable(approved.description, scanned.description)) {
+      return true;
+    }
+    const approvedQty = Number(approved.quantity || 0);
+    const scannedQty = Number(scanned.quantity || 0);
+    if (!numbersClose(approvedQty, scannedQty, 0.05)) {
+      return true;
+    }
+    const approvedTotal = Number(approved.lineTotal || 0);
+    const scannedTotal = Number(scanned.lineTotal || 0);
+    if (approvedTotal > 0 && scannedTotal > 0 && !numbersClose(approvedTotal, scannedTotal, Math.max(1, approvedTotal * 0.03))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function lineDescriptionLooksComparable(approved: string, scanned: string) {
+  const approvedNormalized = normalizeLineDescription(approved);
+  const scannedNormalized = normalizeLineDescription(scanned);
+  if (!approvedNormalized || !scannedNormalized) {
+    return true;
+  }
+  return (
+    approvedNormalized === scannedNormalized ||
+    approvedNormalized.includes(scannedNormalized) ||
+    scannedNormalized.includes(approvedNormalized)
+  );
+}
+
+function normalizeLineDescription(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function numbersClose(left: number, right: number, tolerance: number) {
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return false;
+  }
+  return Math.abs(left - right) <= tolerance;
 }
 
 async function readJsonPayload(response: Response): Promise<unknown | null> {
