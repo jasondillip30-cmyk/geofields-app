@@ -184,6 +184,7 @@ interface RequisitionPrefill {
 }
 
 type ReceiptEntryMode = "REQUISITION" | "MANUAL";
+type ReceiptFlowWizardStep = 1 | 2 | 3;
 
 interface ApprovedRequisitionRow {
   id: string;
@@ -305,6 +306,7 @@ function InventoryReceiptIntakePageContent() {
   }, [clients, projects, rigs, selectedRequisitionPrefill]);
   const canRenderReceiptPanel =
     entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
+  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(1);
 
   useEffect(() => {
     if (!urlRequisitionPrefill) {
@@ -312,7 +314,15 @@ function InventoryReceiptIntakePageContent() {
     }
     setEntryMode("REQUISITION");
     setSelectedRequisitionId(urlRequisitionPrefill.id);
+    setWizardStep(2);
   }, [urlRequisitionPrefill]);
+
+  useEffect(() => {
+    if (!activeSubmissionId) {
+      return;
+    }
+    setWizardStep(3);
+  }, [activeSubmissionId]);
 
   const selectedClientLabel = useMemo(() => {
     if (filters.clientId === "all") {
@@ -704,8 +714,8 @@ function InventoryReceiptIntakePageContent() {
         <section className="gf-page-header">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">Receipt Processing</h1>
-              <p className="mt-1 text-sm text-slate-600">Capture receipts, review parsed data, and finalize inventory intake.</p>
+              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">Complete Purchase and Receipt</h1>
+              <p className="mt-1 text-sm text-slate-600">Continue approved purchases into receipt capture, review, and final posting.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Link
@@ -734,10 +744,66 @@ function InventoryReceiptIntakePageContent() {
         </section>
 
         {currentView === "scan" && (
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Guided Workflow</p>
+            <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+              {[
+                "1. Choose intake path",
+                "2. Setup requisition/manual context",
+                "3. Upload / scan receipt",
+                "4. Review parsed data",
+                "5. Finalize posting"
+              ].map((label, index) => (
+                <div
+                  key={label}
+                  className={`rounded-lg border px-2 py-1.5 ${
+                    wizardStep === 1 && index === 0
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
+                      : wizardStep === 2 && index === 1
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
+                        : wizardStep === 3 && index >= 2
+                          ? "border-brand-300 bg-brand-50 text-brand-900"
+                          : "border-slate-200 bg-slate-50 text-slate-700"
+                  }`}
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {wizardStep > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setWizardStep((current) => Math.max(1, current - 1) as ReceiptFlowWizardStep)}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Back
+                </button>
+              )}
+              {wizardStep < 3 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (wizardStep === 2 && entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission) {
+                      return;
+                    }
+                    setWizardStep((current) => Math.min(3, current + 1) as ReceiptFlowWizardStep);
+                  }}
+                  disabled={wizardStep === 2 && entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission}
+                  className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+                >
+                  Continue
+                </button>
+              )}
+            </div>
+          </section>
+        )}
+
+        {currentView === "scan" && wizardStep === 1 && (
           <section id="inventory-receipt-entry-section" className="rounded-2xl border border-brand-200 bg-brand-50/70 p-4 shadow-sm md:p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Start Here</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Step 1 — Choose Intake Path</p>
             <p className="mt-1 text-sm text-brand-900">
-              Choose your intake path first, then continue straight into scanning and review.
+              Start from an approved requisition by default. Use manual intake only as an exception path.
             </p>
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               <button
@@ -763,8 +829,14 @@ function InventoryReceiptIntakePageContent() {
                 Manual Entry (No Requisition)
               </button>
             </div>
-            {entryMode === "REQUISITION" && (
-              <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+          </section>
+        )}
+
+        {currentView === "scan" && wizardStep === 2 && (
+          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Configure Intake Context</p>
+            {entryMode === "REQUISITION" ? (
+              <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
                 <label className="text-xs text-ink-700">
                   <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
                   <select
@@ -803,15 +875,19 @@ function InventoryReceiptIntakePageContent() {
                   </p>
                 ) : (
                   <p className="mt-2 text-xs text-indigo-900">
-                    Select an approved requisition to continue with prefilled receipt intake, or switch to manual entry.
+                    Select an approved requisition to continue with prefilled intake.
                   </p>
                 )}
               </div>
+            ) : (
+              <p className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+                Manual path selected. Continue to scanning and then complete required context during review.
+              </p>
             )}
           </section>
         )}
 
-        {currentView === "scan" && (
+        {currentView === "scan" && wizardStep >= 3 && (
           <section
             id="inventory-receipt-scan-section"
             className={cn(
@@ -1010,11 +1086,16 @@ function InventoryReceiptIntakePageContent() {
           </section>
         )}
 
-        <section className="grid gap-3 md:grid-cols-3">
-          <MetricCard label="Receipts in Scope" value={String(historyRows.length)} />
-          <MetricCard label="Receipt-Linked Value" value={formatCurrency(totalReceiptValue)} />
-          <MetricCard label="Suppliers in Intake" value={String(new Set(historyRows.map((row) => row.supplier?.id || "")).size)} />
-        </section>
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+            Receipt Metrics / KPIs
+          </summary>
+          <div className="grid gap-3 border-t border-slate-200 p-4 md:grid-cols-3">
+            <MetricCard label="Receipts in Scope" value={String(historyRows.length)} />
+            <MetricCard label="Receipt-Linked Value" value={formatCurrency(totalReceiptValue)} />
+            <MetricCard label="Suppliers in Intake" value={String(new Set(historyRows.map((row) => row.supplier?.id || "")).size)} />
+          </div>
+        </details>
       </div>
     </AccessGate>
   );

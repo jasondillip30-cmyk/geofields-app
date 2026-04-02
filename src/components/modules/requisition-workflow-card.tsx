@@ -20,6 +20,8 @@ type RequisitionStatus =
   | "REJECTED"
   | "PURCHASE_COMPLETED";
 
+type RequisitionWizardStep = 1 | 2 | 3 | 4 | 5;
+
 interface RequisitionLineItem {
   id: string;
   description: string;
@@ -143,6 +145,7 @@ export function RequisitionWorkflowCard({
   const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceOption[]>([]);
   const [statusNotes, setStatusNotes] = useState<Record<string, string>>({});
   const [form, setForm] = useState(initialFormState);
+  const [wizardStep, setWizardStep] = useState<RequisitionWizardStep>(1);
 
   const filteredProjects = useMemo(() => {
     if (!form.clientId) {
@@ -168,6 +171,31 @@ export function RequisitionWorkflowCard({
         }
         return sum + quantity * unitCost;
       }, 0),
+    [form.lines]
+  );
+
+  const validLineItems = useMemo(
+    () =>
+      form.lines
+        .map((line, index) => ({
+          id: line.id || `line-${index + 1}`,
+          description: line.description.trim(),
+          quantity: Number(line.quantity),
+          estimatedUnitCost: Number(line.estimatedUnitCost),
+          estimatedTotalCost:
+            Number(line.quantity) > 0 && Number(line.estimatedUnitCost) >= 0
+              ? Number(line.quantity) * Number(line.estimatedUnitCost)
+              : 0,
+          notes: line.notes.trim() || null
+        }))
+        .filter(
+          (line) =>
+            line.description &&
+            Number.isFinite(line.quantity) &&
+            line.quantity > 0 &&
+            Number.isFinite(line.estimatedUnitCost) &&
+            line.estimatedUnitCost >= 0
+        ),
     [form.lines]
   );
 
@@ -252,45 +280,67 @@ export function RequisitionWorkflowCard({
     };
   }, []);
 
+  const validateStep = useCallback(
+    (step: RequisitionWizardStep) => {
+      if (step === 1 && !form.type) {
+        return "Choose a requisition type to continue.";
+      }
+      if (step === 2) {
+        if (!form.category.trim()) {
+          return "Category is required.";
+        }
+        if (form.type === "LIVE_PROJECT_PURCHASE" && !form.projectId) {
+          return "Live project purchase requisitions require a project.";
+        }
+        if (form.type === "MAINTENANCE_PURCHASE" && !form.rigId) {
+          return "Maintenance purchase requisitions require a rig.";
+        }
+      }
+      if (step === 3 && form.notes.trim().length < 5) {
+        return "Add a short reason (at least 5 characters) before continuing.";
+      }
+      if (step === 4 && validLineItems.length === 0) {
+        return "Add at least one valid line item with quantity and estimated unit cost.";
+      }
+      return null;
+    },
+    [form, validLineItems.length]
+  );
+
+  function continueWizard() {
+    const validationError = validateStep(wizardStep);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setError(null);
+    setWizardStep((current) => Math.min(5, current + 1) as RequisitionWizardStep);
+  }
+
+  function backWizard() {
+    setError(null);
+    setWizardStep((current) => Math.max(1, current - 1) as RequisitionWizardStep);
+  }
+
+  function restartWizard() {
+    setForm(initialFormState);
+    setWizardStep(1);
+    setError(null);
+  }
+
   const createRequisition = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       setError(null);
       setNotice(null);
 
-      const lines = form.lines
-        .map((line, index) => ({
-          id: line.id || `line-${index + 1}`,
-          description: line.description.trim(),
-          quantity: Number(line.quantity),
-          estimatedUnitCost: Number(line.estimatedUnitCost),
-          estimatedTotalCost:
-            Number(line.quantity) > 0 && Number(line.estimatedUnitCost) >= 0
-              ? Number(line.quantity) * Number(line.estimatedUnitCost)
-              : 0,
-          notes: line.notes.trim() || null
-        }))
-        .filter(
-          (line) =>
-            line.description &&
-            Number.isFinite(line.quantity) &&
-            line.quantity > 0 &&
-            Number.isFinite(line.estimatedUnitCost) &&
-            line.estimatedUnitCost >= 0
-        );
-
-      if (lines.length === 0) {
-        setError("Add at least one valid line item with quantity and estimated unit cost.");
-        return;
-      }
-
-      if (form.type === "LIVE_PROJECT_PURCHASE" && !form.projectId) {
-        setError("Live project purchase requisitions require a project.");
-        return;
-      }
-      if (form.type === "MAINTENANCE_PURCHASE" && !form.rigId) {
-        setError("Maintenance purchase requisitions require a rig.");
-        return;
+      for (const step of [1, 2, 3, 4] as RequisitionWizardStep[]) {
+        const validationError = validateStep(step);
+        if (validationError) {
+          setWizardStep(step);
+          setError(validationError);
+          return;
+        }
       }
 
       setSaving(true);
@@ -307,7 +357,7 @@ export function RequisitionWorkflowCard({
             category: form.category,
             subcategory: form.subcategory || null,
             notes: form.notes || null,
-            lineItems: lines
+            lineItems: validLineItems
           })
         });
 
@@ -319,9 +369,10 @@ export function RequisitionWorkflowCard({
         }
 
         setNotice(
-          "Requisition submitted. Next step is manager approval, then receipt/purchase posting."
+          "Purchase request submitted. Next step is manager approval, then receipt/purchase posting."
         );
         setForm(initialFormState);
+        setWizardStep(1);
         await loadRequisitions();
         if (onWorkflowChanged) {
           await onWorkflowChanged();
@@ -336,7 +387,7 @@ export function RequisitionWorkflowCard({
         setSaving(false);
       }
     },
-    [form, loadRequisitions, onWorkflowChanged]
+    [form, loadRequisitions, onWorkflowChanged, validLineItems, validateStep]
   );
 
   const updateRequisitionStatus = useCallback(
@@ -409,7 +460,7 @@ export function RequisitionWorkflowCard({
                 href={receiptUrl}
                 className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
               >
-                Start purchase / receipt
+                Continue to receipt
               </Link>
             )}
             {row.status === "PURCHASE_COMPLETED" && (
@@ -479,319 +530,468 @@ export function RequisitionWorkflowCard({
       )}
 
       <Card
-        title="Guided Purchasing Workflow"
-        subtitle="Requisition → Approval → Purchase/Receipt → Posted Cost"
+        title="Create Purchase Request"
+        subtitle="Guided requisition flow: type → context → reason → line items → review"
       >
-        <div className="mb-3 grid gap-2 text-xs text-slate-700 md:grid-cols-4">
-          <WorkflowStep title="1. Requisition" note="Create request with estimated line items." />
-          <WorkflowStep title="2. Approval" note="Manager/Admin approves or rejects." />
-          <WorkflowStep title="3. Purchase/Receipt" note="Upload receipt against approved requisition." />
-          <WorkflowStep title="4. Posted Cost" note="Cost posts only after receipt confirmation." />
+        <div className="mb-4 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+          {([
+            { step: 1, label: "Choose Type" },
+            { step: 2, label: "Set Context" },
+            { step: 3, label: "Reason" },
+            { step: 4, label: "Line Items" },
+            { step: 5, label: "Review & Submit" }
+          ] as Array<{ step: RequisitionWizardStep; label: string }>).map((entry) => (
+            <div
+              key={entry.step}
+              className={`rounded-lg border px-2 py-1.5 ${
+                wizardStep === entry.step
+                  ? "border-brand-300 bg-brand-50 text-brand-900"
+                  : "border-slate-200 bg-slate-50 text-slate-700"
+              }`}
+            >
+              <p className="font-semibold">Step {entry.step}</p>
+              <p>{entry.label}</p>
+            </div>
+          ))}
         </div>
         <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-          Line-item partial approvals are not yet enabled in v1. Current mode is{" "}
-          <span className="font-semibold">full requisition approval</span>.
+          Purchasing workflow: requisition submission is an estimate only. Real posted cost happens after approved purchase receipt completion.
         </p>
-        <form onSubmit={createRequisition} className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          <SelectInput
-            label="Requisition Type"
-            value={form.type}
-            onChange={(value) =>
-              setForm((current) => {
-                const nextType = value as RequisitionType;
-                return {
-                  ...current,
-                  type: nextType,
-                  projectId: nextType === "INVENTORY_STOCK_UP" ? "" : current.projectId,
-                  maintenanceRequestId:
-                    nextType === "MAINTENANCE_PURCHASE" ? current.maintenanceRequestId : ""
-                };
-              })
-            }
-            options={[
-              { value: "LIVE_PROJECT_PURCHASE", label: "Live project purchase" },
-              { value: "INVENTORY_STOCK_UP", label: "Inventory stock-up" },
-              { value: "MAINTENANCE_PURCHASE", label: "Maintenance purchase" }
-            ]}
-          />
-          <SelectInput
-            label="Client"
-            value={form.clientId}
-            onChange={(value) =>
-              setForm((current) => ({
-                ...current,
-                clientId: value,
-                projectId:
-                  value && current.projectId && !projects.some((project) => project.id === current.projectId && project.clientId === value)
-                    ? ""
-                    : current.projectId
-              }))
-            }
-            options={[
-              { value: "", label: "No client" },
-              ...clients.map((client) => ({ value: client.id, label: client.name }))
-            ]}
-          />
-          <SelectInput
-            label={form.type === "INVENTORY_STOCK_UP" ? "Project (disabled for stock-up)" : "Project"}
-            value={form.projectId}
-            onChange={(value) =>
-              setForm((current) => ({
-                ...current,
-                projectId: value
-              }))
-            }
-            disabled={form.type === "INVENTORY_STOCK_UP"}
-            options={[
-              { value: "", label: form.type === "LIVE_PROJECT_PURCHASE" ? "Select project" : "No project" },
-              ...filteredProjects.map((project) => ({
-                value: project.id,
-                label: project.name
-              }))
-            ]}
-          />
-          <SelectInput
-            label={form.type === "MAINTENANCE_PURCHASE" ? "Rig (required)" : "Rig"}
-            value={form.rigId}
-            onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
-            options={[
-              { value: "", label: form.type === "MAINTENANCE_PURCHASE" ? "Select rig" : "No rig" },
-              ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
-            ]}
-          />
-          {form.type === "MAINTENANCE_PURCHASE" && (
-            <SelectInput
-              label="Maintenance Request (optional)"
-              value={form.maintenanceRequestId}
-              onChange={(value) =>
-                setForm((current) => ({ ...current, maintenanceRequestId: value }))
-              }
-              options={[
-                { value: "", label: "No maintenance request" },
-                ...filteredMaintenanceOptions.map((option) => ({
-                  value: option.id,
-                  label: option.requestCode
-                }))
-              ]}
-            />
+
+        <form onSubmit={createRequisition} className="space-y-4">
+          {wizardStep === 1 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 1 — Choose Requisition Type
+              </p>
+              <div className="grid gap-2 md:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      type: "LIVE_PROJECT_PURCHASE",
+                      maintenanceRequestId: ""
+                    }))
+                  }
+                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                    form.type === "LIVE_PROJECT_PURCHASE"
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <p className="font-semibold">Live Project Purchase</p>
+                  <p className="mt-1 text-xs text-slate-600">Project-linked purchase that will flow into project cost after posting.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      type: "INVENTORY_STOCK_UP",
+                      projectId: "",
+                      maintenanceRequestId: ""
+                    }))
+                  }
+                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                    form.type === "INVENTORY_STOCK_UP"
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <p className="font-semibold">Stock / Warehouse Purchase</p>
+                  <p className="mt-1 text-xs text-slate-600">Inventory replenishment with no required live project linkage.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setForm((current) => ({
+                      ...current,
+                      type: "MAINTENANCE_PURCHASE"
+                    }))
+                  }
+                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                    form.type === "MAINTENANCE_PURCHASE"
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  <p className="font-semibold">Maintenance Purchase</p>
+                  <p className="mt-1 text-xs text-slate-600">Rig repair or maintenance-related purchase.</p>
+                </button>
+              </div>
+            </div>
           )}
-          <TextInput
-            label="Category"
-            value={form.category}
-            onChange={(value) => setForm((current) => ({ ...current, category: value }))}
-            required
-          />
-          <TextInput
-            label="Subcategory"
-            value={form.subcategory}
-            onChange={(value) => setForm((current) => ({ ...current, subcategory: value }))}
-          />
-          <label className="text-sm text-ink-700 md:col-span-2 lg:col-span-4">
-            <span className="mb-1 block">Reason / Notes</span>
-            <textarea
-              value={form.notes}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, notes: event.target.value }))
-              }
-              className="w-full rounded-lg border border-slate-200 px-3 py-2"
-              placeholder="Why this purchase is needed"
-            />
-          </label>
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 md:col-span-2 lg:col-span-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Line Items</p>
-            <div className="mt-2 space-y-2">
-              {form.lines.map((line) => (
-                <div key={line.id} className="grid gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-12">
-                  <input
-                    value={line.description}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        lines: current.lines.map((entry) =>
-                          entry.id === line.id
-                            ? { ...entry, description: event.target.value }
-                            : entry
-                        )
-                      }))
+
+          {wizardStep === 2 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 2 — Select Operational Context
+              </p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <SelectInput
+                  label="Client"
+                  value={form.clientId}
+                  onChange={(value) =>
+                    setForm((current) => ({
+                      ...current,
+                      clientId: value,
+                      projectId:
+                        value &&
+                        current.projectId &&
+                        !projects.some((project) => project.id === current.projectId && project.clientId === value)
+                          ? ""
+                          : current.projectId
+                    }))
+                  }
+                  options={[
+                    { value: "", label: "No client" },
+                    ...clients.map((client) => ({ value: client.id, label: client.name }))
+                  ]}
+                />
+                <SelectInput
+                  label={form.type === "INVENTORY_STOCK_UP" ? "Project (not required)" : "Project"}
+                  value={form.projectId}
+                  onChange={(value) =>
+                    setForm((current) => ({
+                      ...current,
+                      projectId: value
+                    }))
+                  }
+                  disabled={form.type === "INVENTORY_STOCK_UP"}
+                  options={[
+                    { value: "", label: form.type === "LIVE_PROJECT_PURCHASE" ? "Select project (required)" : "No project" },
+                    ...filteredProjects.map((project) => ({
+                      value: project.id,
+                      label: project.name
+                    }))
+                  ]}
+                />
+                <SelectInput
+                  label={form.type === "MAINTENANCE_PURCHASE" ? "Rig (required)" : "Rig"}
+                  value={form.rigId}
+                  onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
+                  options={[
+                    { value: "", label: form.type === "MAINTENANCE_PURCHASE" ? "Select rig (required)" : "No rig" },
+                    ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
+                  ]}
+                />
+                {form.type === "MAINTENANCE_PURCHASE" && (
+                  <SelectInput
+                    label="Maintenance Request (optional)"
+                    value={form.maintenanceRequestId}
+                    onChange={(value) =>
+                      setForm((current) => ({ ...current, maintenanceRequestId: value }))
                     }
-                    placeholder="Description"
-                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-5"
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={line.quantity}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        lines: current.lines.map((entry) =>
-                          entry.id === line.id
-                            ? { ...entry, quantity: event.target.value }
-                            : entry
-                        )
+                    options={[
+                      { value: "", label: "No maintenance request" },
+                      ...filteredMaintenanceOptions.map((option) => ({
+                        value: option.id,
+                        label: option.requestCode
                       }))
-                    }
-                    placeholder="Qty"
-                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                    ]}
                   />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={line.estimatedUnitCost}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        lines: current.lines.map((entry) =>
-                          entry.id === line.id
-                            ? { ...entry, estimatedUnitCost: event.target.value }
-                            : entry
-                        )
-                      }))
-                    }
-                    placeholder="Est. unit cost"
-                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
-                  />
-                  <input
-                    value={line.notes}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        lines: current.lines.map((entry) =>
-                          entry.id === line.id ? { ...entry, notes: event.target.value } : entry
-                        )
-                      }))
-                    }
-                    placeholder="Line note (optional)"
-                    className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
-                  />
+                )}
+                <TextInput
+                  label="Category"
+                  value={form.category}
+                  onChange={(value) => setForm((current) => ({ ...current, category: value }))}
+                  required
+                />
+                <TextInput
+                  label="Subcategory"
+                  value={form.subcategory}
+                  onChange={(value) => setForm((current) => ({ ...current, subcategory: value }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {wizardStep === 3 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 3 — Reason / Notes
+              </p>
+              <label className="text-sm text-ink-700">
+                <span className="mb-1 block">Why is this purchase needed?</span>
+                <textarea
+                  value={form.notes}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, notes: event.target.value }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  placeholder="Explain operational need, urgency, and expected impact."
+                />
+              </label>
+              <p className="text-xs text-slate-600">
+                Keep this clear for approval review and receipt-stage matching.
+              </p>
+            </div>
+          )}
+
+          {wizardStep === 4 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 4 — Add Line Items
+              </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="space-y-2">
+                  {form.lines.map((line) => (
+                    <div key={line.id} className="grid gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-12">
+                      <input
+                        value={line.description}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) =>
+                              entry.id === line.id
+                                ? { ...entry, description: event.target.value }
+                                : entry
+                            )
+                          }))
+                        }
+                        placeholder="Description"
+                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-5"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.quantity}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) =>
+                              entry.id === line.id
+                                ? { ...entry, quantity: event.target.value }
+                                : entry
+                            )
+                          }))
+                        }
+                        placeholder="Qty"
+                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={line.estimatedUnitCost}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) =>
+                              entry.id === line.id
+                                ? { ...entry, estimatedUnitCost: event.target.value }
+                                : entry
+                            )
+                          }))
+                        }
+                        placeholder="Est. unit cost"
+                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                      />
+                      <input
+                        value={line.notes}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            lines: current.lines.map((entry) =>
+                              entry.id === line.id ? { ...entry, notes: event.target.value } : entry
+                            )
+                          }))
+                        }
+                        placeholder="Line note (optional)"
+                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            lines:
+                              current.lines.length <= 1
+                                ? current.lines
+                                : current.lines.filter((entry) => entry.id !== line.id)
+                          }))
+                        }
+                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 md:col-span-1"
+                        disabled={form.lines.length <= 1}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() =>
                       setForm((current) => ({
                         ...current,
-                        lines:
-                          current.lines.length <= 1
-                            ? current.lines
-                            : current.lines.filter((entry) => entry.id !== line.id)
+                        lines: [...current.lines, initialFormLine()]
                       }))
                     }
-                    className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 md:col-span-1"
-                    disabled={form.lines.length <= 1}
+                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                   >
-                    Remove
+                    Add line item
                   </button>
+                  <p className="text-xs text-slate-700">
+                    Estimated requisition total:{" "}
+                    <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
+                  </p>
                 </div>
-              ))}
+              </div>
             </div>
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() =>
-                  setForm((current) => ({
-                    ...current,
-                    lines: [...current.lines, initialFormLine()]
-                  }))
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Add line item
-              </button>
+          )}
+
+          {wizardStep === 5 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 5 — Review and Submit
+              </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                <p>
+                  <span className="font-semibold">Type:</span> {formatRequisitionType(form.type)}
+                </p>
+                <p>
+                  <span className="font-semibold">Client:</span>{" "}
+                  {clients.find((entry) => entry.id === form.clientId)?.name || "-"}
+                </p>
+                <p>
+                  <span className="font-semibold">Project:</span>{" "}
+                  {projects.find((entry) => entry.id === form.projectId)?.name || "-"}
+                </p>
+                <p>
+                  <span className="font-semibold">Rig:</span>{" "}
+                  {rigs.find((entry) => entry.id === form.rigId)?.name || "-"}
+                </p>
+                <p>
+                  <span className="font-semibold">Category:</span> {form.category || "-"}
+                  {form.subcategory ? ` / ${form.subcategory}` : ""}
+                </p>
+                <p>
+                  <span className="font-semibold">Reason:</span>{" "}
+                  {form.notes.trim() || "-"}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white">
+                <DataTable
+                  columns={["Description", "Qty", "Est. Unit Cost", "Est. Total", "Notes"]}
+                  rows={validLineItems.map((line) => [
+                    line.description,
+                    line.quantity,
+                    formatCurrency(line.estimatedUnitCost),
+                    formatCurrency(line.estimatedTotalCost),
+                    line.notes || "-"
+                  ])}
+                />
+              </div>
               <p className="text-xs text-slate-700">
-                Estimated requisition total:{" "}
+                Estimated total request value:{" "}
                 <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
               </p>
             </div>
-          </div>
-          <div className="flex items-center gap-2 md:col-span-2 lg:col-span-4">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-            >
-              {saving ? "Submitting..." : "Submit Requisition"}
-            </button>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+            {wizardStep > 1 && (
+              <button
+                type="button"
+                onClick={backWizard}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Back
+              </button>
+            )}
+            {wizardStep < 5 ? (
+              <button
+                type="button"
+                onClick={continueWizard}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+              >
+                Continue
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+              >
+                {saving ? "Submitting..." : "Submit Requisition"}
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setForm(initialFormState)}
+              onClick={restartWizard}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
             >
-              Reset
+              Restart
             </button>
           </div>
         </form>
       </Card>
 
-      <Card
-        title="Requisition Queue"
-        subtitle="Track submitted, approved, and posted requisitions."
-      >
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-slate-700">
-          <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
-            Pending approval: {pendingCount}
-          </span>
-          <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
-            Approved, awaiting receipt: {approvedReadyCount}
-          </span>
-          <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
-            Posted cost complete: {completedCount}
-          </span>
-          <label className="ml-auto flex items-center gap-2">
-            <span className="uppercase tracking-wide text-slate-500">Status</span>
-            <select
-              value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(
-                  event.target.value === "all"
-                    ? "all"
-                    : (event.target.value as RequisitionStatus)
-                )
-              }
-              className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
-            >
-              <option value="all">All</option>
-              <option value="SUBMITTED">Submitted</option>
-              <option value="APPROVED">Approved</option>
-              <option value="REJECTED">Rejected</option>
-              <option value="PURCHASE_COMPLETED">Purchase completed</option>
-            </select>
-          </label>
+      <details className="rounded-xl border border-slate-200 bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+          View Approval / Status Insights
+        </summary>
+        <div className="space-y-3 border-t border-slate-200 p-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+            <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+              Pending approval: {pendingCount}
+            </span>
+            <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
+              Approved, awaiting receipt: {approvedReadyCount}
+            </span>
+            <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
+              Posted cost complete: {completedCount}
+            </span>
+            <label className="ml-auto flex items-center gap-2">
+              <span className="uppercase tracking-wide text-slate-500">Status</span>
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(
+                    event.target.value === "all"
+                      ? "all"
+                      : (event.target.value as RequisitionStatus)
+                  )
+                }
+                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+              >
+                <option value="all">All</option>
+                <option value="SUBMITTED">Submitted</option>
+                <option value="APPROVED">Approved</option>
+                <option value="REJECTED">Rejected</option>
+                <option value="PURCHASE_COMPLETED">Purchase completed</option>
+              </select>
+            </label>
+          </div>
+          {loading ? (
+            <p className="text-sm text-slate-600">Loading requisitions...</p>
+          ) : rows.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+              No requisitions found for the selected filters.
+            </p>
+          ) : (
+            <DataTable
+              columns={[
+                "Requisition",
+                "Type",
+                "Status",
+                "Project",
+                "Rig",
+                "Lines",
+                "Estimated",
+                "Posted",
+                "Submitted",
+                "Actions"
+              ]}
+              rows={requisitionRows}
+            />
+          )}
         </div>
-        {loading ? (
-          <p className="text-sm text-slate-600">Loading requisitions...</p>
-        ) : rows.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-            No requisitions found for the selected filters.
-          </p>
-        ) : (
-          <DataTable
-            columns={[
-              "Requisition",
-              "Type",
-              "Status",
-              "Project",
-              "Rig",
-              "Lines",
-              "Estimated",
-              "Posted",
-              "Submitted",
-              "Actions"
-            ]}
-            rows={requisitionRows}
-          />
-        )}
-      </Card>
+      </details>
     </section>
-  );
-}
-
-function WorkflowStep({ title, note }: { title: string; note: string }) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
-      <p className="font-semibold text-slate-800">{title}</p>
-      <p className="text-slate-600">{note}</p>
-    </div>
   );
 }
 
@@ -852,9 +1052,9 @@ function TextInput({
 }
 
 function formatRequisitionType(type: RequisitionType) {
-  if (type === "LIVE_PROJECT_PURCHASE") return "Live project";
-  if (type === "MAINTENANCE_PURCHASE") return "Maintenance";
-  return "Inventory stock-up";
+  if (type === "LIVE_PROJECT_PURCHASE") return "Live project purchase";
+  if (type === "MAINTENANCE_PURCHASE") return "Maintenance purchase";
+  return "Stock / warehouse purchase";
 }
 
 function lookupProjectName(

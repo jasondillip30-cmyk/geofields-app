@@ -927,6 +927,18 @@ function ExpensesPageContent() {
         )}
         <FilterScopeBanner filters={filters} />
 
+        <section className="gf-page-header">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
+              Create Purchase Request
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Start with requisition-first purchasing. Use exception expense entry and history as secondary tools.
+            </p>
+          </div>
+          <div className="mt-3 border-t border-slate-200/80" />
+        </section>
+
         <section
           id="expenses-requisition-section"
           className={cn(
@@ -949,70 +961,82 @@ function ExpensesPageContent() {
           />
         </section>
 
-        <section
-          id="expenses-primary-kpi-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "expenses-primary-kpi-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <SectionHeader
-            title="Primary Expense KPIs"
-            description="Most important expense signals in the current scope."
-          />
-          <div className="gf-kpi-grid-primary">
-            <MetricCard
-              label={isScoped ? "Expenses in Scope" : "Total Expenses"}
-              value={formatCurrency(analytics.kpis.totalExpenses)}
-              change={`Approved: ${formatCurrency(analytics.kpis.approvedExpenses)}`}
-              tone="warn"
-            />
-            <MetricCard label="Highest Expense Project" value={analytics.kpis.highestExpenseProject} />
-            <MetricCard label="Highest Expense Rig" value={analytics.kpis.highestExpenseRig} />
-            <MetricCard label="Biggest Category" value={analytics.kpis.biggestCategory} />
-          </div>
-          <p className="mt-2 text-xs text-slate-600">
-            Expense analytics on this page include all visible statuses. Financial dashboards use approved expenses only.
-          </p>
-        </section>
-
-        <Card
-          title="Approval and Reporting Visibility"
-          subtitle="Manual expenses are reviewed in this module; receipt-intake submissions are reviewed in Approvals."
-        >
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <StatusPill tone="amber">
-              Submitted: {submittedExpenses.length}
-            </StatusPill>
-            <StatusPill tone="slate">
-              Draft: {expenses.filter((entry) => entry.approvalStatus === "DRAFT").length}
-            </StatusPill>
-            <StatusPill tone="emerald">
-              Approved: {expenses.filter((entry) => entry.approvalStatus === "APPROVED").length}
-            </StatusPill>
-            <button
-              type="button"
-              onClick={() => router.push(buildHref("/expenses", { status: "SUBMITTED" }))}
-              className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-50"
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+            View Approval / Status Insights
+          </summary>
+          <div className="border-t border-slate-200 p-4">
+            <Card
+              title="Approval and Reporting Visibility"
+              subtitle="Manual expenses are reviewed in this module; receipt-intake submissions are reviewed in Approvals."
             >
-              Show submitted only
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push(buildHref("/approvals"))}
-              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-            >
-              Open approvals workspace
-            </button>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <StatusPill tone="amber">
+                  Submitted: {submittedExpenses.length}
+                </StatusPill>
+                <StatusPill tone="slate">
+                  Draft: {expenses.filter((entry) => entry.approvalStatus === "DRAFT").length}
+                </StatusPill>
+                <StatusPill tone="emerald">
+                  Approved: {expenses.filter((entry) => entry.approvalStatus === "APPROVED").length}
+                </StatusPill>
+                <button
+                  type="button"
+                  onClick={() => router.push(buildHref("/expenses", { status: "SUBMITTED" }))}
+                  className="rounded-md border border-amber-200 bg-white px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-50"
+                >
+                  Show submitted only
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push(buildHref("/approvals"))}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Open approvals workspace
+                </button>
+              </div>
+            </Card>
           </div>
-        </Card>
+        </details>
 
-        {!loading && expenses.length === 0 && (
-          <p className="gf-empty-state">
-            No expenses found for current filters.
-          </p>
-        )}
+        <details className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+            View Expense History and Analytics
+          </summary>
+          <div className="space-y-4 border-t border-slate-200 p-4">
+            <section
+              id="expenses-primary-kpi-section"
+              className={cn(
+                "gf-section",
+                focusedSectionId === "expenses-primary-kpi-section" &&
+                  "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+              )}
+            >
+              <SectionHeader
+                title="Primary Expense KPIs"
+                description="Most important expense signals in the current scope."
+              />
+              <div className="gf-kpi-grid-primary">
+                <MetricCard
+                  label={isScoped ? "Expenses in Scope" : "Total Expenses"}
+                  value={formatCurrency(analytics.kpis.totalExpenses)}
+                  change={`Approved: ${formatCurrency(analytics.kpis.approvedExpenses)}`}
+                  tone="warn"
+                />
+                <MetricCard label="Highest Expense Project" value={analytics.kpis.highestExpenseProject} />
+                <MetricCard label="Highest Expense Rig" value={analytics.kpis.highestExpenseRig} />
+                <MetricCard label="Biggest Category" value={analytics.kpis.biggestCategory} />
+              </div>
+              <p className="mt-2 text-xs text-slate-600">
+                Expense analytics on this page include all visible statuses. Financial dashboards use approved expenses only.
+              </p>
+            </section>
+
+            {!loading && expenses.length === 0 && (
+              <p className="gf-empty-state">
+                No expenses found for current filters.
+              </p>
+            )}
 
         <section
           id="expenses-entry-section"
@@ -1616,6 +1640,8 @@ function ExpensesPageContent() {
             )}
           </Card>
         </section>
+          </div>
+        </details>
       </div>
     </AccessGate>
   );

@@ -17,7 +17,7 @@ export const navItems: NavItem[] = [
   { href: "/projects", label: "Projects", permission: "projects:view" },
   { href: "/rigs", label: "Rigs", permission: "rigs:view" },
   { href: "/drilling-reports", label: "Drilling Reports", permission: "drilling:view" },
-  { href: "/expenses", label: "Requisitions / Costs", permission: "expenses:manual" },
+  { href: "/expenses", label: "Purchase Requests", permission: "expenses:manual" },
   { href: "/breakdowns", label: "Breakdowns", permission: "breakdowns:view" },
   { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
   { href: "/inventory", label: "Inventory", permission: "inventory:view" },
@@ -37,7 +37,7 @@ export const inventoryNavChildren: NavChildItem[] = [
   { href: "/inventory", label: "Inventory Overview", permission: "inventory:view" },
   { href: "/inventory/items", label: "Items", permission: "inventory:view" },
   { href: "/inventory/stock-movements", label: "Stock Movements", permission: "inventory:view" },
-  { href: "/inventory/receipt-intake", label: "Receipt Intake", permission: "inventory:view" },
+  { href: "/inventory/receipt-intake", label: "Complete Purchase & Receipt", permission: "inventory:view" },
   { href: "/inventory/issues", label: "Issues", permission: "inventory:view" }
 ];
 
@@ -50,6 +50,6 @@ export const setupNavChildren: NavChildItem[] = [
 
 // Backward-compatible export for older sidebar implementations.
 export const receiptProcessingChildren: NavChildItem[] = [
-  { href: "/inventory/receipt-intake", label: "Scan Receipt", permission: "inventory:view" },
+  { href: "/inventory/receipt-intake", label: "Complete Purchase", permission: "inventory:view" },
   { href: "/inventory/receipt-intake?view=history", label: "Intake History", permission: "inventory:view" }
 ];
