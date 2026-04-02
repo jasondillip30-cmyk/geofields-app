@@ -175,10 +175,27 @@ interface RequisitionPrefill {
   id: string;
   requisitionCode: string;
   type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+  liveProjectSpendType: "BREAKDOWN" | "NORMAL_EXPENSE" | null;
+  category: string | null;
+  subcategory: string | null;
+  requestedVendorName: string | null;
   clientId: string | null;
   projectId: string | null;
   rigId: string | null;
   maintenanceRequestId: string | null;
+  lineItems: Array<{
+    id: string;
+    description: string;
+    quantity: number;
+    estimatedUnitCost: number;
+    estimatedTotalCost: number;
+    notes: string | null;
+  }>;
+  totals: {
+    estimatedTotalCost: number;
+    approvedTotalCost: number;
+    actualPostedCost: number;
+  };
 }
 
 type ReceiptEntryMode = "REQUISITION" | "MANUAL" | "";
@@ -189,7 +206,11 @@ interface ApprovedRequisitionRow {
   id: string;
   requisitionCode: string;
   type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+  liveProjectSpendType: "BREAKDOWN" | "NORMAL_EXPENSE" | null;
   status: "SUBMITTED" | "APPROVED" | "REJECTED" | "PURCHASE_COMPLETED";
+  category: string | null;
+  subcategory: string | null;
+  requestedVendorName: string | null;
   submittedAt: string;
   context: {
     clientId: string | null;
@@ -197,6 +218,14 @@ interface ApprovedRequisitionRow {
     rigId: string | null;
     maintenanceRequestId: string | null;
   };
+  lineItems: Array<{
+    id: string;
+    description: string;
+    quantity: number;
+    estimatedUnitCost: number;
+    estimatedTotalCost: number;
+    notes: string | null;
+  }>;
   totals: {
     estimatedTotalCost: number;
     approvedTotalCost: number;
@@ -233,10 +262,20 @@ function InventoryReceiptIntakePageContent() {
       id: requisitionId,
       requisitionCode: normalizeOptionalId(searchParams.get("requisitionCode")) || requisitionId.slice(-8),
       type,
+      liveProjectSpendType: normalizeLiveProjectSpendType(searchParams.get("liveProjectSpendType")),
+      category: null,
+      subcategory: null,
+      requestedVendorName: null,
       clientId: normalizeOptionalId(searchParams.get("clientId")),
       projectId: normalizeOptionalId(searchParams.get("projectId")),
       rigId: normalizeOptionalId(searchParams.get("rigId")),
-      maintenanceRequestId: normalizeOptionalId(searchParams.get("maintenanceRequestId"))
+      maintenanceRequestId: normalizeOptionalId(searchParams.get("maintenanceRequestId")),
+      lineItems: [],
+      totals: {
+        estimatedTotalCost: 0,
+        approvedTotalCost: 0,
+        actualPostedCost: 0
+      }
     };
   }, [searchParams]);
 
@@ -275,21 +314,27 @@ function InventoryReceiptIntakePageContent() {
     if (!selectedRequisitionId) {
       return null;
     }
+    if (selectedApprovedRequisition) {
+      return {
+        id: selectedApprovedRequisition.id,
+        requisitionCode: selectedApprovedRequisition.requisitionCode,
+        type: selectedApprovedRequisition.type,
+        liveProjectSpendType: selectedApprovedRequisition.liveProjectSpendType,
+        category: selectedApprovedRequisition.category,
+        subcategory: selectedApprovedRequisition.subcategory,
+        requestedVendorName: selectedApprovedRequisition.requestedVendorName,
+        clientId: selectedApprovedRequisition.context.clientId,
+        projectId: selectedApprovedRequisition.context.projectId,
+        rigId: selectedApprovedRequisition.context.rigId,
+        maintenanceRequestId: selectedApprovedRequisition.context.maintenanceRequestId,
+        lineItems: selectedApprovedRequisition.lineItems,
+        totals: selectedApprovedRequisition.totals
+      };
+    }
     if (urlRequisitionPrefill?.id === selectedRequisitionId) {
       return urlRequisitionPrefill;
     }
-    if (!selectedApprovedRequisition) {
-      return null;
-    }
-    return {
-      id: selectedApprovedRequisition.id,
-      requisitionCode: selectedApprovedRequisition.requisitionCode,
-      type: selectedApprovedRequisition.type,
-      clientId: selectedApprovedRequisition.context.clientId,
-      projectId: selectedApprovedRequisition.context.projectId,
-      rigId: selectedApprovedRequisition.context.rigId,
-      maintenanceRequestId: selectedApprovedRequisition.context.maintenanceRequestId
-    };
+    return null;
   }, [selectedApprovedRequisition, selectedRequisitionId, urlRequisitionPrefill]);
   const activeRequisitionPrefill = useMemo<RequisitionPrefill | null>(
     () => (entryMode === "REQUISITION" ? selectedRequisitionPrefill : null),
@@ -480,7 +525,12 @@ function InventoryReceiptIntakePageContent() {
             id: entry.id,
             requisitionCode: entry.requisitionCode,
             type: entry.type,
+            liveProjectSpendType: normalizeLiveProjectSpendType(entry.liveProjectSpendType),
             status: entry.status,
+            category: typeof entry.category === "string" ? entry.category : null,
+            subcategory: typeof entry.subcategory === "string" ? entry.subcategory : null,
+            requestedVendorName:
+              typeof entry.requestedVendorName === "string" ? entry.requestedVendorName : null,
             submittedAt: entry.submittedAt,
             context: {
               clientId: entry.context?.clientId || null,
@@ -488,6 +538,18 @@ function InventoryReceiptIntakePageContent() {
               rigId: entry.context?.rigId || null,
               maintenanceRequestId: entry.context?.maintenanceRequestId || null
             },
+            lineItems: Array.isArray(entry.lineItems)
+              ? entry.lineItems
+                  .map((line) => ({
+                    id: String(line?.id || ""),
+                    description: String(line?.description || "").trim(),
+                    quantity: Number(line?.quantity || 0),
+                    estimatedUnitCost: Number(line?.estimatedUnitCost || 0),
+                    estimatedTotalCost: Number(line?.estimatedTotalCost || 0),
+                    notes: typeof line?.notes === "string" ? line.notes : null
+                  }))
+                  .filter((line) => line.description.length > 0)
+              : [],
             totals: {
               estimatedTotalCost: Number(entry.totals?.estimatedTotalCost || 0),
               approvedTotalCost: Number(entry.totals?.approvedTotalCost || 0),
@@ -1223,6 +1285,13 @@ function normalizeRequisitionType(value: string | null) {
     value === "INVENTORY_STOCK_UP" ||
     value === "MAINTENANCE_PURCHASE"
   ) {
+    return value;
+  }
+  return null;
+}
+
+function normalizeLiveProjectSpendType(value: unknown): "BREAKDOWN" | "NORMAL_EXPENSE" | null {
+  if (value === "BREAKDOWN" || value === "NORMAL_EXPENSE") {
     return value;
   }
   return null;

@@ -39,10 +39,27 @@ interface ReceiptIntakePanelProps {
     id: string;
     requisitionCode: string;
     type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+    liveProjectSpendType?: "BREAKDOWN" | "NORMAL_EXPENSE" | null;
+    category?: string | null;
+    subcategory?: string | null;
+    requestedVendorName?: string | null;
     clientId?: string | null;
     projectId?: string | null;
     rigId?: string | null;
     maintenanceRequestId?: string | null;
+    lineItems?: Array<{
+      id: string;
+      description: string;
+      quantity: number;
+      estimatedUnitCost: number;
+      estimatedTotalCost: number;
+      notes: string | null;
+    }>;
+    totals?: {
+      estimatedTotalCost?: number;
+      approvedTotalCost?: number;
+      actualPostedCost?: number;
+    };
   } | null;
   activeSubmission?: {
     id: string;
@@ -248,6 +265,8 @@ type ReceiptWorkflowChoice =
   | "INTERNAL_TRANSFER";
 type ReceiptInputMethod = "SCAN" | "MANUAL";
 type ReceiptFollowUpStage = "SCAN" | "REVIEW" | "FINALIZE";
+
+const SCAN_FALLBACK_MESSAGE = "Scan could not extract receipt data. Please complete manually.";
 
 interface QrCropSelection {
   x: number;
@@ -795,6 +814,27 @@ export function ReceiptIntakePanel({
           receiptWorkflowChoice,
           initialRequisition
         });
+        const extractedHasUsableData = hasMeaningfulExtractedPayload(payload.extracted);
+        const mappedReviewHasUsableData = hasMeaningfulReviewData(nextReview);
+        if (!extractedHasUsableData || !mappedReviewHasUsableData) {
+          const fallbackReview = buildManualAssistReview({
+            payload,
+            receiptFileName: receiptFile.name,
+            defaultClientId,
+            defaultRigId,
+            warning: SCAN_FALLBACK_MESSAGE,
+            receiptClassification: selectedWorkflowConfig.classification,
+            receiptWorkflowChoice,
+            initialRequisition
+          });
+          setReview(fallbackReview);
+          setNoticeTone("WARNING");
+          setNotice(SCAN_FALLBACK_MESSAGE);
+          setError(null);
+          setExtractState("FAILED");
+          setFollowUpStage("REVIEW");
+          return;
+        }
         setReview(nextReview);
         const intakeMessage = calmMessage(
           payload.message ||
@@ -830,15 +870,15 @@ export function ReceiptIntakePanel({
         defaultRigId,
         warning:
           response.ok
-            ? readPayloadMessage(payload, "Some fields need review. You can continue manually.")
-            : readApiError(response, payload, "Some fields need review. You can continue manually."),
+            ? readPayloadMessage(payload, SCAN_FALLBACK_MESSAGE)
+            : readApiError(response, payload, SCAN_FALLBACK_MESSAGE),
         receiptClassification: selectedWorkflowConfig.classification,
         receiptWorkflowChoice,
         initialRequisition
       });
       setReview(fallbackReview);
       setNoticeTone("WARNING");
-      setNotice("Review recommended. You can continue manually with the captured receipt.");
+      setNotice(SCAN_FALLBACK_MESSAGE);
       setError(null);
       setExtractState("FAILED");
       setFollowUpStage("REVIEW");
@@ -856,14 +896,14 @@ export function ReceiptIntakePanel({
           timeoutMessage ||
           (scanError instanceof Error && scanError.message
             ? scanError.message
-            : "Some fields need review. You can continue manually."),
+            : SCAN_FALLBACK_MESSAGE),
         receiptClassification: selectedWorkflowConfig.classification,
         receiptWorkflowChoice,
         initialRequisition
       });
       setReview(fallbackReview);
       setNoticeTone("WARNING");
-      setNotice("Review recommended. You can continue manually with the captured receipt.");
+      setNotice(SCAN_FALLBACK_MESSAGE);
       setError(null);
       setExtractState("FAILED");
       setFollowUpStage("REVIEW");
@@ -1715,7 +1755,15 @@ export function ReceiptIntakePanel({
               </div>
               <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
                 <p>
-                  <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, and totals.
+                  {review.extractionMethod === "REQUISITION_FALLBACK" ? (
+                    <>
+                      <span className="font-semibold">Auto-filled from approved requisition:</span> context, vendor, line items, and estimated totals.
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, and totals.
+                    </>
+                  )}
                 </p>
               </div>
               {review.receiptUrl && (
@@ -3070,6 +3118,87 @@ function formatDateTimeText(value: string) {
   return parsed.toLocaleString();
 }
 
+function hasMeaningfulExtractedPayload(extracted: Record<string, unknown>) {
+  const header = asRecord(extracted.header);
+  const qr = asRecord(extracted.qr);
+  const qrParsedFields = asRecord(qr?.parsedFields);
+  const rawLines = Array.isArray(extracted.lines) ? extracted.lines : [];
+  if (rawLines.length > 0) {
+    return true;
+  }
+
+  const identityKeys = [
+    "supplierName",
+    "receiptNumber",
+    "verificationCode",
+    "traReceiptNumber",
+    "serialNumber",
+    "invoiceReference",
+    "tin",
+    "vrn"
+  ];
+  for (const source of [header, qrParsedFields]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of identityKeys) {
+      const value = source[key];
+      if (typeof value === "string" && value.trim().length > 0) {
+        return true;
+      }
+    }
+  }
+
+  const numericKeys = ["subtotal", "tax", "total"];
+  for (const source of [header, qrParsedFields]) {
+    if (!source) {
+      continue;
+    }
+    for (const key of numericKeys) {
+      const raw = source[key];
+      const parsed =
+        typeof raw === "number"
+          ? raw
+          : typeof raw === "string"
+            ? Number(raw.replace(/,/g, ""))
+            : Number.NaN;
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return true;
+      }
+    }
+  }
+
+  if (typeof qr?.rawValue === "string" && qr.rawValue.trim().length > 0) {
+    return true;
+  }
+  if (typeof extracted.rawTextPreview === "string" && extracted.rawTextPreview.trim().length >= 20) {
+    return true;
+  }
+  return false;
+}
+
+function hasMeaningfulReviewData(review: ReviewState) {
+  if (review.lines.length > 0) {
+    return true;
+  }
+  if (
+    review.supplierName ||
+    review.receiptNumber ||
+    review.verificationCode ||
+    review.traReceiptNumber ||
+    review.serialNumber ||
+    review.invoiceReference ||
+    review.rawQrValue
+  ) {
+    return true;
+  }
+  return (
+    Number(review.total || 0) > 0 ||
+    Number(review.subtotal || 0) > 0 ||
+    Number(review.tax || 0) > 0
+  );
+}
+
 function mapExtractedLines(linesValue: unknown): ReviewLineState[] {
   if (!Array.isArray(linesValue)) {
     return [];
@@ -3120,6 +3249,122 @@ function mapExtractedLines(linesValue: unknown): ReviewLineState[] {
       newItemMinimumStockLevel: "0"
     };
   });
+}
+
+function mapRequisitionCategoryToInventoryCategory(value: string | null | undefined): string {
+  if (!value) {
+    return "OTHER";
+  }
+  const normalized = value.trim().toUpperCase().replace(/\s+/g, "_");
+  if (inventoryCategoryOptions.some((entry) => entry.value === normalized)) {
+    return normalized;
+  }
+  if (normalized.includes("OIL") || normalized.includes("LUB")) {
+    return "OILS";
+  }
+  if (normalized.includes("FILTER")) {
+    return "FILTERS";
+  }
+  if (normalized.includes("TIRE")) {
+    return "TIRES";
+  }
+  if (normalized.includes("HYDRAULIC")) {
+    return "HYDRAULIC";
+  }
+  if (normalized.includes("ELECT")) {
+    return "ELECTRICAL";
+  }
+  if (normalized.includes("SPARE")) {
+    return "SPARE_PARTS";
+  }
+  if (normalized.includes("CONSUM")) {
+    return "CONSUMABLES";
+  }
+  if (normalized.includes("DRILL")) {
+    return "DRILLING";
+  }
+  return "OTHER";
+}
+
+function resolveRequisitionEstimatedTotal(initialRequisition: ReceiptIntakePanelProps["initialRequisition"]) {
+  if (!initialRequisition?.totals) {
+    return 0;
+  }
+  const approvedTotal = Number(initialRequisition.totals.approvedTotalCost || 0);
+  if (Number.isFinite(approvedTotal) && approvedTotal > 0) {
+    return approvedTotal;
+  }
+  const estimatedTotal = Number(initialRequisition.totals.estimatedTotalCost || 0);
+  if (Number.isFinite(estimatedTotal) && estimatedTotal > 0) {
+    return estimatedTotal;
+  }
+  return 0;
+}
+
+function mapRequisitionLineItems(
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"],
+  classification: ReceiptClassification
+): ReviewLineState[] {
+  if (!initialRequisition || !Array.isArray(initialRequisition.lineItems)) {
+    return [];
+  }
+  const selectedCategory = mapRequisitionCategoryToInventoryCategory(initialRequisition.category);
+  const subcategorySuffix = initialRequisition.subcategory?.trim()
+    ? ` • ${initialRequisition.subcategory.trim()}`
+    : "";
+  return initialRequisition.lineItems
+    .map((line, index) => {
+      const description = String(line.description || "").trim();
+      if (!description) {
+        return null;
+      }
+      const quantity = Number(line.quantity || 0);
+      const unitPrice = Number(line.estimatedUnitCost || 0);
+      const total = Number(line.estimatedTotalCost || 0);
+      const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+      const safeUnitPrice = Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : 0;
+      const safeTotal =
+        Number.isFinite(total) && total > 0 ? total : Math.max(0, safeQuantity * safeUnitPrice);
+      return {
+        id: `req-${line.id || index + 1}`,
+        description,
+        quantity: String(safeQuantity),
+        unitPrice: String(safeUnitPrice),
+        lineTotal: String(safeTotal),
+        extractionConfidence: "MEDIUM",
+        selectedCategory,
+        suggestedCategory: selectedCategory === "OTHER" ? null : selectedCategory,
+        categoryReason: `Prefilled from approved requisition category${subcategorySuffix || ""}.`,
+        mode:
+          classification === "EXPENSE_ONLY"
+            ? "EXPENSE_ONLY"
+            : classification === "INTERNAL_TRANSFER"
+              ? "MATCH"
+              : "NEW",
+        selectedItemId: "",
+        matchConfidence: "NONE",
+        matchScore: 0,
+        newItemName: description,
+        newItemSku: "",
+        newItemMinimumStockLevel: "0"
+      };
+    })
+    .filter((line): line is ReviewLineState => Boolean(line));
+}
+
+function resolveReviewLinesWithRequisitionFallback({
+  extractedLines,
+  initialRequisition,
+  classification
+}: {
+  extractedLines: ReviewLineState[];
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+  classification: ReceiptClassification;
+}) {
+  if (extractedLines.length > 0) {
+    return extractedLines;
+  }
+  return mapRequisitionLineItems(initialRequisition, classification);
 }
 
 function isLikelyNonInventoryLine(description: string) {
@@ -3420,6 +3665,20 @@ function buildReviewStateFromPayload({
         receiptPurpose: workflowConfig.receiptPurpose,
         createExpense: workflowConfig.createExpense
       };
+  const requisitionEstimatedTotal = resolveRequisitionEstimatedTotal(initialRequisition);
+  const requisitionFallbackLines = mapRequisitionLineItems(
+    initialRequisition,
+    effectiveClassification
+  );
+  const extractedLines = mapExtractedLines(extracted.lines);
+  const lines = resolveReviewLinesWithRequisitionFallback({
+    extractedLines,
+    initialRequisition,
+    classification: effectiveClassification
+  });
+  const fallbackSupplierName = normalizeSupplierName(
+    asString(initialRequisition?.requestedVendorName)
+  );
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -3437,7 +3696,7 @@ function buildReviewStateFromPayload({
     receiptUrl: payload.receipt?.url || "",
     receiptFileName: payload.receipt?.fileName || receiptFileName,
     supplierId: asString(supplierSuggestion.supplierId),
-    supplierName: resolvedSupplierName,
+    supplierName: resolvedSupplierName || fallbackSupplierName,
     tin: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -3516,17 +3775,20 @@ function buildReviewStateFromPayload({
     subtotal: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["subtotal", "subTotal", "amountBeforeTax"]
+      keys: ["subtotal", "subTotal", "amountBeforeTax"],
+      fallback: requisitionEstimatedTotal
     }),
     tax: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["tax", "vat"]
+      keys: ["tax", "vat"],
+      fallback: 0
     }),
     total: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["total", "amount", "grossTotal"]
+      keys: ["total", "amount", "grossTotal"],
+      fallback: requisitionEstimatedTotal
     }),
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
@@ -3540,8 +3802,19 @@ function buildReviewStateFromPayload({
     receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
     warnings: Array.isArray(extracted.warnings)
-      ? Array.from(new Set(extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean)))
-      : [],
+      ? Array.from(
+          new Set(
+            [
+              ...extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean),
+              ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
+                ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
+                : [])
+            ].filter(Boolean)
+          )
+        )
+      : extractedLines.length === 0 && requisitionFallbackLines.length > 0
+        ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
+        : [],
     extractionMethod: asString(extracted.extractionMethod) || "UNKNOWN",
     scanStatus: normalizeScanStatus(extracted.scanStatus),
     receiptType: normalizeReceiptType(extracted.receiptType),
@@ -3550,10 +3823,7 @@ function buildReviewStateFromPayload({
     rawTextPreview: asString(extracted.rawTextPreview),
     debugFlags: readDebugFlags(payload),
     debugCandidates: readDebugCandidates(extracted.debug),
-    lines: applyReceiptClassificationLineDefaults(
-      mapExtractedLines(extracted.lines),
-      effectiveClassification
-    )
+    lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
 }
 
@@ -3639,6 +3909,20 @@ function buildManualAssistReview({
         receiptPurpose: workflowConfig.receiptPurpose,
         createExpense: workflowConfig.createExpense
       };
+  const requisitionEstimatedTotal = resolveRequisitionEstimatedTotal(initialRequisition);
+  const requisitionFallbackLines = mapRequisitionLineItems(
+    initialRequisition,
+    effectiveClassification
+  );
+  const extractedLines = mapExtractedLines(extracted?.lines);
+  const lines = resolveReviewLinesWithRequisitionFallback({
+    extractedLines,
+    initialRequisition,
+    classification: effectiveClassification
+  });
+  const fallbackSupplierName = normalizeSupplierName(
+    asString(initialRequisition?.requestedVendorName)
+  );
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -3651,6 +3935,9 @@ function buildManualAssistReview({
 
   const warnings = [
     calmMessage(warning),
+    ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
+      ? ["Receipt lines could not be extracted. Prefilled line items from the approved requisition."]
+      : []),
     ...(Array.isArray(extracted?.warnings)
       ? extracted?.warnings.map((entry) => calmMessage(asString(entry))).filter(Boolean)
       : [])
@@ -3663,7 +3950,7 @@ function buildManualAssistReview({
     receiptUrl: asString(receipt?.url),
     receiptFileName: asString(receipt?.fileName) || receiptFileName,
     supplierId: asString(supplierSuggestion?.supplierId),
-    supplierName: resolvedSupplierName,
+    supplierName: resolvedSupplierName || fallbackSupplierName,
     tin: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -3742,17 +4029,20 @@ function buildManualAssistReview({
     subtotal: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["subtotal", "subTotal", "amountBeforeTax"]
+      keys: ["subtotal", "subTotal", "amountBeforeTax"],
+      fallback: requisitionEstimatedTotal
     }),
     tax: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["tax", "vat"]
+      keys: ["tax", "vat"],
+      fallback: 0
     }),
     total: readNumericFieldValue({
       header: extractedHeader,
       qrParsedFields,
-      keys: ["total", "amount", "grossTotal"]
+      keys: ["total", "amount", "grossTotal"],
+      fallback: requisitionEstimatedTotal
     }),
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
@@ -3766,7 +4056,9 @@ function buildManualAssistReview({
     receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
     warnings: Array.from(new Set(warnings.filter(Boolean))),
-    extractionMethod: asString(extracted?.extractionMethod) || "UNKNOWN",
+    extractionMethod:
+      asString(extracted?.extractionMethod) ||
+      (requisitionFallbackLines.length > 0 ? "REQUISITION_FALLBACK" : "UNKNOWN"),
     scanStatus,
     receiptType: normalizeReceiptType(extracted?.receiptType),
     fieldConfidence: supplierFieldMaps.fieldConfidence,
@@ -3774,10 +4066,7 @@ function buildManualAssistReview({
     rawTextPreview: asString(extracted?.rawTextPreview),
     debugFlags: readDebugFlags(root),
     debugCandidates: readDebugCandidates(extracted?.debug),
-    lines: applyReceiptClassificationLineDefaults(
-      mapExtractedLines(extracted?.lines),
-      effectiveClassification
-    )
+    lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
 }
 
