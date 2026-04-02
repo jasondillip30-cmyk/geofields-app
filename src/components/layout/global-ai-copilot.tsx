@@ -1132,7 +1132,10 @@ function normalizePageKey(pathname: string) {
   if (pathname.startsWith("/inventory/issues")) {
     return "inventory-issues";
   }
-  if (pathname.startsWith("/inventory/receipt-intake")) {
+  if (
+    pathname.startsWith("/purchasing/receipt-follow-up") ||
+    pathname.startsWith("/inventory/receipt-intake")
+  ) {
     return "inventory-receipt-intake";
   }
   if (pathname.startsWith("/inventory/suppliers")) {
@@ -1194,7 +1197,10 @@ function inferPageKeyFromHref(href: string) {
   if (path.startsWith("/inventory/issues")) {
     return "inventory-issues";
   }
-  if (path.startsWith("/inventory/receipt-intake")) {
+  if (
+    path.startsWith("/purchasing/receipt-follow-up") ||
+    path.startsWith("/inventory/receipt-intake")
+  ) {
     return "inventory-receipt-intake";
   }
   if (path.startsWith("/inventory/suppliers")) {
@@ -1252,8 +1258,11 @@ function resolvePageName(pathname: string) {
   if (pathname.startsWith("/inventory/issues")) {
     return "Inventory Issues";
   }
-  if (pathname.startsWith("/inventory/receipt-intake")) {
-    return "Inventory Receipt Intake";
+  if (
+    pathname.startsWith("/purchasing/receipt-follow-up") ||
+    pathname.startsWith("/inventory/receipt-intake")
+  ) {
+    return "Purchase Receipt Follow-up";
   }
   if (pathname.startsWith("/inventory/suppliers")) {
     return "Inventory Suppliers";

@@ -7,6 +7,8 @@ export type RequisitionType =
   | "INVENTORY_STOCK_UP"
   | "MAINTENANCE_PURCHASE";
 
+export type LiveProjectSpendType = "BREAKDOWN" | "NORMAL_EXPENSE";
+
 export type RequisitionStatus =
   | "SUBMITTED"
   | "APPROVED"
@@ -27,8 +29,10 @@ export interface PurchaseRequisitionPayload {
   requisitionCode: string;
   type: RequisitionType;
   status: RequisitionStatus;
+  liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
   submittedBy: {
@@ -102,6 +106,13 @@ export function parseRequisitionStatus(value: unknown): RequisitionStatus | null
   return null;
 }
 
+export function parseLiveProjectSpendType(value: unknown): LiveProjectSpendType | null {
+  if (value === "BREAKDOWN" || value === "NORMAL_EXPENSE") {
+    return value;
+  }
+  return null;
+}
+
 export function parsePurchaseRequisitionPayload(
   payloadJson: string | null
 ): ParsedPurchaseRequisition | null {
@@ -121,6 +132,7 @@ export function parsePurchaseRequisitionPayload(
     if (!type || !status) {
       return null;
     }
+    const liveProjectSpendType = parseLiveProjectSpendType(root.liveProjectSpendType);
 
     const lineItemsRaw = Array.isArray(root.lineItems) ? root.lineItems : [];
     const lineItems: PurchaseRequisitionLineItem[] = lineItemsRaw
@@ -142,8 +154,10 @@ export function parsePurchaseRequisitionPayload(
       requisitionCode: readString(root.requisitionCode) || "REQ-UNKNOWN",
       type,
       status,
+      liveProjectSpendType: type === "LIVE_PROJECT_PURCHASE" ? liveProjectSpendType : null,
       category: readString(root.category) || "General",
       subcategory: readNullableString(root.subcategory),
+      requestedVendorName: readNullableString(root.requestedVendorName),
       notes: readNullableString(root.notes),
       submittedAt: readString(root.submittedAt) || new Date(0).toISOString(),
       submittedBy: {
@@ -223,6 +237,18 @@ export function requisitionTypeLabel(type: RequisitionType) {
     return "Maintenance purchase";
   }
   return "Inventory stock-up";
+}
+
+export function liveProjectSpendTypeLabel(
+  spendType: LiveProjectSpendType | null | undefined
+) {
+  if (spendType === "BREAKDOWN") {
+    return "Breakdown";
+  }
+  if (spendType === "NORMAL_EXPENSE") {
+    return "Normal expense";
+  }
+  return "-";
 }
 
 function normalizeLineItem(value: unknown, index: number): PurchaseRequisitionLineItem | null {

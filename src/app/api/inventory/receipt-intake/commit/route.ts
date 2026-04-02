@@ -2108,7 +2108,7 @@ function buildDuplicateReview({
           id: match.stockMovementId,
           label: `Receipt intake ${match.stockMovementId.slice(-8)}`,
           type: "RECEIPT_INTAKE",
-          url: `/inventory/receipt-intake?movementId=${match.stockMovementId}`
+          url: `/purchasing/receipt-follow-up?movementId=${match.stockMovementId}`
         });
       }
       if (!stockMovementsMap.has(match.stockMovementId)) {

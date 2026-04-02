@@ -603,11 +603,18 @@ export default function ProjectsPage() {
                   <button
                     key={`project-step-${entry.step}`}
                     type="button"
-                    onClick={() => setCurrentStep(entry.step)}
+                    onClick={() => {
+                      if (entry.step <= currentStep) {
+                        setCurrentStep(entry.step);
+                      }
+                    }}
+                    disabled={entry.step > currentStep}
                     className={`rounded-lg border px-2 py-2 text-left transition ${
                       currentStep === entry.step
                         ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
+                        : entry.step > currentStep
+                          ? "border-slate-200 bg-slate-100 text-slate-400"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                     }`}
                   >
                     <p className="text-xs font-semibold uppercase tracking-wide">Step {entry.step}</p>
@@ -1002,7 +1009,7 @@ export default function ProjectsPage() {
                     <button
                       type="button"
                       onClick={() => moveStep("next")}
-                      disabled={saving}
+                      disabled={saving || stepIssues.length > 0}
                       className="rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100 disabled:opacity-60"
                     >
                       Next Step
@@ -1032,6 +1039,9 @@ export default function ProjectsPage() {
                     >
                       Reset
                     </button>
+                  )}
+                  {currentStep < 6 && stepIssues.length > 0 && (
+                    <p className="text-xs text-amber-800">{stepIssues[0]}</p>
                   )}
                 </div>
               </form>

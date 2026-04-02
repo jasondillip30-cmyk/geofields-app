@@ -1813,7 +1813,7 @@ function formatEntrySource(source: string) {
     return "Manual";
   }
   if (source === "RECEIPT_INTAKE") {
-    return "Receipt Intake";
+    return "Purchase Follow-up";
   }
   return source
     .toLowerCase()

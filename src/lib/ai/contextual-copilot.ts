@@ -2475,8 +2475,8 @@ function resolveNavigationTargets({
       { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix cross-module linkage risks.", pageKey: "data-quality-linkage-center" }
     ],
     "inventory-receipt-intake": [
-      { label: "Open Receipt Intake", href: "/inventory/receipt-intake", reason: "Review receipt scan and intake flow.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-scan-section" },
-      { label: "Open Intake History", href: "/inventory/receipt-intake?view=history", reason: "Review pending and finalized intake records.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-history-section" },
+      { label: "Open Purchase Follow-up", href: "/purchasing/receipt-follow-up", reason: "Review receipt scan and intake flow.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-scan-section" },
+      { label: "Open Intake History", href: "/purchasing/receipt-follow-up?view=history", reason: "Review pending and finalized intake records.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-history-section" },
       { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace inventory impact from receipt intake.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" }
     ],
     maintenance: [
@@ -4454,7 +4454,7 @@ function resolveScopedPageHref(context: CopilotPageContext) {
     "inventory-items": "/inventory/items",
     "inventory-stock-movements": "/inventory/stock-movements",
     "inventory-issues": "/inventory/issues",
-    "inventory-receipt-intake": "/inventory/receipt-intake",
+    "inventory-receipt-intake": "/purchasing/receipt-follow-up",
     "inventory-suppliers": "/inventory/suppliers",
     "inventory-locations": "/inventory/locations",
     maintenance: "/maintenance",
@@ -4533,7 +4533,7 @@ function inferPageKeyFromHref(href: string | undefined) {
   if (path.startsWith("/inventory/issues")) {
     return "inventory-issues";
   }
-  if (path.startsWith("/inventory/receipt-intake")) {
+  if (path.startsWith("/purchasing/receipt-follow-up")) {
     return "inventory-receipt-intake";
   }
   if (path.startsWith("/inventory/suppliers")) {

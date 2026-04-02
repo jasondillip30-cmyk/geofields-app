@@ -120,6 +120,7 @@ interface ReceiptIntakePanelProps {
       }>;
     };
   } | null;
+  preferredInputMethod?: ReceiptInputMethod;
   renderCard?: boolean;
   onCompleted: () => Promise<void> | void;
 }
@@ -245,6 +246,7 @@ type ReceiptWorkflowChoice =
   | "MAINTENANCE_PURCHASE"
   | "STOCK_PURCHASE"
   | "INTERNAL_TRANSFER";
+type ReceiptInputMethod = "SCAN" | "MANUAL";
 
 interface QrCropSelection {
   x: number;
@@ -328,6 +330,7 @@ export function ReceiptIntakePanel({
   defaultRigId = "all",
   initialRequisition = null,
   activeSubmission = null,
+  preferredInputMethod = "SCAN",
   renderCard = true,
   onCompleted
 }: ReceiptIntakePanelProps) {
@@ -369,6 +372,7 @@ export function ReceiptIntakePanel({
   const canPreviewReceiptImage = Boolean(
     receiptPreviewUrl && receiptFile?.type.toLowerCase().startsWith("image/")
   );
+  const manualInputSelected = preferredInputMethod === "MANUAL";
   const requisitionLocked = Boolean(initialRequisition);
   const requisitionClassification = useMemo(
     () =>
@@ -415,6 +419,54 @@ export function ReceiptIntakePanel({
     initialRequisition,
     receiptClassification,
     requisitionClassification,
+    review
+  ]);
+
+  useEffect(() => {
+    if (!manualInputSelected || review || activeSubmission) {
+      return;
+    }
+    if (!receiptWorkflowChoice && !initialRequisition) {
+      return;
+    }
+
+    const workflowChoice = initialRequisition
+      ? mapRequisitionTypeToWorkflowChoice(initialRequisition.type)
+      : receiptWorkflowChoice;
+    if (!workflowChoice) {
+      return;
+    }
+
+    const workflowConfig = resolveWorkflowSelectionConfig(workflowChoice);
+    const effectiveClassification =
+      receiptClassification ||
+      (initialRequisition
+        ? mapRequisitionTypeToReceiptClassification(initialRequisition.type)
+        : workflowConfig.classification);
+
+    const seededReview = buildManualAssistReview({
+      payload: {},
+      receiptFileName: "",
+      defaultClientId,
+      defaultRigId,
+      warning:
+        "Manual entry selected. Complete receipt details directly and finalize when ready.",
+      receiptClassification: effectiveClassification,
+      receiptWorkflowChoice: workflowChoice,
+      initialRequisition
+    });
+    setReview(seededReview);
+    setNoticeTone("WARNING");
+    setNotice("Manual receipt mode started. Fill details directly, then finalize posting.");
+    setError(null);
+  }, [
+    activeSubmission,
+    defaultClientId,
+    defaultRigId,
+    initialRequisition,
+    manualInputSelected,
+    receiptClassification,
+    receiptWorkflowChoice,
     review
   ]);
 
@@ -1368,7 +1420,9 @@ export function ReceiptIntakePanel({
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 2</p>
-            <p className="text-slate-600">Upload and scan receipt</p>
+            <p className="text-slate-600">
+              {manualInputSelected ? "Manual receipt entry" : "Upload and scan receipt"}
+            </p>
           </div>
           <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5">
             <p className="font-semibold text-slate-800">Step 3</p>
@@ -1455,11 +1509,23 @@ export function ReceiptIntakePanel({
         )}
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Upload / scan receipt</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            {manualInputSelected
+              ? "Step 2 — Manual receipt entry (file optional)"
+              : "Step 2 — Upload / scan receipt"}
+          </p>
           <p className="mt-1 text-xs text-slate-600">
-            Capture receipt data first, then we will guide context linking before posting.
+            {manualInputSelected
+              ? "Manual mode lets you enter receipt details directly. Uploading a file is optional if you still want scan assistance."
+              : "Capture receipt data first, then we will guide context linking before posting."}
           </p>
         </div>
+
+        {manualInputSelected && (
+          <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            Manual mode is active. Enter receipt details directly in the review section below, then finalize.
+          </p>
+        )}
 
         <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
           <label className="text-xs text-ink-700">
@@ -1486,7 +1552,9 @@ export function ReceiptIntakePanel({
               ? "Capturing..."
               : extractState === "PROCESSING"
                 ? "Reading..."
-                : "Scan Receipt"}
+                : manualInputSelected
+                  ? "Use File Assist"
+                  : "Scan Receipt"}
           </button>
         </div>
 
@@ -2540,7 +2608,12 @@ function normalizeLinkedRecordUrl(url: string, type: LinkedRecordType, id: strin
   if (trimmed.startsWith("/inventory?section=stock-movements")) {
     return `/inventory/stock-movements?movementId=${id}`;
   }
-  if (trimmed.startsWith("/inventory/items") || trimmed.startsWith("/inventory/stock-movements") || trimmed.startsWith("/inventory/receipt-intake")) {
+  if (
+    trimmed.startsWith("/inventory/items") ||
+    trimmed.startsWith("/inventory/stock-movements") ||
+    trimmed.startsWith("/inventory/receipt-intake") ||
+    trimmed.startsWith("/purchasing/receipt-follow-up")
+  ) {
     return trimmed;
   }
   if (trimmed.startsWith("/expenses")) {
@@ -2555,14 +2628,14 @@ function normalizeLinkedRecordUrl(url: string, type: LinkedRecordType, id: strin
   if (type === "STOCK_MOVEMENT") {
     return `/inventory/stock-movements?movementId=${id}`;
   }
-  return `/inventory/receipt-intake?movementId=${id}`;
+  return `/purchasing/receipt-follow-up?movementId=${id}`;
 }
 
 function formatLinkedRecordType(value: LinkedRecordType) {
   if (value === "INVENTORY_ITEM") return "Inventory Item";
   if (value === "STOCK_MOVEMENT") return "Stock Movement";
   if (value === "EXPENSE") return "Expense Record";
-  return "Receipt Intake";
+  return "Purchase Follow-up";
 }
 
 function normalizeReceiptPurpose(value: string): ReceiptPurpose {

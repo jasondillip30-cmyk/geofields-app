@@ -31,14 +31,14 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Breakdowns: Drill,
   Revenue: BarChart3,
   Approvals: ClipboardList,
-  "Requisitions / Costs": Gauge,
+  "Purchase Requests": Gauge,
+  "Purchase Follow-up": ClipboardList,
   "Cost Tracking": Gauge,
   "Budget vs Actual": Gauge,
   Inventory: Boxes,
   "Inventory Overview": Boxes,
   Items: Boxes,
   "Stock Movements": ClipboardList,
-  "Receipt Intake": ClipboardList,
   Issues: ClipboardList,
   Vendors: Factory,
   Locations: Factory,
@@ -57,7 +57,8 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
       "Projects",
       "Rigs",
       "Drilling Reports",
-      "Requisitions / Costs",
+      "Purchase Requests",
+      "Purchase Follow-up",
       "Breakdowns",
       "Maintenance",
       "Inventory",
@@ -101,7 +102,6 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
     pathname === "/inventory" ||
     pathname.startsWith("/inventory/items") ||
     pathname.startsWith("/inventory/stock-movements") ||
-    pathname.startsWith("/inventory/receipt-intake") ||
     pathname.startsWith("/inventory/issues");
   const activeInventoryChildHref = resolveActiveInventoryChildHref({
     pathname,
@@ -261,7 +261,11 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                       }
 
                       const Icon = iconMap[item.label] || LayoutDashboard;
+                      const purchaseFollowUpAliasActive =
+                        item.href === "/purchasing/receipt-follow-up" &&
+                        pathname.startsWith("/inventory/receipt-intake");
                       const isActive =
+                        purchaseFollowUpAliasActive ||
                         pathname === item.href ||
                         (item.href !== "/" && pathname.startsWith(`${item.href}/`));
                       return (
@@ -357,7 +361,6 @@ function resolveActiveInventoryChildHref({
   pathname: string;
   children: Array<{ href: string }>;
 }) {
-  if (pathname === "/inventory/receipt-intake") return "/inventory/receipt-intake";
   if (pathname === "/inventory/items") return "/inventory/items";
   if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
   if (pathname === "/inventory/issues") return "/inventory/issues";

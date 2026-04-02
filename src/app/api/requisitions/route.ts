@@ -6,10 +6,12 @@ import { roundCurrency } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 import {
   buildRequisitionCode,
+  parseLiveProjectSpendType,
   parsePurchaseRequisitionPayload,
   parseRequisitionStatus,
   parseRequisitionType,
   PURCHASE_REQUISITION_REPORT_TYPE,
+  type LiveProjectSpendType,
   type PurchaseRequisitionPayload,
   type PurchaseRequisitionLineItem,
   type RequisitionStatus,
@@ -23,8 +25,10 @@ interface RequisitionRowOutput {
   requisitionCode: string;
   type: RequisitionType;
   status: RequisitionStatus;
+  liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
   submittedBy: {
@@ -171,6 +175,7 @@ export async function POST(request: NextRequest) {
   if (!category) {
     return NextResponse.json({ message: "Category is required." }, { status: 400 });
   }
+  const liveProjectSpendType = parseLiveProjectSpendType(body?.liveProjectSpendType);
 
   const lineItems = normalizeLineItems(body?.lineItems);
   if (lineItems.length === 0) {
@@ -268,6 +273,15 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+  if (type === "LIVE_PROJECT_PURCHASE" && !liveProjectSpendType) {
+    return NextResponse.json(
+      {
+        message:
+          "Live project purchases require selecting whether this is a breakdown or normal expense."
+      },
+      { status: 400 }
+    );
+  }
   if (type === "MAINTENANCE_PURCHASE" && !rigId) {
     return NextResponse.json(
       { message: "Maintenance purchases require a rig." },
@@ -293,8 +307,10 @@ export async function POST(request: NextRequest) {
     requisitionCode: buildRequisitionCode(submittedAt),
     type,
     status: "SUBMITTED" as const,
+    liveProjectSpendType: type === "LIVE_PROJECT_PURCHASE" ? liveProjectSpendType : null,
     category,
     subcategory: normalizeNullableText(body?.subcategory),
+    requestedVendorName: normalizeNullableText(body?.requestedVendorName),
     notes: normalizeNullableText(body?.notes),
     submittedAt: submittedAt.toISOString(),
     submittedBy: {
@@ -387,8 +403,10 @@ function serializeRequisitionRow(
     requisitionCode: payload.requisitionCode,
     type: payload.type,
     status: payload.status,
+    liveProjectSpendType: payload.liveProjectSpendType,
     category: payload.category,
     subcategory: payload.subcategory,
+    requestedVendorName: payload.requestedVendorName,
     notes: payload.notes,
     submittedAt: payload.submittedAt,
     submittedBy: payload.submittedBy,

@@ -79,8 +79,15 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
   {
     test: (pathname) => pathname.startsWith("/expenses"),
     meta: {
-      title: "Requisitions / Costs",
+      title: "Purchase Requests",
       subtitle: "Requisition-to-cost workspace for operational purchases and project-linked spending."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/purchasing/receipt-follow-up"),
+    meta: {
+      title: "Purchase Receipt Follow-up",
+      subtitle: "Continue approved requisitions into guided receipt capture, review, and posting."
     }
   },
   {
@@ -107,8 +114,8 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
   {
     test: (pathname) => pathname.startsWith("/inventory/receipt-intake"),
     meta: {
-      title: "Receipt Intake",
-      subtitle: "Guided receipt workflow for requisition fulfillment, stock-up, and expense-only records."
+      title: "Purchase Receipt Follow-up",
+      subtitle: "Legacy route: continue approved requisitions into guided receipt capture and posting."
     }
   },
   {

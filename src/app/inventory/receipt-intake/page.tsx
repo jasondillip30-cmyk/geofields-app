@@ -183,7 +183,8 @@ interface RequisitionPrefill {
   maintenanceRequestId: string | null;
 }
 
-type ReceiptEntryMode = "REQUISITION" | "MANUAL";
+type ReceiptEntryMode = "REQUISITION" | "MANUAL" | "";
+type ReceiptInputMethod = "SCAN" | "MANUAL" | "";
 type ReceiptFlowWizardStep = 1 | 2 | 3;
 
 interface ApprovedRequisitionRow {
@@ -240,7 +241,9 @@ function InventoryReceiptIntakePageContent() {
     };
   }, [searchParams]);
 
-  const [entryMode, setEntryMode] = useState<ReceiptEntryMode>("REQUISITION");
+  const [entryMode, setEntryMode] = useState<ReceiptEntryMode>("");
+  const [receiptInputMethod, setReceiptInputMethod] =
+    useState<ReceiptInputMethod>("");
   const [selectedRequisitionId, setSelectedRequisitionId] = useState<string>(
     () => urlRequisitionPrefill?.id || ""
   );
@@ -304,15 +307,28 @@ function InventoryReceiptIntakePageContent() {
       rigCode
     };
   }, [clients, projects, rigs, selectedRequisitionPrefill]);
+  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(1);
   const canRenderReceiptPanel =
     entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
-  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(1);
+  const stepOneBlockedReason =
+    wizardStep === 1 && !entryMode
+      ? "Choose a follow-up path to continue."
+      : "";
+  const stepTwoBlockedReason =
+    wizardStep !== 2
+      ? ""
+      : entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission
+        ? "Select an approved requisition to continue."
+        : !receiptInputMethod
+          ? "Choose scan or manual receipt input to continue."
+          : "";
 
   useEffect(() => {
     if (!urlRequisitionPrefill) {
       return;
     }
     setEntryMode("REQUISITION");
+    setReceiptInputMethod("SCAN");
     setSelectedRequisitionId(urlRequisitionPrefill.id);
     setWizardStep(2);
   }, [urlRequisitionPrefill]);
@@ -568,7 +584,7 @@ function InventoryReceiptIntakePageContent() {
           )}.`,
           severity: (row.summary.total || 0) >= 10000 ? ("HIGH" as const) : ("MEDIUM" as const),
           amount: row.summary.total || 0,
-          href: `/inventory/receipt-intake?view=history&submissionId=${row.id}`,
+          href: `/purchasing/receipt-follow-up?view=history&submissionId=${row.id}`,
           issueType: "APPROVAL_BACKLOG",
           targetId: row.id,
           sectionId: "inventory-receipt-history-section",
@@ -584,7 +600,7 @@ function InventoryReceiptIntakePageContent() {
           reason: `Movement value ${formatCurrency(row.totalCost || 0)} with linked receipt evidence.`,
           severity: (row.totalCost || 0) >= 10000 ? ("HIGH" as const) : ("MEDIUM" as const),
           amount: row.totalCost || 0,
-          href: `/inventory/receipt-intake?view=history`,
+          href: `/purchasing/receipt-follow-up?view=history`,
           issueType: "INVENTORY_MOVEMENT",
           targetId: row.id,
           sectionId: "inventory-receipt-history-section",
@@ -594,7 +610,7 @@ function InventoryReceiptIntakePageContent() {
 
     return {
       pageKey: "inventory-receipt-intake",
-      pageName: "Inventory Receipt Intake",
+      pageName: "Purchase Receipt Follow-up",
       filters: {
         clientId: filters.clientId,
         rigId: filters.rigId,
@@ -620,7 +636,7 @@ function InventoryReceiptIntakePageContent() {
             supplier: row.summary.supplierName || "-",
             receipt: row.summary.receiptNumber || "-",
             total: row.summary.total || 0,
-            href: `/inventory/receipt-intake?view=history&submissionId=${row.id}`,
+            href: `/purchasing/receipt-follow-up?view=history&submissionId=${row.id}`,
             targetId: row.id,
             sectionId: "inventory-receipt-history-section",
             targetPageKey: "inventory-receipt-intake"
@@ -637,7 +653,7 @@ function InventoryReceiptIntakePageContent() {
             supplier: row.supplier?.name || "-",
             item: row.item?.name || "-",
             value: row.totalCost || 0,
-            href: "/inventory/receipt-intake?view=history",
+            href: "/purchasing/receipt-follow-up?view=history",
             targetId: row.id,
             sectionId: "inventory-receipt-history-section",
             targetPageKey: "inventory-receipt-intake"
@@ -647,15 +663,15 @@ function InventoryReceiptIntakePageContent() {
       priorityItems: receiptPriorityItems,
       navigationTargets: [
         {
-          label: "Open Receipt Intake",
-          href: "/inventory/receipt-intake",
+          label: "Open Purchase Follow-up",
+          href: "/purchasing/receipt-follow-up",
           reason: "Capture and review receipt submissions.",
           pageKey: "inventory-receipt-intake",
           sectionId: "inventory-receipt-scan-section"
         },
         {
-          label: "Open Intake History",
-          href: "/inventory/receipt-intake?view=history",
+          label: "Open Follow-up History",
+          href: "/purchasing/receipt-follow-up?view=history",
           reason: "Review pending/finalized receipt records.",
           pageKey: "inventory-receipt-intake",
           sectionId: "inventory-receipt-history-section"
@@ -714,31 +730,23 @@ function InventoryReceiptIntakePageContent() {
         <section className="gf-page-header">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">Complete Purchase and Receipt</h1>
-              <p className="mt-1 text-sm text-slate-600">Continue approved purchases into receipt capture, review, and final posting.</p>
+              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
+                Complete Approved Purchase
+              </h1>
+              <p className="mt-1 text-sm text-slate-600">
+                Follow approved requisitions through receipt capture, review, and final posting.
+              </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Link
-                href="/inventory/receipt-intake"
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
-                  currentView === "scan"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                Scan Receipt
-              </Link>
-              <Link
-                href="/inventory/receipt-intake?view=history"
-                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
-                  currentView === "history"
-                    ? "border-brand-300 bg-brand-50 text-brand-800"
-                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                }`}
-              >
-                Intake History
-              </Link>
-            </div>
+            <Link
+              href={
+                currentView === "history"
+                  ? "/purchasing/receipt-follow-up"
+                  : "/purchasing/receipt-follow-up?view=history"
+              }
+              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {currentView === "history" ? "Back to follow-up flow" : "View intake history"}
+            </Link>
           </div>
           <div className="mt-3 border-t border-slate-200/80" />
         </section>
@@ -784,16 +792,28 @@ function InventoryReceiptIntakePageContent() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (wizardStep === 2 && entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission) {
+                    if (wizardStep === 1 && stepOneBlockedReason) {
+                      return;
+                    }
+                    if (wizardStep === 2 && stepTwoBlockedReason) {
                       return;
                     }
                     setWizardStep((current) => Math.min(3, current + 1) as ReceiptFlowWizardStep);
                   }}
-                  disabled={wizardStep === 2 && entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission}
+                  disabled={
+                    (wizardStep === 1 && Boolean(stepOneBlockedReason)) ||
+                    (wizardStep === 2 && Boolean(stepTwoBlockedReason))
+                  }
                   className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
                 >
                   Continue
                 </button>
+              )}
+              {wizardStep === 1 && stepOneBlockedReason && (
+                <p className="text-xs text-amber-800">{stepOneBlockedReason}</p>
+              )}
+              {wizardStep === 2 && stepTwoBlockedReason && (
+                <p className="text-xs text-amber-800">{stepTwoBlockedReason}</p>
               )}
             </div>
           </section>
@@ -808,7 +828,10 @@ function InventoryReceiptIntakePageContent() {
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               <button
                 type="button"
-                onClick={() => setEntryMode("REQUISITION")}
+                onClick={() => {
+                  setEntryMode("REQUISITION");
+                  setReceiptInputMethod("SCAN");
+                }}
                 className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
                   entryMode === "REQUISITION"
                     ? "border-brand-500 bg-white text-brand-900 shadow-sm"
@@ -819,7 +842,10 @@ function InventoryReceiptIntakePageContent() {
               </button>
               <button
                 type="button"
-                onClick={() => setEntryMode("MANUAL")}
+                onClick={() => {
+                  setEntryMode("MANUAL");
+                  setReceiptInputMethod("MANUAL");
+                }}
                 className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
                   entryMode === "MANUAL"
                     ? "border-brand-500 bg-white text-brand-900 shadow-sm"
@@ -834,7 +860,7 @@ function InventoryReceiptIntakePageContent() {
 
         {currentView === "scan" && wizardStep === 2 && (
           <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Configure Intake Context</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Configure Approved Purchase Follow-up</p>
             {entryMode === "REQUISITION" ? (
               <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
                 <label className="text-xs text-ink-700">
@@ -884,6 +910,38 @@ function InventoryReceiptIntakePageContent() {
                 Manual path selected. Continue to scanning and then complete required context during review.
               </p>
             )}
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Receipt Input Method
+              </p>
+              <p className="mt-1 text-xs text-slate-600">
+                Choose how you want to complete receipt details for this approved purchase.
+              </p>
+              <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setReceiptInputMethod("SCAN")}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    receiptInputMethod === "SCAN"
+                      ? "border-brand-300 bg-brand-50 text-brand-800"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Scan receipt
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReceiptInputMethod("MANUAL")}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
+                    receiptInputMethod === "MANUAL"
+                      ? "border-brand-300 bg-brand-50 text-brand-800"
+                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Manual receipt entry
+                </button>
+              </div>
+            </div>
           </section>
         )}
 
@@ -897,8 +955,12 @@ function InventoryReceiptIntakePageContent() {
           >
           <Card
             className="min-w-0"
-            title="Scan Receipt"
-            subtitle="Upload receipt files, confirm extracted fields, and create linked records"
+            title={receiptInputMethod === "MANUAL" ? "Complete Receipt Details" : "Scan Receipt"}
+            subtitle={
+              receiptInputMethod === "MANUAL"
+                ? "Enter receipt details directly, then review and finalize posting."
+                : "Upload receipt files, confirm extracted fields, and create linked records."
+            }
           >
             {!canManage && (
               <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -918,7 +980,7 @@ function InventoryReceiptIntakePageContent() {
             )}
             {canRenderReceiptPanel ? (
               <ReceiptIntakePanel
-                key={`${entryMode}:${activeRequisitionPrefill?.id || "manual"}`}
+                key={`${entryMode}:${receiptInputMethod}:${activeRequisitionPrefill?.id || "manual"}`}
                 renderCard={false}
                 canManage={canManage}
                 items={items}
@@ -931,6 +993,7 @@ function InventoryReceiptIntakePageContent() {
                 defaultClientId={activeRequisitionPrefill?.clientId || (filters.clientId !== "all" ? filters.clientId : "")}
                 defaultRigId={activeRequisitionPrefill?.rigId || (filters.rigId !== "all" ? filters.rigId : "")}
                 initialRequisition={activeRequisitionPrefill}
+                preferredInputMethod={receiptInputMethod || "SCAN"}
                 activeSubmission={activeSubmission}
                 onCompleted={async () => {
                   await loadData();
@@ -1010,7 +1073,7 @@ function InventoryReceiptIntakePageContent() {
                         <div key={`${row.id}-action`} className="flex flex-wrap gap-2">
                           {canManage && row.status !== "APPROVED" ? (
                             <Link
-                              href={`/inventory/receipt-intake?submissionId=${row.id}`}
+                              href={`/purchasing/receipt-follow-up?submissionId=${row.id}`}
                               className="rounded border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
                             >
                               Review & finalize

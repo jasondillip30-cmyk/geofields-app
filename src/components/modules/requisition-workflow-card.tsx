@@ -13,6 +13,7 @@ type RequisitionType =
   | "LIVE_PROJECT_PURCHASE"
   | "INVENTORY_STOCK_UP"
   | "MAINTENANCE_PURCHASE";
+type LiveProjectSpendType = "BREAKDOWN" | "NORMAL_EXPENSE";
 
 type RequisitionStatus =
   | "SUBMITTED"
@@ -36,8 +37,10 @@ interface RequisitionRow {
   requisitionCode: string;
   type: RequisitionType;
   status: RequisitionStatus;
+  liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
   submittedBy: {
@@ -114,17 +117,21 @@ const initialFormLine = (): RequisitionFormLine => ({
   notes: ""
 });
 
-const initialFormState = {
-  type: "LIVE_PROJECT_PURCHASE" as RequisitionType,
-  clientId: "",
-  projectId: "",
-  rigId: "",
-  maintenanceRequestId: "",
-  category: "Materials",
-  subcategory: "",
-  notes: "",
-  lines: [initialFormLine()]
-};
+function createInitialFormState() {
+  return {
+    type: "" as RequisitionType | "",
+    liveProjectSpendType: "" as LiveProjectSpendType | "",
+    clientId: "",
+    projectId: "",
+    rigId: "",
+    maintenanceRequestId: "",
+    category: "Materials",
+    subcategory: "",
+    requestedVendorName: "",
+    notes: "",
+    lines: [initialFormLine()]
+  };
+}
 
 export function RequisitionWorkflowCard({
   filters,
@@ -144,7 +151,7 @@ export function RequisitionWorkflowCard({
   const [rows, setRows] = useState<RequisitionRow[]>([]);
   const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceOption[]>([]);
   const [statusNotes, setStatusNotes] = useState<Record<string, string>>({});
-  const [form, setForm] = useState(initialFormState);
+  const [form, setForm] = useState(() => createInitialFormState());
   const [wizardStep, setWizardStep] = useState<RequisitionWizardStep>(1);
 
   const filteredProjects = useMemo(() => {
@@ -286,9 +293,11 @@ export function RequisitionWorkflowCard({
         return "Choose a requisition type to continue.";
       }
       if (step === 2) {
-        if (!form.category.trim()) {
-          return "Category is required.";
+        if (form.type === "LIVE_PROJECT_PURCHASE" && !form.liveProjectSpendType) {
+          return "Choose Breakdown or Normal expense to continue.";
         }
+      }
+      if (step === 3) {
         if (form.type === "LIVE_PROJECT_PURCHASE" && !form.projectId) {
           return "Live project purchase requisitions require a project.";
         }
@@ -296,11 +305,11 @@ export function RequisitionWorkflowCard({
           return "Maintenance purchase requisitions require a rig.";
         }
       }
-      if (step === 3 && form.notes.trim().length < 5) {
-        return "Add a short reason (at least 5 characters) before continuing.";
-      }
       if (step === 4 && validLineItems.length === 0) {
         return "Add at least one valid line item with quantity and estimated unit cost.";
+      }
+      if (step === 4 && !form.category.trim()) {
+        return "Category is required.";
       }
       return null;
     },
@@ -323,7 +332,7 @@ export function RequisitionWorkflowCard({
   }
 
   function restartWizard() {
-    setForm(initialFormState);
+    setForm(createInitialFormState());
     setWizardStep(1);
     setError(null);
   }
@@ -350,12 +359,15 @@ export function RequisitionWorkflowCard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             type: form.type,
+            liveProjectSpendType:
+              form.type === "LIVE_PROJECT_PURCHASE" ? form.liveProjectSpendType : null,
             clientId: form.clientId || null,
             projectId: form.projectId || null,
             rigId: form.rigId || null,
             maintenanceRequestId: form.maintenanceRequestId || null,
             category: form.category,
             subcategory: form.subcategory || null,
+            requestedVendorName: form.requestedVendorName || null,
             notes: form.notes || null,
             lineItems: validLineItems
           })
@@ -371,7 +383,7 @@ export function RequisitionWorkflowCard({
         setNotice(
           "Purchase request submitted. Next step is manager approval, then receipt/purchase posting."
         );
-        setForm(initialFormState);
+        setForm(createInitialFormState());
         setWizardStep(1);
         await loadRequisitions();
         if (onWorkflowChanged) {
@@ -460,7 +472,7 @@ export function RequisitionWorkflowCard({
                 href={receiptUrl}
                 className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
               >
-                Continue to receipt
+                Continue to receipt follow-up
               </Link>
             )}
             {row.status === "PURCHASE_COMPLETED" && (
@@ -515,6 +527,7 @@ export function RequisitionWorkflowCard({
       }),
     [actingId, canApprove, projects, rigs, rows, statusNotes, updateRequisitionStatus]
   );
+  const currentStepError = validateStep(wizardStep);
 
   return (
     <section id="expenses-requisition-workflow" className="space-y-4">
@@ -531,14 +544,14 @@ export function RequisitionWorkflowCard({
 
       <Card
         title="Create Purchase Request"
-        subtitle="Guided requisition flow: type → context → reason → line items → review"
+        subtitle="Guided requisition flow: type → purchase path → context → item details → review"
       >
         <div className="mb-4 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
           {([
             { step: 1, label: "Choose Type" },
-            { step: 2, label: "Set Context" },
-            { step: 3, label: "Reason" },
-            { step: 4, label: "Line Items" },
+            { step: 2, label: "Purchase Path" },
+            { step: 3, label: "Operational Context" },
+            { step: 4, label: "Item Details" },
             { step: 5, label: "Review & Submit" }
           ] as Array<{ step: RequisitionWizardStep; label: string }>).map((entry) => (
             <div
@@ -571,6 +584,9 @@ export function RequisitionWorkflowCard({
                     setForm((current) => ({
                       ...current,
                       type: "LIVE_PROJECT_PURCHASE",
+                      liveProjectSpendType: "",
+                      projectId: "",
+                      rigId: "",
                       maintenanceRequestId: ""
                     }))
                   }
@@ -580,7 +596,7 @@ export function RequisitionWorkflowCard({
                       : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  <p className="font-semibold">Live Project Purchase</p>
+                  <p className="font-semibold">Live Project</p>
                   <p className="mt-1 text-xs text-slate-600">Project-linked purchase that will flow into project cost after posting.</p>
                 </button>
                 <button
@@ -589,7 +605,9 @@ export function RequisitionWorkflowCard({
                     setForm((current) => ({
                       ...current,
                       type: "INVENTORY_STOCK_UP",
+                      liveProjectSpendType: "",
                       projectId: "",
+                      rigId: "",
                       maintenanceRequestId: ""
                     }))
                   }
@@ -599,7 +617,7 @@ export function RequisitionWorkflowCard({
                       : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  <p className="font-semibold">Stock / Warehouse Purchase</p>
+                  <p className="font-semibold">Inventory Stock-up</p>
                   <p className="mt-1 text-xs text-slate-600">Inventory replenishment with no required live project linkage.</p>
                 </button>
                 <button
@@ -607,7 +625,9 @@ export function RequisitionWorkflowCard({
                   onClick={() =>
                     setForm((current) => ({
                       ...current,
-                      type: "MAINTENANCE_PURCHASE"
+                      type: "MAINTENANCE_PURCHASE",
+                      liveProjectSpendType: "",
+                      projectId: ""
                     }))
                   }
                   className={`rounded-lg border px-3 py-3 text-left text-sm ${
@@ -616,8 +636,8 @@ export function RequisitionWorkflowCard({
                       : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  <p className="font-semibold">Maintenance Purchase</p>
-                  <p className="mt-1 text-xs text-slate-600">Rig repair or maintenance-related purchase.</p>
+                  <p className="font-semibold">Maintenance (Non-live / Idle Rig)</p>
+                  <p className="mt-1 text-xs text-slate-600">Rig repair or maintenance purchase outside active live-project scope.</p>
                 </button>
               </div>
             </div>
@@ -626,7 +646,60 @@ export function RequisitionWorkflowCard({
           {wizardStep === 2 && (
             <div className="space-y-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 2 — Select Operational Context
+                Step 2 — Choose Purchase Path
+              </p>
+              {form.type === "LIVE_PROJECT_PURCHASE" ? (
+                <div className="grid gap-2 md:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({ ...current, liveProjectSpendType: "BREAKDOWN" }))
+                    }
+                    className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                      form.liveProjectSpendType === "BREAKDOWN"
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <p className="font-semibold">Breakdown</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Urgent purchase to recover active drilling performance.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((current) => ({
+                        ...current,
+                        liveProjectSpendType: "NORMAL_EXPENSE"
+                      }))
+                    }
+                    className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                      form.liveProjectSpendType === "NORMAL_EXPENSE"
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
+                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <p className="font-semibold">Normal Expense</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Planned project purchase that is not breakdown-driven.
+                    </p>
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  {form.type === "INVENTORY_STOCK_UP"
+                    ? "Inventory stock-up selected. Continue to choose business context."
+                    : "Maintenance purchase selected. Continue to choose rig context."}
+                </div>
+              )}
+            </div>
+          )}
+
+          {wizardStep === 3 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 3 — Select Operational Context
               </p>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <SelectInput
@@ -660,7 +733,13 @@ export function RequisitionWorkflowCard({
                   }
                   disabled={form.type === "INVENTORY_STOCK_UP"}
                   options={[
-                    { value: "", label: form.type === "LIVE_PROJECT_PURCHASE" ? "Select project (required)" : "No project" },
+                    {
+                      value: "",
+                      label:
+                        form.type === "LIVE_PROJECT_PURCHASE"
+                          ? "Select project (required)"
+                          : "No project"
+                    },
                     ...filteredProjects.map((project) => ({
                       value: project.id,
                       label: project.name
@@ -672,7 +751,13 @@ export function RequisitionWorkflowCard({
                   value={form.rigId}
                   onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
                   options={[
-                    { value: "", label: form.type === "MAINTENANCE_PURCHASE" ? "Select rig (required)" : "No rig" },
+                    {
+                      value: "",
+                      label:
+                        form.type === "MAINTENANCE_PURCHASE"
+                          ? "Select rig (required)"
+                          : "No rig"
+                    },
                     ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
                   ]}
                 />
@@ -692,8 +777,18 @@ export function RequisitionWorkflowCard({
                     ]}
                   />
                 )}
+              </div>
+            </div>
+          )}
+
+          {wizardStep === 4 && (
+            <div className="space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Step 4 — Enter Item Details
+              </p>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <TextInput
-                  label="Category"
+                  label="Expense Category"
                   value={form.category}
                   onChange={(value) => setForm((current) => ({ ...current, category: value }))}
                   required
@@ -703,17 +798,16 @@ export function RequisitionWorkflowCard({
                   value={form.subcategory}
                   onChange={(value) => setForm((current) => ({ ...current, subcategory: value }))}
                 />
+                <TextInput
+                  label="Preferred Vendor (optional)"
+                  value={form.requestedVendorName}
+                  onChange={(value) =>
+                    setForm((current) => ({ ...current, requestedVendorName: value }))
+                  }
+                />
               </div>
-            </div>
-          )}
-
-          {wizardStep === 3 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 3 — Reason / Notes
-              </p>
               <label className="text-sm text-ink-700">
-                <span className="mb-1 block">Why is this purchase needed?</span>
+                <span className="mb-1 block">Reason / Notes (optional)</span>
                 <textarea
                   value={form.notes}
                   onChange={(event) =>
@@ -723,17 +817,6 @@ export function RequisitionWorkflowCard({
                   placeholder="Explain operational need, urgency, and expected impact."
                 />
               </label>
-              <p className="text-xs text-slate-600">
-                Keep this clear for approval review and receipt-stage matching.
-              </p>
-            </div>
-          )}
-
-          {wizardStep === 4 && (
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 4 — Add Line Items
-              </p>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                 <div className="space-y-2">
                   {form.lines.map((line) => (
@@ -818,6 +901,15 @@ export function RequisitionWorkflowCard({
                       >
                         Remove
                       </button>
+                      <p className="text-xs text-slate-600 md:col-span-12">
+                        Line amount:{" "}
+                        <span className="font-semibold">
+                          {formatCurrency(
+                            Math.max(0, Number(line.quantity) || 0) *
+                              Math.max(0, Number(line.estimatedUnitCost) || 0)
+                          )}
+                        </span>
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -852,6 +944,12 @@ export function RequisitionWorkflowCard({
                 <p>
                   <span className="font-semibold">Type:</span> {formatRequisitionType(form.type)}
                 </p>
+                {form.type === "LIVE_PROJECT_PURCHASE" && (
+                  <p>
+                    <span className="font-semibold">Live project path:</span>{" "}
+                    {formatLiveProjectSpendType(form.liveProjectSpendType)}
+                  </p>
+                )}
                 <p>
                   <span className="font-semibold">Client:</span>{" "}
                   {clients.find((entry) => entry.id === form.clientId)?.name || "-"}
@@ -867,6 +965,10 @@ export function RequisitionWorkflowCard({
                 <p>
                   <span className="font-semibold">Category:</span> {form.category || "-"}
                   {form.subcategory ? ` / ${form.subcategory}` : ""}
+                </p>
+                <p>
+                  <span className="font-semibold">Preferred Vendor:</span>{" "}
+                  {form.requestedVendorName.trim() || "-"}
                 </p>
                 <p>
                   <span className="font-semibold">Reason:</span>{" "}
@@ -906,7 +1008,8 @@ export function RequisitionWorkflowCard({
               <button
                 type="button"
                 onClick={continueWizard}
-                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+                disabled={Boolean(currentStepError)}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Continue
               </button>
@@ -926,6 +1029,9 @@ export function RequisitionWorkflowCard({
             >
               Restart
             </button>
+            {wizardStep < 5 && currentStepError && (
+              <p className="text-xs text-amber-800">{currentStepError}</p>
+            )}
           </div>
         </form>
       </Card>
@@ -1051,10 +1157,23 @@ function TextInput({
   );
 }
 
-function formatRequisitionType(type: RequisitionType) {
+function formatRequisitionType(type: RequisitionType | "") {
+  if (!type) return "-";
   if (type === "LIVE_PROJECT_PURCHASE") return "Live project purchase";
   if (type === "MAINTENANCE_PURCHASE") return "Maintenance purchase";
   return "Stock / warehouse purchase";
+}
+
+function formatLiveProjectSpendType(
+  spendType: LiveProjectSpendType | "" | null | undefined
+) {
+  if (spendType === "BREAKDOWN") {
+    return "Breakdown";
+  }
+  if (spendType === "NORMAL_EXPENSE") {
+    return "Normal expense";
+  }
+  return "-";
 }
 
 function lookupProjectName(
@@ -1093,7 +1212,7 @@ function buildReceiptIntakeHref(row: RequisitionRow) {
   if (row.context.maintenanceRequestId) {
     query.set("maintenanceRequestId", row.context.maintenanceRequestId);
   }
-  return `/inventory/receipt-intake?${query.toString()}`;
+  return `/purchasing/receipt-follow-up?${query.toString()}`;
 }
 
 function StatusChip({ status }: { status: RequisitionStatus }) {

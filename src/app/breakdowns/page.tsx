@@ -38,6 +38,8 @@ interface BreakdownRecord {
   reportedBy: { fullName: string; role: string };
 }
 
+type BreakdownWizardStep = 1 | 2 | 3;
+
 export default function BreakdownsPage() {
   const { filters } = useAnalyticsFilters();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
@@ -47,6 +49,7 @@ export default function BreakdownsPage() {
   const [saving, setSaving] = useState(false);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
+  const [wizardStep, setWizardStep] = useState<BreakdownWizardStep>(1);
   const [form, setForm] = useState({
     projectId: "",
     rigId: "",
@@ -200,8 +203,35 @@ export default function BreakdownsPage() {
     return () => window.clearTimeout(timeout);
   }, [focusedRowId, focusedSectionId]);
 
+  const currentStepError =
+    wizardStep === 1
+      ? !form.projectId
+        ? "Select the affected project to continue."
+        : ""
+      : wizardStep === 2
+        ? !form.title.trim()
+          ? "Enter a breakdown title."
+          : !form.description.trim()
+            ? "Enter a breakdown description."
+            : ""
+        : "";
+
+  function goToNextStep() {
+    if (currentStepError) {
+      return;
+    }
+    setWizardStep((current) => Math.min(3, current + 1) as BreakdownWizardStep);
+  }
+
+  function goToPreviousStep() {
+    setWizardStep((current) => Math.max(1, current - 1) as BreakdownWizardStep);
+  }
+
   async function submitBreakdown(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (currentStepError) {
+      return;
+    }
     setSaving(true);
     try {
       const response = await fetch("/api/breakdowns", {
@@ -229,6 +259,7 @@ export default function BreakdownsPage() {
         severity: "MEDIUM",
         downtimeHours: "0"
       });
+      setWizardStep(1);
       await loadAll();
     } finally {
       setSaving(false);
@@ -262,89 +293,183 @@ export default function BreakdownsPage() {
             title="Field Breakdown Reporting"
             subtitle="Automatically links breakdown to project, rig, and client for faster response."
           >
-            <form onSubmit={submitBreakdown} className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-              <label className="text-sm text-ink-700">
-                Project
-                <select
-                  value={form.projectId}
-                  onChange={(event) => setForm((current) => ({ ...current, projectId: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  required
-                >
-                  <option value="">Select project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm text-ink-700">
-                Rig (optional)
-                <select
-                  value={form.rigId}
-                  onChange={(event) => setForm((current) => ({ ...current, rigId: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                >
-                  <option value="">Use project assigned rig</option>
-                  {rigs.map((rig) => (
-                    <option key={rig.id} value={rig.id}>
-                      {rig.rigCode}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm text-ink-700">
-                Severity
-                <select
-                  value={form.severity}
-                  onChange={(event) => setForm((current) => ({ ...current, severity: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                >
-                  <option>LOW</option>
-                  <option>MEDIUM</option>
-                  <option>HIGH</option>
-                  <option>CRITICAL</option>
-                </select>
-              </label>
-              <label className="text-sm text-ink-700">
-                Breakdown Title
-                <input
-                  value={form.title}
-                  onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  required
-                />
-              </label>
-              <label className="text-sm text-ink-700">
-                Estimated Downtime (hrs)
-                <input
-                  type="number"
-                  min="0"
-                  value={form.downtimeHours}
-                  onChange={(event) => setForm((current) => ({ ...current, downtimeHours: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                />
-              </label>
-              <label className="text-sm text-ink-700 lg:col-span-3">
-                Description
-                <textarea
-                  value={form.description}
-                  onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                  className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  required
-                />
-              </label>
-              <div className="lg:col-span-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-ink-700">
-                Linked client: <span className="font-semibold">{linkedProject?.client?.name || "-"}</span>
+            <form onSubmit={submitBreakdown} className="space-y-3">
+              <div className="grid gap-2 text-xs sm:grid-cols-3">
+                {[
+                  { step: 1, label: "Project context" },
+                  { step: 2, label: "Issue details" },
+                  { step: 3, label: "Review & submit" }
+                ].map((entry) => (
+                  <div
+                    key={`breakdown-step-${entry.step}`}
+                    className={`rounded-lg border px-2 py-1.5 ${
+                      wizardStep === entry.step
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
+                        : "border-slate-200 bg-slate-50 text-slate-700"
+                    }`}
+                  >
+                    <p className="font-semibold">Step {entry.step}</p>
+                    <p>{entry.label}</p>
+                  </div>
+                ))}
               </div>
-              <button
-                type="submit"
-                disabled={saving}
-                className="lg:col-span-3 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-              >
-                {saving ? "Submitting..." : "Submit Breakdown"}
-              </button>
+
+              {wizardStep === 1 && (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="text-sm text-ink-700">
+                    Project
+                    <select
+                      value={form.projectId}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, projectId: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      required
+                    >
+                      <option value="">Select project</option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    Rig (optional)
+                    <select
+                      value={form.rigId}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, rigId: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option value="">Use project assigned rig</option>
+                      {rigs.map((rig) => (
+                        <option key={rig.id} value={rig.id}>
+                          {rig.rigCode}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+
+              {wizardStep === 2 && (
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                  <label className="text-sm text-ink-700">
+                    Severity
+                    <select
+                      value={form.severity}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, severity: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option>LOW</option>
+                      <option>MEDIUM</option>
+                      <option>HIGH</option>
+                      <option>CRITICAL</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    Breakdown Title
+                    <input
+                      value={form.title}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, title: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      required
+                    />
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    Estimated Downtime (hrs)
+                    <input
+                      type="number"
+                      min="0"
+                      value={form.downtimeHours}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, downtimeHours: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-sm text-ink-700 md:col-span-2 lg:col-span-3">
+                    Description
+                    <textarea
+                      value={form.description}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, description: event.target.value }))
+                      }
+                      className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      required
+                    />
+                  </label>
+                </div>
+              )}
+
+              {wizardStep === 3 && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-ink-700">
+                  <p>
+                    <span className="font-semibold">Project:</span>{" "}
+                    {projects.find((project) => project.id === form.projectId)?.name || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Rig:</span>{" "}
+                    {rigs.find((rig) => rig.id === form.rigId)?.rigCode || "Project assigned rig"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Severity:</span> {form.severity}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Title:</span> {form.title || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Estimated Downtime:</span>{" "}
+                    {form.downtimeHours || "0"} hrs
+                  </p>
+                  <p>
+                    <span className="font-semibold">Description:</span> {form.description || "-"}
+                  </p>
+                  <p className="mt-1">
+                    <span className="font-semibold">Linked client:</span>{" "}
+                    {linkedProject?.client?.name || "-"}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+                {wizardStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={goToPreviousStep}
+                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Back
+                  </button>
+                )}
+                {wizardStep < 3 ? (
+                  <button
+                    type="button"
+                    onClick={goToNextStep}
+                    disabled={Boolean(currentStepError)}
+                    className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+                  >
+                    Continue
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+                  >
+                    {saving ? "Submitting..." : "Submit Breakdown"}
+                  </button>
+                )}
+                {currentStepError && wizardStep < 3 && (
+                  <p className="text-xs text-amber-800">{currentStepError}</p>
+                )}
+              </div>
             </form>
           </Card>
         </AccessGate>

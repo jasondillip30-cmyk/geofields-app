@@ -1673,8 +1673,8 @@ function InventoryPageContent() {
           sectionId: "inventory-movements-section"
         },
         {
-          label: "Open Receipt Intake",
-          href: buildHref("/inventory/receipt-intake"),
+          label: "Open Purchase Follow-up",
+          href: buildHref("/purchasing/receipt-follow-up"),
           reason: "Process receipts and link evidence.",
           pageKey: "inventory-receipt-intake"
         },
@@ -1793,8 +1793,8 @@ function InventoryPageContent() {
                       </Link>
                     </>
                   ) : null}
-                  <Link href="/inventory/receipt-intake" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Scan Receipt
+                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                    Complete Purchase
                   </Link>
                 </>
               ) : (
@@ -1802,8 +1802,8 @@ function InventoryPageContent() {
                   <Link href="/inventory" className="gf-btn-secondary px-3 py-1.5 text-xs">
                     Back to Overview
                   </Link>
-                  <Link href="/inventory/receipt-intake" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Open Receipt Intake
+                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                    Open Purchase Follow-up
                   </Link>
                 </>
               )}
@@ -2361,15 +2361,15 @@ function InventoryPageContent() {
             <Card
               className="min-w-0"
               title="Inventory Manual Entry"
-              subtitle="Create inventory items directly. Receipt scanning now lives in Inventory → Receipt Intake."
+              subtitle="Create inventory items directly. Purchase receipt follow-up now lives in Purchasing → Receipt Follow-up."
             >
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                <p className="font-medium">Need receipt-based intake? Use the dedicated Receipt Intake workflow.</p>
+                <p className="font-medium">Need receipt-based intake? Use the dedicated Purchase Follow-up workflow.</p>
                 <Link
-                  href="/inventory/receipt-intake"
+                  href="/purchasing/receipt-follow-up"
                   className="inline-flex rounded border border-brand-300 bg-white px-2 py-1 font-semibold text-brand-800 hover:bg-brand-100"
                 >
-                  Open Receipt Intake
+                  Open Purchase Follow-up
                 </Link>
               </div>
 
@@ -2725,10 +2725,10 @@ function InventoryPageContent() {
                   movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber ? (
                     <a
                       key={`${movement.id}-origin`}
-                      href={`/inventory/receipt-intake?movementId=${movement.id}`}
+                      href={`/purchasing/receipt-follow-up?movementId=${movement.id}`}
                       className="inline-flex items-center rounded-full border border-brand-300 bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-800 hover:bg-brand-100"
                     >
-                      Receipt Intake
+                      Purchase Follow-up
                     </a>
                   ) : (
                     "Manual"
@@ -3135,7 +3135,7 @@ function MovementDetailDrawer({
               <SummaryBadge label="Receipt #" value={movement.supplierInvoiceNumber || movement.traReceiptNumber || "-"} />
               <SummaryBadge
                 label="Origin"
-                value={movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber ? "Receipt Intake" : "Manual"}
+                value={movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber ? "Purchase Follow-up" : "Manual"}
               />
               <SummaryBadge label="Item" value={movement.item?.name || "Unknown item"} />
               <SummaryBadge label="Project" value={movement.project?.name || "-"} />
@@ -3153,10 +3153,10 @@ function MovementDetailDrawer({
               )}
               {(movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber) && (
                 <a
-                  href={`/inventory/receipt-intake?movementId=${movement.id}`}
+                  href={`/purchasing/receipt-follow-up?movementId=${movement.id}`}
                   className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
                 >
-                  Open Receipt Intake Record
+                  Open Purchase Follow-up Record
                 </a>
               )}
               {movement.expense?.id && (
