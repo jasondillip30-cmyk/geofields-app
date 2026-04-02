@@ -26,6 +26,12 @@ export type ReceiptQrContentType = "TRA_URL" | "URL" | "STRUCTURED_TEXT" | "UNKN
 export type ReceiptQrDecodeStatus = "DECODED" | "NOT_DETECTED" | "DECODE_FAILED";
 export type ReceiptQrParseStatus = "PARSED" | "PARTIAL" | "UNPARSED";
 export type ReceiptVerificationLookupStatus = "NOT_ATTEMPTED" | "SUCCESS" | "FAILED";
+export type ReceiptScanFailureStage =
+  | "NONE"
+  | "QR_NOT_DETECTED"
+  | "QR_DECODE_FAILED"
+  | "QR_PARSE_UNPARSED"
+  | "TRA_LOOKUP_FAILED";
 
 export interface ReceiptQrStages {
   decode: {
@@ -140,6 +146,7 @@ export interface ReceiptFieldSourceMap {
 export interface ReceiptQrResult {
   detected: boolean;
   rawValue: string;
+  normalizedRawValue: string;
   contentType: ReceiptQrContentType;
   isTraVerification: boolean;
   isQrOnlyImage: boolean;
@@ -160,6 +167,43 @@ export interface ReceiptQrResult {
     successfulPass: string;
     variantCount: number;
   };
+}
+
+export interface ReceiptScanDiagnostics {
+  qrDetected: boolean;
+  qrDecodeStatus: ReceiptQrDecodeStatus;
+  qrDecodePass: string;
+  qrParseStatus: ReceiptQrParseStatus;
+  qrFailureReason: string;
+  qrContentType: ReceiptQrContentType;
+  qrRawValue: string;
+  qrNormalizedRawValue: string;
+  qrRawLength: number;
+  qrRawPreview: string;
+  qrRawPayloadFormat:
+    | "EMPTY"
+    | "URL"
+    | "JSON"
+    | "QUERY_STRING"
+    | "KEY_VALUE"
+    | "PERCENT_ENCODED"
+    | "BASE64_LIKE"
+    | "TEXT";
+  qrVerificationUrl: string;
+  qrIsTraVerification: boolean;
+  qrParsedFieldCount: number;
+  qrParsedLineItemsCount: number;
+  qrLookupStatus: ReceiptVerificationLookupStatus;
+  qrLookupReason: string;
+  qrLookupHttpStatus: number | null;
+  qrLookupParsed: boolean;
+  ocrAttempted: boolean;
+  ocrSucceeded: boolean;
+  ocrError: string;
+  scanStatus: ReceiptScanStatus;
+  extractionMethod: string;
+  returnedFrom: "qr_tra" | "qr_tra_plus_ocr";
+  failureStage: ReceiptScanFailureStage;
 }
 
 export interface ReceiptLineMatchSuggestion {
@@ -209,6 +253,7 @@ export interface ReceiptExtractionResult {
     returnedFrom: "qr_tra" | "qr_tra_plus_ocr";
     partialEnrichment: boolean;
   };
+  scanDiagnostics: ReceiptScanDiagnostics;
   debug?: {
     ocrCandidates: Array<{
       label: string;
@@ -494,7 +539,7 @@ export async function extractReceiptData({
   }
 
   const scanStatus = resolveScanStatus({
-    text: text || qrResult.rawValue,
+    text: text || qrResult.normalizedRawValue || qrResult.rawValue,
     lines,
     fieldConfidence: mergedHeaderResult.fieldConfidence,
     qr: qrResult
@@ -514,6 +559,23 @@ export async function extractReceiptData({
       : ocrError
         ? `Optional enrichment needs review: ${ocrError}`
         : "";
+  const intakeDebug = {
+    qrDecoded: qrResult.decodeStatus === "DECODED",
+    traLookupSucceeded,
+    traParseSucceeded,
+    ocrAttempted,
+    ocrSucceeded,
+    ocrError,
+    enrichmentWarning,
+    returnedFrom,
+    partialEnrichment
+  };
+  const scanDiagnostics = buildReceiptScanDiagnostics({
+    qrResult,
+    intakeDebug,
+    scanStatus,
+    extractionMethod
+  });
 
   return {
     header,
@@ -527,17 +589,8 @@ export async function extractReceiptData({
     receiptType,
     preprocessingApplied,
     qr: qrResult,
-    intakeDebug: {
-      qrDecoded: qrResult.decodeStatus === "DECODED",
-      traLookupSucceeded,
-      traParseSucceeded,
-      ocrAttempted,
-      ocrSucceeded,
-      ocrError,
-      enrichmentWarning,
-      returnedFrom,
-      partialEnrichment
-    },
+    intakeDebug,
+    scanDiagnostics,
     debug:
       debug && extraction && extraction.debugCandidates.length > 0
         ? {
@@ -545,6 +598,70 @@ export async function extractReceiptData({
           }
         : undefined
   };
+}
+
+function buildReceiptScanDiagnostics({
+  qrResult,
+  intakeDebug,
+  scanStatus,
+  extractionMethod
+}: {
+  qrResult: ReceiptQrResult;
+  intakeDebug: ReceiptExtractionResult["intakeDebug"];
+  scanStatus: ReceiptScanStatus;
+  extractionMethod: ReceiptExtractionResult["extractionMethod"];
+}): ReceiptScanDiagnostics {
+  const lookup = qrResult.stages.verificationLookup;
+  const rawValue = qrResult.rawValue;
+  return {
+    qrDetected: qrResult.detected,
+    qrDecodeStatus: qrResult.decodeStatus,
+    qrDecodePass: qrResult.decodePass,
+    qrParseStatus: qrResult.parseStatus,
+    qrFailureReason: qrResult.failureReason,
+    qrContentType: qrResult.contentType,
+    qrRawValue: rawValue,
+    qrNormalizedRawValue: qrResult.normalizedRawValue || qrResult.rawValue,
+    qrRawLength: rawValue.length,
+    qrRawPreview: truncateQrLogValue(rawValue, 200),
+    qrRawPayloadFormat: detectRawQrPayloadFormat(rawValue),
+    qrVerificationUrl: qrResult.verificationUrl,
+    qrIsTraVerification: qrResult.isTraVerification,
+    qrParsedFieldCount: countParsedFields(qrResult.parsedFields),
+    qrParsedLineItemsCount: qrResult.parsedLineCandidates.length,
+    qrLookupStatus: lookup.status,
+    qrLookupReason: lookup.reason,
+    qrLookupHttpStatus: lookup.httpStatus,
+    qrLookupParsed: lookup.parsed,
+    ocrAttempted: intakeDebug.ocrAttempted,
+    ocrSucceeded: intakeDebug.ocrSucceeded,
+    ocrError: intakeDebug.ocrError,
+    scanStatus,
+    extractionMethod,
+    returnedFrom: intakeDebug.returnedFrom,
+    failureStage: resolveScanFailureStage(qrResult)
+  };
+}
+
+function resolveScanFailureStage(qrResult: ReceiptQrResult): ReceiptScanFailureStage {
+  if (qrResult.decodeStatus === "NOT_DETECTED") {
+    return "QR_NOT_DETECTED";
+  }
+  if (qrResult.decodeStatus === "DECODE_FAILED") {
+    return "QR_DECODE_FAILED";
+  }
+  if (qrResult.decodeStatus === "DECODED" && qrResult.parseStatus === "UNPARSED") {
+    return "QR_PARSE_UNPARSED";
+  }
+  if (
+    qrResult.decodeStatus === "DECODED" &&
+    qrResult.isTraVerification &&
+    qrResult.stages.verificationLookup.attempted &&
+    qrResult.stages.verificationLookup.status === "FAILED"
+  ) {
+    return "TRA_LOOKUP_FAILED";
+  }
+  return "NONE";
 }
 
 export async function extractQrDataOnly({
@@ -1037,6 +1154,7 @@ async function resolveQrDecodedResult({
   variantCount?: number;
   mode: "full" | "decode-only";
 }) {
+  logDecodedRawPayload(rawValue, decodePass);
   if (mode === "decode-only") {
     return buildDecodeOnlyQrResult({
       rawValue,
@@ -1057,6 +1175,18 @@ async function resolveQrDecodedResult({
   );
 }
 
+function logDecodedRawPayload(rawValue: string, decodePass: string) {
+  const exactRaw = typeof rawValue === "string" ? rawValue : "";
+  const preview = truncateQrLogValue(exactRaw, 200);
+  console.info("[inventory][receipt-intake][qr][raw-decoder]", {
+    detected: true,
+    decodeSucceeded: exactRaw.length > 0,
+    decodePass: decodePass || "unknown",
+    rawLength: exactRaw.length,
+    rawPreview: preview
+  });
+}
+
 function buildDecodeOnlyQrResult({
   rawValue,
   decodePass,
@@ -1070,16 +1200,21 @@ function buildDecodeOnlyQrResult({
   attemptedPasses: string[];
   variantCount: number;
 }): ReceiptQrResult {
-  const normalizedRaw = rawValue.trim();
+  const rawDecodedValue = typeof rawValue === "string" ? rawValue : "";
+  const normalizedRaw = normalizeDecodedQrValue(rawDecodedValue);
   const contentType = detectQrContentType(normalizedRaw);
-  const verificationUrl = contentType === "URL" ? toUrl(normalizedRaw)?.toString() || "" : extractUrl(normalizedRaw);
+  const verificationUrl =
+    contentType === "URL"
+      ? toUrl(normalizedRaw)?.toString() || ""
+      : extractVerificationUrlCandidate(normalizedRaw);
   const isTraVerification = isTraVerificationUrl(verificationUrl);
   const classifiedType: ReceiptQrContentType =
     contentType === "URL" && isTraVerification ? "TRA_URL" : contentType;
 
   return {
     detected: true,
-    rawValue: normalizedRaw,
+    rawValue: rawDecodedValue,
+    normalizedRawValue: normalizedRaw,
     contentType: classifiedType,
     isTraVerification,
     isQrOnlyImage,
@@ -2776,7 +2911,10 @@ async function createJsQrDecoderStrategy(): Promise<QrDecoderStrategy | null> {
         const decoded = decoder(data, width, height, {
           inversionAttempts: "attemptBoth"
         });
-        return decoded?.data?.trim() || null;
+        if (!decoded || typeof decoded.data !== "string") {
+          return null;
+        }
+        return decoded.data;
       }
     };
   } catch {
@@ -3213,6 +3351,7 @@ function buildQrFailureResult({
   return {
     detected: false,
     rawValue: "",
+    normalizedRawValue: "",
     contentType: classificationType,
     isTraVerification: false,
     isQrOnlyImage,
@@ -3273,8 +3412,9 @@ function parseQrPayload(
   const isQrOnlyImage = Boolean(options?.isQrOnlyImage);
   const attemptedPasses = options?.attemptedPasses || [];
   const variantCount = Number(options?.variantCount || 0);
-  const normalizedRaw = rawValue.trim();
-  if (!normalizedRaw) {
+  const rawDecodedValue = typeof rawValue === "string" ? rawValue : "";
+  const normalizedRaw = normalizeDecodedQrValue(rawDecodedValue);
+  if (!rawDecodedValue) {
     return buildQrFailureResult({
       decodeStatus: "NOT_DETECTED",
       failureReason: "No QR detected",
@@ -3284,18 +3424,70 @@ function parseQrPayload(
       warnings: ["No QR detected. Continuing with OCR fallback."]
     });
   }
+  if (!normalizedRaw) {
+    return {
+      detected: true,
+      rawValue: rawDecodedValue,
+      normalizedRawValue: "",
+      contentType: "UNKNOWN",
+      isTraVerification: false,
+      isQrOnlyImage,
+      decodeStatus: "DECODED",
+      decodePass,
+      parseStatus: "UNPARSED",
+      failureReason: "QR decoded but normalized payload was empty",
+      verificationUrl: "",
+      parsedFields: {},
+      parsedLineCandidates: [],
+      confidence: "LOW",
+      warnings: ["QR decoded, but payload could not be normalized. Raw payload is available for review."],
+      stages: {
+        decode: {
+          success: true,
+          status: "DECODED",
+          pass: decodePass,
+          reason: ""
+        },
+        classification: {
+          success: false,
+          type: "UNKNOWN",
+          isTraUrl: false
+        },
+        verificationLookup: {
+          attempted: false,
+          success: false,
+          status: "NOT_ATTEMPTED",
+          reason: "Normalized payload was empty",
+          httpStatus: null,
+          parsed: false,
+          fieldsParseStatus: "NOT_ATTEMPTED",
+          lineItemsParseStatus: "NOT_ATTEMPTED",
+          parsedFieldCount: 0,
+          parsedLineItemsCount: 0
+        }
+      },
+      debug: {
+        imageReceived: true,
+        imageLoaded: true,
+        attemptedPasses,
+        successfulPass: decodePass,
+        variantCount
+      }
+    };
+  }
 
-  const contentType = detectQrContentType(normalizedRaw);
+  const extractedUrlCandidate = extractVerificationUrlCandidate(normalizedRaw);
+  const contentType = detectQrContentType(extractedUrlCandidate || normalizedRaw);
   let parsed: Partial<ReceiptHeaderExtraction> = {};
   let verificationUrl = "";
 
   if (contentType === "URL") {
-    const asUrl = toUrl(normalizedRaw);
+    const asUrl = toUrl(extractedUrlCandidate || normalizedRaw);
     if (asUrl) {
       verificationUrl = asUrl.toString();
       parsed = mergeParsedFields(parsed, parseQrFromUrl(asUrl));
     } else {
-      verificationUrl = extractUrl(normalizedRaw);
+      verificationUrl = extractVerificationUrlCandidate(normalizedRaw);
     }
   } else if (contentType === "STRUCTURED_TEXT") {
     const asJson = parseQrJson(normalizedRaw);
@@ -3304,7 +3496,7 @@ function parseQrPayload(
     }
     parsed = mergeParsedFields(parsed, parseQrKeyValueText(normalizedRaw));
     parsed = mergeParsedFields(parsed, parseGenericKeyValueText(normalizedRaw));
-    const embeddedUrl = extractUrl(normalizedRaw);
+    const embeddedUrl = extractVerificationUrlCandidate(normalizedRaw);
     if (embeddedUrl) {
       verificationUrl = embeddedUrl;
     }
@@ -3312,6 +3504,16 @@ function parseQrPayload(
     const asJson = parseQrJson(normalizedRaw);
     if (asJson) {
       parsed = mergeParsedFields(parsed, asJson);
+    }
+  }
+
+  if (!verificationUrl && extractedUrlCandidate) {
+    verificationUrl = extractedUrlCandidate;
+  }
+  if (verificationUrl) {
+    const parsedFromUrl = toUrl(verificationUrl);
+    if (parsedFromUrl) {
+      parsed = mergeParsedFields(parsed, parseQrFromUrl(parsedFromUrl));
     }
   }
 
@@ -3346,7 +3548,8 @@ function parseQrPayload(
 
   return {
     detected: true,
-    rawValue: normalizedRaw,
+    rawValue: rawDecodedValue,
+    normalizedRawValue: normalizedRaw,
     contentType: classifiedType,
     isTraVerification,
     isQrOnlyImage,
@@ -3399,7 +3602,7 @@ function detectQrContentType(value: string): ReceiptQrContentType {
   if (!normalized) {
     return "NONE";
   }
-  if (/^https?:\/\//i.test(normalized)) {
+  if (looksLikeUrlLikeQrValue(normalized)) {
     return "URL";
   }
   if (looksLikeStructuredText(normalized)) {
@@ -3489,11 +3692,22 @@ function mergeParsedFields(
 
 function parseQrFromUrl(url: URL): Partial<ReceiptHeaderExtraction> {
   const query = url.searchParams;
+  const lowerQuery = new Map<string, string>();
+  query.forEach((value, key) => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      lowerQuery.set(key.toLowerCase(), trimmed);
+    }
+  });
   const valueFrom = (...keys: string[]) => {
     for (const key of keys) {
-      const value = query.get(key);
-      if (value && value.trim()) {
-        return value.trim();
+      const exact = query.get(key);
+      if (exact && exact.trim()) {
+        return exact.trim();
+      }
+      const fallback = lowerQuery.get(key.toLowerCase());
+      if (fallback) {
+        return fallback;
       }
     }
     return "";
@@ -3505,18 +3719,26 @@ function parseQrFromUrl(url: URL): Partial<ReceiptHeaderExtraction> {
   };
 
   return {
-    receiptNumber: valueFrom("receiptNo", "receipt_number", "receipt", "rct", "rctNo"),
-    verificationCode: valueFrom("verifyCode", "verificationCode", "code", "vcode"),
-    supplierName: valueFrom("supplier", "merchant", "seller", "name"),
-    tin: valueFrom("tin"),
-    vrn: valueFrom("vrn", "vatNo"),
-    serialNumber: valueFrom("serial", "serialNo", "sno"),
-    receiptDate: normalizeQrDate(valueFrom("date", "receiptDate")),
-    receiptTime: valueFrom("time", "receiptTime"),
-    taxOffice: valueFrom("office", "taxOffice"),
-    subtotal: numberFrom("subtotal", "subTotal", "amountBeforeTax"),
-    tax: numberFrom("tax", "vat"),
-    total: numberFrom("total", "amount", "grossTotal")
+    receiptNumber: valueFrom(
+      "receiptNo",
+      "receipt_number",
+      "receipt",
+      "rct",
+      "rctNo",
+      "receiptnumber",
+      "receiptno"
+    ),
+    verificationCode: valueFrom("verifyCode", "verificationCode", "code", "vcode", "verification"),
+    supplierName: valueFrom("supplier", "merchant", "seller", "name", "supplierName", "businessName", "traderName"),
+    tin: valueFrom("tin", "supplierTin", "merchantTin"),
+    vrn: valueFrom("vrn", "vatNo", "vat"),
+    serialNumber: valueFrom("serial", "serialNo", "sno", "serialNumber"),
+    receiptDate: normalizeQrDate(valueFrom("date", "receiptDate", "issuedDate", "transactionDate")),
+    receiptTime: valueFrom("time", "receiptTime", "issuedTime"),
+    taxOffice: valueFrom("office", "taxOffice", "taxAuthority"),
+    subtotal: numberFrom("subtotal", "subTotal", "amountBeforeTax", "netAmount"),
+    tax: numberFrom("tax", "vat", "vatAmount"),
+    total: numberFrom("total", "amount", "grossTotal", "totalAmount", "grandTotal")
   };
 }
 
@@ -3641,19 +3863,141 @@ function normalizeQrKey(value: string) {
 }
 
 function extractUrl(value: string) {
-  const match = value.match(/https?:\/\/[^\s]+/i);
-  return match?.[0] || "";
+  const httpMatch = value.match(/https?:\/\/[^\s]+/i);
+  if (httpMatch?.[0]) {
+    return httpMatch[0];
+  }
+  const domainMatch = value.match(/\b(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?/i);
+  if (domainMatch?.[0]) {
+    const candidate = domainMatch[0].trim();
+    if (!candidate) {
+      return "";
+    }
+    return /^https?:\/\//i.test(candidate) ? candidate : `https://${candidate.replace(/^\/+/, "")}`;
+  }
+  return "";
 }
 
 function toUrl(value: string) {
   try {
-    if (!/^https?:\/\//i.test(value)) {
+    const normalized = value.trim().replace(/^[`"'(<\[]+|[`"')>\]]+$/g, "");
+    if (!normalized) {
       return null;
     }
-    return new URL(value);
+    if (/^https?:\/\//i.test(normalized)) {
+      return new URL(normalized);
+    }
+    if (looksLikeUrlLikeQrValue(normalized)) {
+      const withScheme = `https://${normalized.replace(/^\/+/, "")}`;
+      return new URL(withScheme);
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+function looksLikeUrlLikeQrValue(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/^https?:\/\//i.test(normalized)) {
+    return true;
+  }
+  if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/?#][^\s]*)?$/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeDecodedQrValue(value: string) {
+  if (!value) {
+    return "";
+  }
+  let normalized = value
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  normalized = normalized.replace(/^(?:qr(?:\s*code)?|qr\s*data|payload|url)\s*[:=\-]\s*/i, "");
+  normalized = normalized.replace(/\\\//g, "/");
+  const decoded = safeDecodeURIComponent(normalized);
+  if (decoded) {
+    normalized = decoded;
+  }
+  return normalized.trim();
+}
+
+function safeDecodeURIComponent(value: string) {
+  if (!value || !/%[0-9a-f]{2}/i.test(value)) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return "";
+  }
+}
+
+function detectRawQrPayloadFormat(
+  rawValue: string
+): "EMPTY" | "URL" | "JSON" | "QUERY_STRING" | "KEY_VALUE" | "PERCENT_ENCODED" | "BASE64_LIKE" | "TEXT" {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return "EMPTY";
+  }
+  if (looksLikeUrlLikeQrValue(trimmed) || /https?:\/\/\S+/i.test(trimmed)) {
+    return "URL";
+  }
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try {
+      JSON.parse(trimmed);
+      return "JSON";
+    } catch {
+      // keep classifying
+    }
+  }
+  if (
+    /(?:^|[?&])[a-z0-9_\-]+=/i.test(trimmed) ||
+    (trimmed.includes("&") && trimmed.includes("="))
+  ) {
+    return "QUERY_STRING";
+  }
+  if (/[a-z][a-z0-9_\s-]{1,32}\s*[:=]\s*[^&;\n\r]+/i.test(trimmed)) {
+    return "KEY_VALUE";
+  }
+  if (/%[0-9a-f]{2}/i.test(trimmed)) {
+    return "PERCENT_ENCODED";
+  }
+  if (/^[A-Za-z0-9+/=]{24,}$/.test(trimmed) && !trimmed.includes(" ")) {
+    return "BASE64_LIKE";
+  }
+  return "TEXT";
+}
+
+function extractVerificationUrlCandidate(value: string) {
+  const candidates = Array.from(
+    new Set(
+      [value, safeDecodeURIComponent(value), value.replace(/\\u0026/gi, "&"), value.replace(/\\\//g, "/")]
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    )
+  );
+  for (const candidate of candidates) {
+    const extracted = extractUrl(candidate);
+    if (extracted) {
+      return extracted;
+    }
+    const compact = candidate.replace(/\s+/g, "");
+    if (looksLikeUrlLikeQrValue(compact)) {
+      const asUrl = toUrl(compact);
+      if (asUrl) {
+        return asUrl.toString();
+      }
+    }
+  }
+  return "";
 }
 
 function normalizeQrDate(value: string) {

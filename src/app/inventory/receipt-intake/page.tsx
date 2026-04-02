@@ -242,6 +242,14 @@ export default function InventoryReceiptIntakePage() {
 }
 
 function InventoryReceiptIntakePageContent() {
+  const renderTimestamp = new Date().toISOString();
+  console.info("RECEIPT FOLLOW-UP PAGE RENDERED", {
+    component: "InventoryReceiptIntakePageContent",
+    pagePath: "/purchasing/receipt-follow-up",
+    timestamp: renderTimestamp,
+    version: "receipt-follow-up-debug-v1"
+  });
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useRole();
@@ -808,6 +816,25 @@ function InventoryReceiptIntakePageContent() {
             <p className="mt-1 text-sm text-slate-600">
               Continue approved requisitions through receipt capture, review, and final posting.
             </p>
+            <div className="mt-3 rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-3 text-sm text-rose-950 shadow-sm">
+              <p className="text-base font-extrabold uppercase tracking-wide">
+                RENDER PATH TEST — RECEIPT FOLLOW-UP DEBUG ACTIVE
+              </p>
+              <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                <p>
+                  component name: <span className="font-semibold">InventoryReceiptIntakePageContent</span>
+                </p>
+                <p>
+                  page path: <span className="font-semibold">/purchasing/receipt-follow-up</span>
+                </p>
+                <p>
+                  current timestamp at render: <span className="font-semibold">{renderTimestamp}</span>
+                </p>
+                <p>
+                  version: <span className="font-semibold">receipt-follow-up-debug-v1</span>
+                </p>
+              </div>
+            </div>
           </div>
           <div className="mt-3 border-t border-slate-200/80" />
         </section>

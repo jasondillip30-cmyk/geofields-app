@@ -169,6 +169,58 @@ interface ReceiptSnapshotLine {
   lineTotal: string;
 }
 
+type ScanFailureStage =
+  | "NONE"
+  | "QR_NOT_DETECTED"
+  | "QR_DECODE_FAILED"
+  | "QR_PARSE_UNPARSED"
+  | "TRA_LOOKUP_FAILED"
+  | "FRONTEND_MAPPING_EMPTY";
+
+interface ScanDiagnosticsState {
+  failureStage: ScanFailureStage;
+  failureMessage: string;
+  qrDetected: boolean;
+  qrDecodeStatus: QrDecodeStatus;
+  qrDecodePass: string;
+  qrParseStatus: QrParseStatus;
+  qrFailureReason: string;
+  qrContentType: QrContentType;
+  qrRawValue: string;
+  qrNormalizedRawValue: string;
+  qrRawLength: number;
+  qrRawPreview: string;
+  qrRawPayloadFormat:
+    | "EMPTY"
+    | "URL"
+    | "JSON"
+    | "QUERY_STRING"
+    | "KEY_VALUE"
+    | "PERCENT_ENCODED"
+    | "BASE64_LIKE"
+    | "TEXT";
+  qrVerificationUrl: string;
+  qrIsTraVerification: boolean;
+  qrParsedFieldCount: number;
+  qrParsedLineItemsCount: number;
+  qrLookupStatus: QrLookupStatus;
+  qrLookupReason: string;
+  qrLookupHttpStatus: number | null;
+  qrLookupParsed: boolean;
+  ocrAttempted: boolean;
+  ocrSucceeded: boolean;
+  ocrError: string;
+  scanStatus: ReceiptScanStatus;
+  extractionMethod: string;
+  returnedFrom: "qr_tra" | "qr_tra_plus_ocr";
+  attemptedPassCount: number;
+  attemptedPassSample: string[];
+  successfulPass: string;
+  variantCount: number;
+  imageReceived: boolean;
+  imageLoaded: boolean;
+}
+
 interface ReviewState {
   requisitionId: string;
   requisitionCode: string;
@@ -247,6 +299,7 @@ interface ReviewState {
     total: string;
     lines: ReceiptSnapshotLine[];
   };
+  scanDiagnostics: ScanDiagnosticsState;
   scanFallbackMode: "NONE" | "SCAN_FAILURE" | "MANUAL_ENTRY";
   lines: ReviewLineState[];
 }
@@ -427,6 +480,15 @@ export function ReceiptIntakePanel({
   const [drawingQrSelection, setDrawingQrSelection] = useState(false);
   const [followUpStage, setFollowUpStage] = useState<ReceiptFollowUpStage>("SCAN");
   const [showScannedDetails, setShowScannedDetails] = useState(false);
+  const [lastScanDiagnostics, setLastScanDiagnostics] = useState<ScanDiagnosticsState | null>(null);
+  const [hasScanAttempted, setHasScanAttempted] = useState(false);
+  const panelRenderTimestamp = new Date().toISOString();
+  console.info("RECEIPT INTAKE PANEL RENDERED", {
+    component: "ReceiptIntakePanel",
+    pagePath: "/purchasing/receipt-follow-up",
+    timestamp: panelRenderTimestamp,
+    version: "receipt-follow-up-debug-v1"
+  });
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
   const extracting = extractState === "UPLOADING" || extractState === "PROCESSING";
@@ -724,6 +786,7 @@ export function ReceiptIntakePanel({
     setDuplicatePrompt(null);
     setShowDuplicateReview(false);
     setDuplicateOverrideConfirmed(false);
+    setLastScanDiagnostics(null);
     setFocusedRecordPayload(null);
     setFocusedRecordError(null);
     setLastSavedAllocationStatus(null);
@@ -824,6 +887,7 @@ export function ReceiptIntakePanel({
     }
     const selectedWorkflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
 
+    setHasScanAttempted(true);
     setExtractState("UPLOADING");
     setError(null);
     setNotice(null);
@@ -865,7 +929,12 @@ export function ReceiptIntakePanel({
         });
         const extractedHasUsableData = hasMeaningfulExtractedPayload(payload.extracted);
         const mappedReviewHasUsableData = hasMeaningfulReviewData(nextReview);
-        if (!extractedHasUsableData || !mappedReviewHasUsableData) {
+        const qrDecodeSucceeded =
+          nextReview.scanDiagnostics.qrDecodeStatus === "DECODED" ||
+          nextReview.scanDiagnostics.qrParseStatus === "PARSED" ||
+          nextReview.scanDiagnostics.qrLookupStatus === "SUCCESS";
+        const shouldFallbackToManual = (!extractedHasUsableData || !mappedReviewHasUsableData) && !qrDecodeSucceeded;
+        if (shouldFallbackToManual) {
           const fallbackReview = buildManualAssistReview({
             payload,
             receiptFileName: receiptFile.name,
@@ -878,21 +947,26 @@ export function ReceiptIntakePanel({
             initialRequisition
           });
           setReview(fallbackReview);
+          setLastScanDiagnostics(fallbackReview.scanDiagnostics);
           setNoticeTone("WARNING");
-          setNotice(SCAN_FALLBACK_MESSAGE);
+          setNotice(resolveScanFailureNotice(fallbackReview));
           setError(null);
           setExtractState("FAILED");
           setFollowUpStage("REVIEW");
           return;
         }
-        setReview(nextReview);
+        const effectiveReview = !mappedReviewHasUsableData && qrDecodeSucceeded
+          ? markFrontendMappingGap(nextReview)
+          : nextReview;
+        setReview(effectiveReview);
+        setLastScanDiagnostics(effectiveReview.scanDiagnostics);
         const intakeMessage = calmMessage(
           payload.message ||
-            (nextReview.scanStatus === "COMPLETE"
+            (effectiveReview.scanStatus === "COMPLETE"
               ? "Captured from QR/TRA. Review and save."
               : "Some fields still need review.")
         );
-        const autoSaveReadiness = evaluateAutoSaveEligibility(nextReview);
+        const autoSaveReadiness = evaluateAutoSaveEligibility(effectiveReview);
         if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
           setNoticeTone("SUCCESS");
           setNotice("Captured from QR/TRA. Finalizing automatically...");
@@ -902,13 +976,17 @@ export function ReceiptIntakePanel({
             `Review recommended before save. ${autoSaveReadiness.reasons[0] || "Some optional fields need confirmation."}`
           );
         } else {
-          setNoticeTone(nextReview.scanStatus === "COMPLETE" ? "SUCCESS" : "WARNING");
-          setNotice(intakeMessage);
+          setNoticeTone(effectiveReview.scanStatus === "COMPLETE" ? "SUCCESS" : "WARNING");
+          setNotice(
+            effectiveReview.scanDiagnostics.failureStage === "FRONTEND_MAPPING_EMPTY"
+              ? `${intakeMessage} Scan details were captured but field mapping needs manual review.`
+              : intakeMessage
+          );
         }
         setExtractState("SUCCESS");
         setFollowUpStage("REVIEW");
         if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
-          await commitReview(nextReview, { auto: true });
+          await commitReview(effectiveReview, { auto: true });
         }
         return;
       }
@@ -928,8 +1006,9 @@ export function ReceiptIntakePanel({
         initialRequisition
       });
       setReview(fallbackReview);
+      setLastScanDiagnostics(fallbackReview.scanDiagnostics);
       setNoticeTone("WARNING");
-      setNotice(SCAN_FALLBACK_MESSAGE);
+      setNotice(resolveScanFailureNotice(fallbackReview));
       setError(null);
       setExtractState("FAILED");
       setFollowUpStage("REVIEW");
@@ -954,8 +1033,9 @@ export function ReceiptIntakePanel({
         initialRequisition
       });
       setReview(fallbackReview);
+      setLastScanDiagnostics(fallbackReview.scanDiagnostics);
       setNoticeTone("WARNING");
-      setNotice(SCAN_FALLBACK_MESSAGE);
+      setNotice(resolveScanFailureNotice(fallbackReview));
       setError(null);
       setExtractState("FAILED");
       setFollowUpStage("REVIEW");
@@ -1311,6 +1391,8 @@ export function ReceiptIntakePanel({
   const duplicateConfidence = duplicatePrompt?.review?.summary.duplicateConfidence || "LOW";
   const duplicateIsHighConfidence = duplicateConfidence === "HIGH";
   const canOverrideDuplicate = duplicateOverrideConfirmed && (!duplicateIsHighConfidence || canManage);
+  const activeScanDiagnostics = review?.scanDiagnostics || lastScanDiagnostics;
+  const forcedScanDiagnostics = activeScanDiagnostics || buildEmptyScanDiagnostics();
 
   const content = (
     <div className="space-y-4">
@@ -1348,6 +1430,61 @@ export function ReceiptIntakePanel({
             {error || notice}
           </p>
         )}
+        <section className="rounded-xl border-2 border-fuchsia-600 bg-fuchsia-100 px-3 py-3 text-sm text-fuchsia-950 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-fuchsia-900">
+            receipt-follow-up debug build active
+          </p>
+          <p className="mt-1 text-base font-black uppercase tracking-wide text-fuchsia-900">
+            RECEIPT INTAKE PANEL RENDERED
+          </p>
+          <div className="mt-2 grid gap-1 sm:grid-cols-2">
+            <p>
+              component name: <span className="font-semibold">ReceiptIntakePanel</span>
+            </p>
+            <p>
+              page path: <span className="font-semibold">/purchasing/receipt-follow-up</span>
+            </p>
+            <p>
+              current timestamp at render: <span className="font-semibold">{panelRenderTimestamp}</span>
+            </p>
+            <p>
+              version: <span className="font-semibold">receipt-follow-up-debug-v1</span>
+            </p>
+          </div>
+          <div className="mt-3 rounded-lg border-2 border-fuchsia-500 bg-white p-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-fuchsia-900">RAW QR DEBUG PANEL</p>
+            <div className="mt-2 grid gap-1 sm:grid-cols-2">
+              <p>
+                hasScanAttempted: <span className="font-medium">{hasScanAttempted ? "true" : "false"}</span>
+              </p>
+              <p>
+                qrDetected:{" "}
+                <span className="font-medium">{forcedScanDiagnostics.qrDetected ? "true" : "false"}</span>
+              </p>
+              <p>
+                qrDecodeStatus:{" "}
+                <span className="font-medium">{forcedScanDiagnostics.qrDecodeStatus}</span>
+              </p>
+              <p>
+                qrRawLength: <span className="font-medium">{forcedScanDiagnostics.qrRawLength}</span>
+              </p>
+              <p>
+                qrRawPayloadFormat:{" "}
+                <span className="font-medium">{forcedScanDiagnostics.qrRawPayloadFormat}</span>
+              </p>
+              <p>
+                qrRawPreview:{" "}
+                <span className="font-medium">{forcedScanDiagnostics.qrRawPreview || "(empty)"}</span>
+              </p>
+            </div>
+            <div className="mt-2 rounded border-2 border-fuchsia-300 bg-slate-50 p-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-fuchsia-900">full raw qrRawValue</p>
+              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-xs text-slate-900">
+                {forcedScanDiagnostics.qrRawValue || "(empty)"}
+              </pre>
+            </div>
+          </div>
+        </section>
         {duplicatePrompt && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2413,41 +2550,127 @@ export function ReceiptIntakePanel({
                     </div>
                   )}
 
-                  {(review.rawQrValue || review.verificationUrl) && (
-                    <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                      <p className="font-semibold uppercase tracking-wide text-sky-700">QR / TRA Details</p>
-                      <p className="mt-1">
-                        Content Type: <span className="font-medium">{formatQrContentType(review.qrContentType)}</span>
-                      </p>
-                      <p className="mt-1">
-                        Decode:{" "}
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                    <p className="font-semibold uppercase tracking-wide text-sky-700">Scan Diagnostics</p>
+                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                      <p>
+                        Stage:{" "}
                         <span className="font-medium">
-                          {formatQrDecodeStatus(review.qrDecodeStatus)}
-                          {review.qrDecodePass ? ` (${review.qrDecodePass})` : ""}
+                          {formatScanFailureStage(review.scanDiagnostics.failureStage)}
                         </span>
                       </p>
-                      <p className="mt-1">
-                        Parse: <span className="font-medium">{formatQrParseStatus(review.qrParseStatus)}</span>
+                      <p>
+                        Content type:{" "}
+                        <span className="font-medium">
+                          {formatQrContentType(review.scanDiagnostics.qrContentType)}
+                        </span>
                       </p>
-                      <p className="mt-1">
-                        Verification lookup:{" "}
-                        <span className="font-medium">{formatQrLookupStatus(review.qrLookupStatus)}</span>
+                      <p>
+                        QR detected:{" "}
+                        <span className="font-medium">{review.scanDiagnostics.qrDetected ? "Yes" : "No"}</span>
                       </p>
-                      {review.verificationUrl && (
-                        <p className="mt-1">
-                          Verification Link:{" "}
-                          <a
-                            href={review.verificationUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-medium text-sky-800 underline"
-                          >
-                            Open verification URL
-                          </a>
-                        </p>
-                      )}
+                      <p>
+                        Decode:{" "}
+                        <span className="font-medium">
+                          {formatQrDecodeStatus(review.scanDiagnostics.qrDecodeStatus)}
+                          {review.scanDiagnostics.qrDecodePass
+                            ? ` (${review.scanDiagnostics.qrDecodePass})`
+                            : ""}
+                        </span>
+                      </p>
+                      <p>
+                        Parse:{" "}
+                        <span className="font-medium">
+                          {formatQrParseStatus(review.scanDiagnostics.qrParseStatus)}
+                        </span>
+                      </p>
+                      <p>
+                        Lookup:{" "}
+                        <span className="font-medium">
+                          {formatQrLookupStatus(review.scanDiagnostics.qrLookupStatus)}
+                        </span>
+                      </p>
+                      <p>
+                        OCR fallback:{" "}
+                        <span className="font-medium">
+                          {review.scanDiagnostics.ocrAttempted
+                            ? review.scanDiagnostics.ocrSucceeded
+                              ? "Attempted and succeeded"
+                              : "Attempted with limited results"
+                            : "Not attempted"}
+                        </span>
+                      </p>
+                      <p>
+                        Parsed fields:{" "}
+                        <span className="font-medium">{review.scanDiagnostics.qrParsedFieldCount}</span>
+                      </p>
+                      <p>
+                        Parsed lines:{" "}
+                        <span className="font-medium">{review.scanDiagnostics.qrParsedLineItemsCount}</span>
+                      </p>
                     </div>
-                  )}
+                    <p className="mt-2 text-[11px] text-sky-800">{review.scanDiagnostics.failureMessage}</p>
+                    {review.scanDiagnostics.qrLookupReason && (
+                      <p className="mt-1 text-[11px] text-sky-800">
+                        Lookup reason: {review.scanDiagnostics.qrLookupReason}
+                      </p>
+                    )}
+                    {review.scanDiagnostics.ocrError && (
+                      <p className="mt-1 text-[11px] text-sky-800">OCR note: {review.scanDiagnostics.ocrError}</p>
+                    )}
+                    {review.scanDiagnostics.qrVerificationUrl && (
+                      <p className="mt-2">
+                        Verification Link:{" "}
+                        <a
+                          href={review.scanDiagnostics.qrVerificationUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-sky-800 underline"
+                        >
+                          Open verification URL
+                        </a>
+                      </p>
+                    )}
+                    {(review.scanDiagnostics.qrRawValue || review.scanDiagnostics.qrNormalizedRawValue) && (
+                      <details className="mt-2 rounded border border-sky-300 bg-white/70 px-2 py-1.5">
+                        <summary className="cursor-pointer text-[11px] font-semibold text-sky-800">
+                          View raw scanned QR details
+                        </summary>
+                        <div className="mt-2 space-y-2 text-[11px] text-slate-800">
+                          <p>
+                            Raw length:{" "}
+                            <span className="font-medium">{review.scanDiagnostics.qrRawValue.length}</span>
+                          </p>
+                          <p>
+                            Normalized length:{" "}
+                            <span className="font-medium">{review.scanDiagnostics.qrNormalizedRawValue.length}</span>
+                          </p>
+                          <div>
+                            <p className="font-semibold text-slate-700">Raw payload</p>
+                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
+                              {review.scanDiagnostics.qrRawValue || "(empty)"}
+                            </pre>
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-700">Normalized payload</p>
+                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
+                              {review.scanDiagnostics.qrNormalizedRawValue || "(empty)"}
+                            </pre>
+                          </div>
+                          {review.scanDiagnostics.attemptedPassCount > 0 && (
+                            <div>
+                              <p className="font-semibold text-slate-700">
+                                Decode attempts: {review.scanDiagnostics.attemptedPassCount}
+                              </p>
+                              <p className="mt-1 text-slate-600">
+                                {review.scanDiagnostics.attemptedPassSample.join(", ")}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
+                  </div>
 
                   <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                     <InputField
@@ -3352,6 +3575,12 @@ function hasMeaningfulExtractedPayload(extracted: Record<string, unknown>) {
     if (hasQrIdentityFields) {
       return true;
     }
+    const verificationUrl =
+      typeof qr?.verificationUrl === "string" ? qr.verificationUrl.trim() : "";
+    const rawValue = typeof qr?.rawValue === "string" ? qr.rawValue.trim() : "";
+    if (verificationUrl.length > 0 || rawValue.length > 0) {
+      return true;
+    }
   }
 
   const qrLookup = asRecord(asRecord(qr?.stages)?.verificationLookup);
@@ -3388,7 +3617,12 @@ function hasMeaningfulReviewData(review: ReviewState) {
     review.qrLineItemsParseStatus === "SUCCESS";
   if (
     qrHasDecodedCore &&
-    (review.verificationCode.trim().length > 0 || review.traReceiptNumber.trim().length > 0)
+    (
+      review.verificationCode.trim().length > 0 ||
+      review.traReceiptNumber.trim().length > 0 ||
+      review.verificationUrl.trim().length > 0 ||
+      review.rawQrValue.trim().length > 0
+    )
   ) {
     return true;
   }
@@ -3798,6 +4032,12 @@ function buildReviewStateFromSubmission({
       total: toNumericString(receipt.total),
       lines: scannedSnapshotLines
     },
+    scanDiagnostics: buildSubmissionScanDiagnostics({
+      rawQrValue: asString(receipt.rawQrValue),
+      verificationUrl: asString(receipt.verificationUrl),
+      scanStatus: "PARTIAL",
+      extractionMethod: "SUBMISSION"
+    }),
     scanFallbackMode: "NONE",
     lines
   };
@@ -4056,6 +4296,7 @@ function buildReviewStateFromPayload({
       total: scannedTotal,
       lines: scannedSnapshotLines
     },
+    scanDiagnostics: readScanDiagnostics(payload, extracted),
     scanFallbackMode: "NONE",
     lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
@@ -4331,6 +4572,7 @@ function buildManualAssistReview({
       total: scannedTotal,
       lines: scannedSnapshotLines
     },
+    scanDiagnostics: readScanDiagnostics(root, extracted),
     scanFallbackMode: fallbackMode,
     lines: applyReceiptClassificationLineDefaults(lines, effectiveClassification)
   };
@@ -4781,6 +5023,18 @@ function evaluateRequisitionComparison(
       mismatch: false
     },
     {
+      label: "Verification URL",
+      approved: "-",
+      scanned: review.verificationUrl || "-",
+      mismatch: false
+    },
+    {
+      label: "Raw QR Content",
+      approved: "-",
+      scanned: truncateComparisonValue(review.rawQrValue, 96),
+      mismatch: false
+    },
+    {
       label: "Receipt Date",
       approved: "-",
       scanned: review.scannedSnapshot.receiptDate || "-",
@@ -4802,6 +5056,8 @@ function evaluateRequisitionComparison(
       review.scannedSnapshot.receiptNumber.trim().length > 0 ||
       review.traReceiptNumber.trim().length > 0 ||
       review.verificationCode.trim().length > 0 ||
+      review.verificationUrl.trim().length > 0 ||
+      review.rawQrValue.trim().length > 0 ||
       review.tin.trim().length > 0 ||
       Number(review.scannedSnapshot.total || 0) > 0);
 
@@ -5086,7 +5342,9 @@ function resolveScanTrustState(review: ReviewState, scannedLines: ReceiptSnapsho
     review.verificationCode.trim().length > 0 ||
     review.traReceiptNumber.trim().length > 0 ||
     review.tin.trim().length > 0 ||
-    review.vrn.trim().length > 0;
+    review.vrn.trim().length > 0 ||
+    review.verificationUrl.trim().length > 0 ||
+    review.rawQrValue.trim().length > 0;
   const qrDecodeSucceeded =
     review.qrDecodeStatus === "DECODED" ||
     review.qrParseStatus === "PARSED" ||
@@ -5195,6 +5453,17 @@ function normalizeLineDescription(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function truncateComparisonValue(value: string, maxLength = 96) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "-";
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
 async function readJsonPayload(response: Response): Promise<unknown | null> {
   const contentType = (response.headers.get("content-type") || "").toLowerCase();
   if (!contentType.includes("application/json")) {
@@ -5255,6 +5524,386 @@ function readDebugFlags(payload: unknown): ReviewState["debugFlags"] {
     returnedFrom: returnedFromRaw === "qr_tra_plus_ocr" ? "qr_tra_plus_ocr" : "qr_tra",
     partialEnrichment: Boolean(debugFlags?.partialEnrichment)
   };
+}
+
+function readScanDiagnostics(payload: unknown, extractedOverride?: Record<string, unknown> | null): ScanDiagnosticsState {
+  const root = asRecord(payload);
+  const extracted = extractedOverride || asRecord(root?.extracted);
+  const qr = asRecord(extracted?.qr);
+  const qrStages = asRecord(qr?.stages);
+  const qrLookup = asRecord(qrStages?.verificationLookup);
+  const qrDebug = asRecord(qr?.debug);
+  const scanDiagnostics = asRecord(root?.scanDiagnostics);
+  const debugFlags = readDebugFlags(root);
+
+  const decodeStatus = normalizeQrDecodeStatus(scanDiagnostics?.qrDecodeStatus ?? qr?.decodeStatus);
+  const parseStatus = normalizeQrParseStatus(scanDiagnostics?.qrParseStatus ?? qr?.parseStatus);
+  const lookupStatus = normalizeQrLookupStatus(scanDiagnostics?.qrLookupStatus ?? qrLookup?.status);
+  const rawQrValue = asString(scanDiagnostics?.qrRawValue) || asString(qr?.rawValue);
+  const normalizedRawFromPayload =
+    asString(scanDiagnostics?.qrNormalizedRawValue) || asString(qr?.normalizedRawValue);
+  const normalizedRawValue = normalizedRawFromPayload || normalizeRawQrForDisplay(rawQrValue);
+  const rawLengthFromPayload = Number(scanDiagnostics?.qrRawLength);
+  const rawLength = Number.isFinite(rawLengthFromPayload) && rawLengthFromPayload >= 0
+    ? rawLengthFromPayload
+    : rawQrValue.length;
+  const rawPreview = asString(scanDiagnostics?.qrRawPreview) || truncateQrPreview(rawQrValue);
+  const rawPayloadFormat = normalizeRawPayloadFormat(scanDiagnostics?.qrRawPayloadFormat) || detectRawPayloadFormat(rawQrValue);
+  const qrParsedFields = asRecord(qr?.parsedFields);
+  const parsedFieldCount =
+    Number(scanDiagnostics?.qrParsedFieldCount ?? Number.NaN) > -1 &&
+    Number.isFinite(Number(scanDiagnostics?.qrParsedFieldCount))
+      ? Number(scanDiagnostics?.qrParsedFieldCount)
+      : countPopulatedRecordFields(qrParsedFields);
+  const parsedLineItemsCount =
+    Number(scanDiagnostics?.qrParsedLineItemsCount ?? Number.NaN) > -1 &&
+    Number.isFinite(Number(scanDiagnostics?.qrParsedLineItemsCount))
+      ? Number(scanDiagnostics?.qrParsedLineItemsCount)
+      : Array.isArray(qr?.parsedLineCandidates)
+        ? qr.parsedLineCandidates.length
+        : 0;
+  const qrDetectedExplicit = scanDiagnostics?.qrDetected;
+  const qrDetected =
+    typeof qrDetectedExplicit === "boolean"
+      ? qrDetectedExplicit
+      : Boolean(qr?.detected) ||
+        decodeStatus === "DECODED" ||
+        decodeStatus === "DECODE_FAILED" ||
+        normalizedRawValue.length > 0;
+
+  const failureStage =
+    normalizeScanFailureStage(scanDiagnostics?.failureStage) ||
+    resolveScanFailureStageFromSignals({
+      qrDetected,
+      decodeStatus,
+      parseStatus,
+      lookupStatus
+    });
+
+  const attemptedPasses = Array.isArray(qrDebug?.attemptedPasses)
+    ? qrDebug.attemptedPasses.map((entry) => asString(entry)).filter(Boolean)
+    : [];
+  const extractionMethod = asString(scanDiagnostics?.extractionMethod) || asString(extracted?.extractionMethod) || "UNKNOWN";
+
+  return {
+    failureStage,
+    failureMessage: failureStageMessage(failureStage),
+    qrDetected,
+    qrDecodeStatus: decodeStatus,
+    qrDecodePass: asString(scanDiagnostics?.qrDecodePass) || asString(qr?.decodePass),
+    qrParseStatus: parseStatus,
+    qrFailureReason: asString(scanDiagnostics?.qrFailureReason) || asString(qr?.failureReason),
+    qrContentType: normalizeQrContentType(scanDiagnostics?.qrContentType ?? qr?.contentType),
+    qrRawValue: rawQrValue,
+    qrNormalizedRawValue: normalizedRawValue,
+    qrRawLength: rawLength,
+    qrRawPreview: rawPreview,
+    qrRawPayloadFormat: rawPayloadFormat,
+    qrVerificationUrl: asString(scanDiagnostics?.qrVerificationUrl) || asString(qr?.verificationUrl),
+    qrIsTraVerification:
+      typeof scanDiagnostics?.qrIsTraVerification === "boolean"
+        ? scanDiagnostics.qrIsTraVerification
+        : Boolean(qr?.isTraVerification),
+    qrParsedFieldCount: parsedFieldCount,
+    qrParsedLineItemsCount: parsedLineItemsCount,
+    qrLookupStatus: lookupStatus,
+    qrLookupReason: asString(scanDiagnostics?.qrLookupReason) || asString(qrLookup?.reason),
+    qrLookupHttpStatus: parseOptionalFiniteNumber(scanDiagnostics?.qrLookupHttpStatus ?? qrLookup?.httpStatus),
+    qrLookupParsed:
+      typeof scanDiagnostics?.qrLookupParsed === "boolean"
+        ? scanDiagnostics.qrLookupParsed
+        : Boolean(qrLookup?.parsed),
+    ocrAttempted:
+      typeof scanDiagnostics?.ocrAttempted === "boolean" ? scanDiagnostics.ocrAttempted : debugFlags.ocrAttempted,
+    ocrSucceeded:
+      typeof scanDiagnostics?.ocrSucceeded === "boolean" ? scanDiagnostics.ocrSucceeded : debugFlags.ocrSucceeded,
+    ocrError: asString(scanDiagnostics?.ocrError) || debugFlags.ocrError,
+    scanStatus: normalizeScanStatus(scanDiagnostics?.scanStatus ?? extracted?.scanStatus),
+    extractionMethod,
+    returnedFrom:
+      asString(scanDiagnostics?.returnedFrom) === "qr_tra_plus_ocr" || debugFlags.returnedFrom === "qr_tra_plus_ocr"
+        ? "qr_tra_plus_ocr"
+        : "qr_tra",
+    attemptedPassCount: attemptedPasses.length,
+    attemptedPassSample: attemptedPasses.slice(0, 8),
+    successfulPass: asString(qrDebug?.successfulPass),
+    variantCount: Math.max(0, Number(qrDebug?.variantCount ?? 0) || 0),
+    imageReceived: typeof qrDebug?.imageReceived === "boolean" ? qrDebug.imageReceived : true,
+    imageLoaded: typeof qrDebug?.imageLoaded === "boolean" ? qrDebug.imageLoaded : true
+  };
+}
+
+function buildSubmissionScanDiagnostics({
+  rawQrValue,
+  verificationUrl,
+  scanStatus,
+  extractionMethod
+}: {
+  rawQrValue: string;
+  verificationUrl: string;
+  scanStatus: ReceiptScanStatus;
+  extractionMethod: string;
+}): ScanDiagnosticsState {
+  const normalizedRawValue = normalizeRawQrForDisplay(rawQrValue);
+  const qrDetected = normalizedRawValue.length > 0;
+  const failureStage: ScanFailureStage = qrDetected ? "NONE" : "QR_NOT_DETECTED";
+  return {
+    failureStage,
+    failureMessage: failureStageMessage(failureStage),
+    qrDetected,
+    qrDecodeStatus: qrDetected ? "DECODED" : "NOT_DETECTED",
+    qrDecodePass: "",
+    qrParseStatus: qrDetected ? "PARTIAL" : "UNPARSED",
+    qrFailureReason: qrDetected ? "" : "No QR detected",
+    qrContentType: "UNKNOWN",
+    qrRawValue: rawQrValue,
+    qrNormalizedRawValue: normalizedRawValue,
+    qrRawLength: rawQrValue.length,
+    qrRawPreview: truncateQrPreview(rawQrValue),
+    qrRawPayloadFormat: detectRawPayloadFormat(rawQrValue),
+    qrVerificationUrl: verificationUrl,
+    qrIsTraVerification: verificationUrl.includes("tra.go.tz"),
+    qrParsedFieldCount: 0,
+    qrParsedLineItemsCount: 0,
+    qrLookupStatus: "NOT_ATTEMPTED",
+    qrLookupReason: "",
+    qrLookupHttpStatus: null,
+    qrLookupParsed: false,
+    ocrAttempted: false,
+    ocrSucceeded: false,
+    ocrError: "",
+    scanStatus,
+    extractionMethod,
+    returnedFrom: "qr_tra",
+    attemptedPassCount: 0,
+    attemptedPassSample: [],
+    successfulPass: "",
+    variantCount: 0,
+    imageReceived: true,
+    imageLoaded: true
+  };
+}
+
+function buildEmptyScanDiagnostics(): ScanDiagnosticsState {
+  return {
+    failureStage: "QR_NOT_DETECTED",
+    failureMessage: "No scan diagnostics captured yet.",
+    qrDetected: false,
+    qrDecodeStatus: "NOT_DETECTED",
+    qrDecodePass: "",
+    qrParseStatus: "UNPARSED",
+    qrFailureReason: "",
+    qrContentType: "NONE",
+    qrRawValue: "",
+    qrNormalizedRawValue: "",
+    qrRawLength: 0,
+    qrRawPreview: "",
+    qrRawPayloadFormat: "EMPTY",
+    qrVerificationUrl: "",
+    qrIsTraVerification: false,
+    qrParsedFieldCount: 0,
+    qrParsedLineItemsCount: 0,
+    qrLookupStatus: "NOT_ATTEMPTED",
+    qrLookupReason: "",
+    qrLookupHttpStatus: null,
+    qrLookupParsed: false,
+    ocrAttempted: false,
+    ocrSucceeded: false,
+    ocrError: "",
+    scanStatus: "UNREADABLE",
+    extractionMethod: "NONE",
+    returnedFrom: "qr_tra",
+    attemptedPassCount: 0,
+    attemptedPassSample: [],
+    successfulPass: "",
+    variantCount: 0,
+    imageReceived: true,
+    imageLoaded: true
+  };
+}
+
+function parseOptionalFiniteNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return numeric;
+  }
+  return null;
+}
+
+function countPopulatedRecordFields(record: Record<string, unknown> | null) {
+  if (!record) {
+    return 0;
+  }
+  let count = 0;
+  Object.values(record).forEach((value) => {
+    if (typeof value === "string" && value.trim()) {
+      count += 1;
+      return;
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function normalizeScanFailureStage(value: unknown): ScanFailureStage | null {
+  const normalized = asString(value).toUpperCase();
+  if (
+    normalized === "NONE" ||
+    normalized === "QR_NOT_DETECTED" ||
+    normalized === "QR_DECODE_FAILED" ||
+    normalized === "QR_PARSE_UNPARSED" ||
+    normalized === "TRA_LOOKUP_FAILED" ||
+    normalized === "FRONTEND_MAPPING_EMPTY"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function resolveScanFailureStageFromSignals({
+  qrDetected,
+  decodeStatus,
+  parseStatus,
+  lookupStatus
+}: {
+  qrDetected: boolean;
+  decodeStatus: QrDecodeStatus;
+  parseStatus: QrParseStatus;
+  lookupStatus: QrLookupStatus;
+}): ScanFailureStage {
+  if (!qrDetected || decodeStatus === "NOT_DETECTED") {
+    return "QR_NOT_DETECTED";
+  }
+  if (decodeStatus === "DECODE_FAILED") {
+    return "QR_DECODE_FAILED";
+  }
+  if (decodeStatus === "DECODED" && parseStatus === "UNPARSED") {
+    return "QR_PARSE_UNPARSED";
+  }
+  if (decodeStatus === "DECODED" && lookupStatus === "FAILED") {
+    return "TRA_LOOKUP_FAILED";
+  }
+  return "NONE";
+}
+
+function failureStageMessage(stage: ScanFailureStage) {
+  if (stage === "QR_NOT_DETECTED") {
+    return "QR was not detected in the uploaded receipt image.";
+  }
+  if (stage === "QR_DECODE_FAILED") {
+    return "QR was detected but decoding failed.";
+  }
+  if (stage === "QR_PARSE_UNPARSED") {
+    return "QR decoded, but structured field parsing was limited.";
+  }
+  if (stage === "TRA_LOOKUP_FAILED") {
+    return "QR decoded, but TRA verification lookup returned limited data.";
+  }
+  if (stage === "FRONTEND_MAPPING_EMPTY") {
+    return "Backend returned scan data, but review mapping could not populate usable fields.";
+  }
+  return "No scan-stage failure detected.";
+}
+
+function normalizeRawQrForDisplay(value: string) {
+  return value
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function truncateQrPreview(value: string, max = 200) {
+  if (!value) {
+    return "";
+  }
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max)}...`;
+}
+
+function normalizeRawPayloadFormat(value: unknown): ScanDiagnosticsState["qrRawPayloadFormat"] | null {
+  const normalized = asString(value).toUpperCase();
+  if (
+    normalized === "EMPTY" ||
+    normalized === "URL" ||
+    normalized === "JSON" ||
+    normalized === "QUERY_STRING" ||
+    normalized === "KEY_VALUE" ||
+    normalized === "PERCENT_ENCODED" ||
+    normalized === "BASE64_LIKE" ||
+    normalized === "TEXT"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function detectRawPayloadFormat(rawValue: string): ScanDiagnosticsState["qrRawPayloadFormat"] {
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return "EMPTY";
+  }
+  if (/^https?:\/\//i.test(trimmed) || /\btra\.go\.tz\b/i.test(trimmed)) {
+    return "URL";
+  }
+  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+    try {
+      JSON.parse(trimmed);
+      return "JSON";
+    } catch {
+      // continue
+    }
+  }
+  if ((trimmed.includes("&") && trimmed.includes("=")) || /(?:^|[?&])[a-z0-9_\-]+=/.test(trimmed)) {
+    return "QUERY_STRING";
+  }
+  if (/[a-z][a-z0-9_\s-]{1,32}\s*[:=]\s*[^&;\n\r]+/i.test(trimmed)) {
+    return "KEY_VALUE";
+  }
+  if (/%[0-9a-f]{2}/i.test(trimmed)) {
+    return "PERCENT_ENCODED";
+  }
+  if (/^[A-Za-z0-9+/=]{24,}$/.test(trimmed) && !trimmed.includes(" ")) {
+    return "BASE64_LIKE";
+  }
+  return "TEXT";
+}
+
+function markFrontendMappingGap(review: ReviewState): ReviewState {
+  return {
+    ...review,
+    warnings: Array.from(
+      new Set([
+        ...review.warnings,
+        "Scan data was captured, but some mapped fields were empty. Please verify and complete manually."
+      ])
+    ),
+    scanDiagnostics: {
+      ...review.scanDiagnostics,
+      failureStage: "FRONTEND_MAPPING_EMPTY",
+      failureMessage: failureStageMessage("FRONTEND_MAPPING_EMPTY")
+    }
+  };
+}
+
+function resolveScanFailureNotice(review: ReviewState) {
+  if (review.scanDiagnostics.failureStage === "QR_NOT_DETECTED") {
+    return "QR was not detected. Please complete manually with requisition prefilled context.";
+  }
+  if (review.scanDiagnostics.failureStage === "QR_DECODE_FAILED") {
+    return "QR was detected but could not be decoded. Please complete manually with requisition prefilled context.";
+  }
+  if (review.scanDiagnostics.failureStage === "QR_PARSE_UNPARSED") {
+    return "QR decoded but parsing was limited. Review the captured details and complete remaining fields manually.";
+  }
+  if (review.scanDiagnostics.failureStage === "TRA_LOOKUP_FAILED") {
+    return "QR decoded but TRA lookup returned limited details. Please review and complete the remaining fields.";
+  }
+  return SCAN_FALLBACK_MESSAGE;
 }
 
 function evaluateSaveReadiness(review: ReviewState): SaveReadiness {
@@ -5616,6 +6265,25 @@ function formatQrLookupStatus(type: QrLookupStatus) {
     return "Lookup needs review";
   }
   return "Not attempted";
+}
+
+function formatScanFailureStage(stage: ScanFailureStage) {
+  if (stage === "QR_NOT_DETECTED") {
+    return "QR not detected";
+  }
+  if (stage === "QR_DECODE_FAILED") {
+    return "QR detected but decode failed";
+  }
+  if (stage === "QR_PARSE_UNPARSED") {
+    return "QR decoded, parsing limited";
+  }
+  if (stage === "TRA_LOOKUP_FAILED") {
+    return "TRA lookup returned limited data";
+  }
+  if (stage === "FRONTEND_MAPPING_EMPTY") {
+    return "Mapping gap after scan";
+  }
+  return "No stage failure";
 }
 
 function toReadability(value: unknown): ReadabilityConfidence {

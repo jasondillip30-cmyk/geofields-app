@@ -163,6 +163,9 @@ export async function POST(request: NextRequest) {
         qrDecode: {
           success: qrOnly.decodeStatus === "DECODED",
           raw: qrOnly.rawValue,
+          normalizedRaw: qrOnly.normalizedRawValue,
+          rawLength: typeof qrOnly.rawValue === "string" ? qrOnly.rawValue.length : 0,
+          rawPreview: truncateLogValue(typeof qrOnly.rawValue === "string" ? qrOnly.rawValue : "", 200),
           type: qrOnly.contentType,
           decodeStatus: qrOnly.decodeStatus,
           decodePass: qrOnly.decodePass,
@@ -248,6 +251,7 @@ export async function POST(request: NextRequest) {
 
     const message = resolveReceiptIntakeMessage(extraction);
     const debugFlags = readDebugFlagsFromExtraction(extraction as unknown as Record<string, unknown>);
+    const scanDiagnostics = readScanDiagnosticsFromExtraction(extraction as unknown as Record<string, unknown>);
 
     const supplierSuggestion = await suggestSupplier({
       extractedSupplierName: hydratedSupplier.headerSupplierAfter,
@@ -287,6 +291,7 @@ export async function POST(request: NextRequest) {
         extracted: extraction,
         supplierSuggestion,
         debugFlags,
+        scanDiagnostics,
         partialEnrichment: debugFlags.partialEnrichment,
         supplierName: typeof extraction.header?.supplierName === "string" ? extraction.header.supplierName : "",
         supplierConfidence:
@@ -314,6 +319,7 @@ export async function POST(request: NextRequest) {
       extracted: extraction,
       supplierSuggestion,
       debugFlags,
+      scanDiagnostics,
       partialEnrichment: debugFlags.partialEnrichment,
       supplierName: typeof extraction.header?.supplierName === "string" ? extraction.header.supplierName : "",
       supplierConfidence:
@@ -566,16 +572,22 @@ function isQrExtractionResult(value: unknown): value is {
 }
 
 function logQrDebugInfo(qrValue: Record<string, unknown>) {
-  if (process.env.NODE_ENV === "production") {
-    return;
-  }
   const rawQrContent = typeof qrValue.rawValue === "string" ? qrValue.rawValue : "";
   const detectedType = typeof qrValue.contentType === "string" ? qrValue.contentType : "UNKNOWN";
   const detected = Boolean(qrValue.detected);
+  const decodeStatus = typeof qrValue.decodeStatus === "string" ? qrValue.decodeStatus : "UNKNOWN";
+  const decodeSucceeded = decodeStatus === "DECODED";
+  const rawPreview = truncateLogValue(rawQrContent, 200);
+  console.info("[inventory][receipt-intake][qr-raw-debug]", {
+    detected,
+    decodeSucceeded,
+    rawLength: rawQrContent.length,
+    rawPreview
+  });
   console.info("[inventory][receipt-intake][qr]", {
     detected,
     type: detectedType,
-    decodeStatus: typeof qrValue.decodeStatus === "string" ? qrValue.decodeStatus : "UNKNOWN",
+    decodeStatus,
     decodePass: typeof qrValue.decodePass === "string" ? qrValue.decodePass : "",
     parseStatus: typeof qrValue.parseStatus === "string" ? qrValue.parseStatus : "UNKNOWN",
     failureReason: typeof qrValue.failureReason === "string" ? qrValue.failureReason : "",
@@ -696,6 +708,145 @@ function readDebugFlagsFromExtraction(extraction: Record<string, unknown>) {
   };
 }
 
+function readScanDiagnosticsFromExtraction(extraction: Record<string, unknown>) {
+  const qr = extraction.qr && typeof extraction.qr === "object" ? (extraction.qr as Record<string, unknown>) : null;
+  const stages = qr?.stages && typeof qr.stages === "object" ? (qr.stages as Record<string, unknown>) : null;
+  const lookup =
+    stages?.verificationLookup && typeof stages.verificationLookup === "object"
+      ? (stages.verificationLookup as Record<string, unknown>)
+      : null;
+  const intakeDebug =
+    extraction.intakeDebug && typeof extraction.intakeDebug === "object"
+      ? (extraction.intakeDebug as Record<string, unknown>)
+      : null;
+  const scanDiagnostics =
+    extraction.scanDiagnostics && typeof extraction.scanDiagnostics === "object"
+      ? (extraction.scanDiagnostics as Record<string, unknown>)
+      : null;
+
+  const qrParsedFields =
+    qr?.parsedFields && typeof qr.parsedFields === "object" ? (qr.parsedFields as Record<string, unknown>) : null;
+  const parsedFieldCount =
+    typeof scanDiagnostics?.qrParsedFieldCount === "number"
+      ? scanDiagnostics.qrParsedFieldCount
+      : countPopulatedFields(qrParsedFields);
+  const parsedLineItemsCount =
+    typeof scanDiagnostics?.qrParsedLineItemsCount === "number"
+      ? scanDiagnostics.qrParsedLineItemsCount
+      : Array.isArray(qr?.parsedLineCandidates)
+        ? qr.parsedLineCandidates.length
+        : 0;
+
+  const decodeStatus = typeof qr?.decodeStatus === "string" ? qr.decodeStatus : "NOT_DETECTED";
+  const parseStatus = typeof qr?.parseStatus === "string" ? qr.parseStatus : "UNPARSED";
+  const lookupStatus = typeof lookup?.status === "string" ? lookup.status : "NOT_ATTEMPTED";
+  const failureStageRaw =
+    typeof scanDiagnostics?.failureStage === "string" ? scanDiagnostics.failureStage : resolveQrFailureStageFromRoute({
+      decodeStatus,
+      parseStatus,
+      lookupStatus
+    });
+
+  return {
+    qrDetected:
+      typeof scanDiagnostics?.qrDetected === "boolean"
+        ? scanDiagnostics.qrDetected
+        : Boolean(qr?.detected),
+    qrDecodeStatus: decodeStatus,
+    qrDecodePass: typeof qr?.decodePass === "string" ? qr.decodePass : "",
+    qrParseStatus: parseStatus,
+    qrFailureReason: typeof qr?.failureReason === "string" ? qr.failureReason : "",
+    qrContentType: typeof qr?.contentType === "string" ? qr.contentType : "NONE",
+    qrRawValue: typeof qr?.rawValue === "string" ? qr.rawValue : "",
+    qrNormalizedRawValue:
+      typeof qr?.normalizedRawValue === "string" ? qr.normalizedRawValue : typeof qr?.rawValue === "string" ? qr.rawValue : "",
+    qrRawLength:
+      typeof scanDiagnostics?.qrRawLength === "number"
+        ? scanDiagnostics.qrRawLength
+        : typeof qr?.rawValue === "string"
+          ? qr.rawValue.length
+          : 0,
+    qrRawPreview:
+      typeof scanDiagnostics?.qrRawPreview === "string"
+        ? scanDiagnostics.qrRawPreview
+        : truncateLogValue(typeof qr?.rawValue === "string" ? qr.rawValue : "", 200),
+    qrRawPayloadFormat:
+      typeof scanDiagnostics?.qrRawPayloadFormat === "string" ? scanDiagnostics.qrRawPayloadFormat : "EMPTY",
+    qrVerificationUrl: typeof qr?.verificationUrl === "string" ? qr.verificationUrl : "",
+    qrIsTraVerification: Boolean(qr?.isTraVerification),
+    qrParsedFieldCount: parsedFieldCount,
+    qrParsedLineItemsCount: parsedLineItemsCount,
+    qrLookupStatus: lookupStatus,
+    qrLookupReason: typeof lookup?.reason === "string" ? lookup.reason : "",
+    qrLookupHttpStatus: typeof lookup?.httpStatus === "number" ? lookup.httpStatus : null,
+    qrLookupParsed: Boolean(lookup?.parsed),
+    ocrAttempted:
+      typeof scanDiagnostics?.ocrAttempted === "boolean"
+        ? scanDiagnostics.ocrAttempted
+        : Boolean(intakeDebug?.ocrAttempted),
+    ocrSucceeded:
+      typeof scanDiagnostics?.ocrSucceeded === "boolean"
+        ? scanDiagnostics.ocrSucceeded
+        : Boolean(intakeDebug?.ocrSucceeded),
+    ocrError:
+      typeof scanDiagnostics?.ocrError === "string"
+        ? scanDiagnostics.ocrError
+        : typeof intakeDebug?.ocrError === "string"
+          ? intakeDebug.ocrError
+          : "",
+    scanStatus: typeof extraction.scanStatus === "string" ? extraction.scanStatus : "UNREADABLE",
+    extractionMethod: typeof extraction.extractionMethod === "string" ? extraction.extractionMethod : "UNKNOWN",
+    returnedFrom:
+      typeof scanDiagnostics?.returnedFrom === "string"
+        ? scanDiagnostics.returnedFrom
+        : typeof intakeDebug?.returnedFrom === "string"
+          ? intakeDebug.returnedFrom
+          : "qr_tra",
+    failureStage: failureStageRaw
+  };
+}
+
+function resolveQrFailureStageFromRoute({
+  decodeStatus,
+  parseStatus,
+  lookupStatus
+}: {
+  decodeStatus: string;
+  parseStatus: string;
+  lookupStatus: string;
+}) {
+  if (decodeStatus === "NOT_DETECTED") {
+    return "QR_NOT_DETECTED";
+  }
+  if (decodeStatus === "DECODE_FAILED") {
+    return "QR_DECODE_FAILED";
+  }
+  if (decodeStatus === "DECODED" && parseStatus === "UNPARSED") {
+    return "QR_PARSE_UNPARSED";
+  }
+  if (decodeStatus === "DECODED" && lookupStatus === "FAILED") {
+    return "TRA_LOOKUP_FAILED";
+  }
+  return "NONE";
+}
+
+function countPopulatedFields(value: Record<string, unknown> | null) {
+  if (!value) {
+    return 0;
+  }
+  let count = 0;
+  Object.values(value).forEach((entry) => {
+    if (typeof entry === "string" && entry.trim()) {
+      count += 1;
+      return;
+    }
+    if (typeof entry === "number" && Number.isFinite(entry) && entry > 0) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
 function buildSafeFailureResponse({
   savedFile,
   message,
@@ -709,6 +860,8 @@ function buildSafeFailureResponse({
   error: unknown;
   stage?: string;
 }) {
+  const fallbackExtraction = buildFallbackExtraction();
+  const scanDiagnostics = readScanDiagnosticsFromExtraction(fallbackExtraction as unknown as Record<string, unknown>);
   return {
     success: false,
     stage,
@@ -720,7 +873,7 @@ function buildSafeFailureResponse({
           fileName: savedFile.receiptFileName
         }
       : null,
-    extracted: buildFallbackExtraction(),
+    extracted: fallbackExtraction,
     supplierSuggestion: {
       supplierId: null,
       supplierName: "",
@@ -741,6 +894,7 @@ function buildSafeFailureResponse({
       returnedFrom: "qr_tra",
       partialEnrichment: false
     },
+    scanDiagnostics,
     partialEnrichment: false,
     debug: debugMode
       ? {
@@ -817,6 +971,7 @@ function buildFallbackExtraction() {
     qr: {
       detected: false,
       rawValue: "",
+      normalizedRawValue: "",
       contentType: "NONE",
       isTraVerification: false,
       isQrOnlyImage: false,
@@ -849,6 +1004,34 @@ function buildFallbackExtraction() {
           parsed: false
         }
       }
+    },
+    scanDiagnostics: {
+      qrDetected: false,
+      qrDecodeStatus: "NOT_DETECTED",
+      qrDecodePass: "",
+      qrParseStatus: "UNPARSED",
+      qrFailureReason: "No QR detected",
+      qrContentType: "NONE",
+      qrRawValue: "",
+      qrNormalizedRawValue: "",
+      qrRawLength: 0,
+      qrRawPreview: "",
+      qrRawPayloadFormat: "EMPTY",
+      qrVerificationUrl: "",
+      qrIsTraVerification: false,
+      qrParsedFieldCount: 0,
+      qrParsedLineItemsCount: 0,
+      qrLookupStatus: "NOT_ATTEMPTED",
+      qrLookupReason: "",
+      qrLookupHttpStatus: null,
+      qrLookupParsed: false,
+      ocrAttempted: false,
+      ocrSucceeded: false,
+      ocrError: "",
+      scanStatus: "UNREADABLE",
+      extractionMethod: "NONE",
+      returnedFrom: "qr_tra",
+      failureStage: "QR_NOT_DETECTED"
     }
   };
 }
