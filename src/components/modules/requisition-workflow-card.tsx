@@ -6,7 +6,6 @@ import Link from "next/link";
 import type { AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
-import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
 import { formatCurrency } from "@/lib/utils";
 
 type RequisitionType =
@@ -102,9 +101,8 @@ interface RequisitionFormLine {
 
 interface RequisitionWorkflowCardProps {
   filters: AnalyticsFilters;
-  currentUserRole: string | null | undefined;
   clients: Array<{ id: string; name: string }>;
-  projects: Array<{ id: string; name: string; clientId: string }>;
+  projects: Array<{ id: string; name: string; clientId: string; assignedRigId?: string | null }>;
   rigs: Array<{ id: string; name: string }>;
   onWorkflowChanged?: () => Promise<void> | void;
 }
@@ -135,22 +133,18 @@ function createInitialFormState() {
 
 export function RequisitionWorkflowCard({
   filters,
-  currentUserRole,
   clients,
   projects,
   rigs,
   onWorkflowChanged
 }: RequisitionWorkflowCardProps) {
-  const canApprove = canManageExpenseApprovalActions(currentUserRole);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [actingId, setActingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<RequisitionStatus | "all">("all");
   const [rows, setRows] = useState<RequisitionRow[]>([]);
   const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceOption[]>([]);
-  const [statusNotes, setStatusNotes] = useState<Record<string, string>>({});
   const [form, setForm] = useState(() => createInitialFormState());
   const [wizardStep, setWizardStep] = useState<RequisitionWizardStep>(1);
 
@@ -343,6 +337,12 @@ export function RequisitionWorkflowCard({
       setError(null);
       setNotice(null);
 
+      if (wizardStep !== 5) {
+        setWizardStep(5);
+        setError("Review the requisition, then click Submit Requisition to continue.");
+        return;
+      }
+
       for (const step of [1, 2, 3, 4] as RequisitionWizardStep[]) {
         const validationError = validateStep(step);
         if (validationError) {
@@ -399,55 +399,7 @@ export function RequisitionWorkflowCard({
         setSaving(false);
       }
     },
-    [form, loadRequisitions, onWorkflowChanged, validLineItems, validateStep]
-  );
-
-  const updateRequisitionStatus = useCallback(
-    async (requisitionId: string, action: "approve" | "reject" | "reopen") => {
-      const note = (statusNotes[requisitionId] || "").trim();
-      if (action === "reject" && note.length < 3) {
-        setError("Enter a rejection reason (minimum 3 characters).");
-        return;
-      }
-
-      setActingId(requisitionId);
-      setError(null);
-      setNotice(null);
-      try {
-        const response = await fetch(`/api/requisitions/${requisitionId}/status`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action,
-            reason: action === "reject" ? note : undefined
-          })
-        });
-        const payload = (await response.json().catch(() => null)) as
-          | { message?: string }
-          | null;
-        if (!response.ok) {
-          throw new Error(payload?.message || "Failed to update requisition.");
-        }
-        setStatusNotes((current) => ({ ...current, [requisitionId]: "" }));
-        setNotice(
-          action === "approve"
-            ? "Requisition approved. Continue to purchase/receipt stage."
-            : action === "reject"
-              ? "Requisition rejected and returned to requester."
-              : "Requisition reopened to submitted state."
-        );
-        await loadRequisitions();
-      } catch (updateError) {
-        setError(
-          updateError instanceof Error
-            ? updateError.message
-            : "Failed to update requisition."
-        );
-      } finally {
-        setActingId(null);
-      }
-    },
-    [loadRequisitions, statusNotes]
+    [form, loadRequisitions, onWorkflowChanged, validLineItems, validateStep, wizardStep]
   );
 
   const requisitionRows = useMemo(
@@ -480,52 +432,20 @@ export function RequisitionWorkflowCard({
                 Posted
               </span>
             )}
-            {canApprove && row.status === "SUBMITTED" && (
-              <>
-                <input
-                  type="text"
-                  value={statusNotes[row.id] || ""}
-                  onChange={(event) =>
-                    setStatusNotes((current) => ({
-                      ...current,
-                      [row.id]: event.target.value
-                    }))
-                  }
-                  placeholder="Reject reason"
-                  className="w-40 rounded-md border border-slate-200 px-2 py-1 text-xs"
-                />
-                <button
-                  type="button"
-                  disabled={actingId === row.id}
-                  onClick={() => void updateRequisitionStatus(row.id, "approve")}
-                  className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  disabled={actingId === row.id}
-                  onClick={() => void updateRequisitionStatus(row.id, "reject")}
-                  className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
-                >
-                  Reject
-                </button>
-              </>
+            {row.status === "SUBMITTED" && (
+              <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
+                Pending approval
+              </span>
             )}
-            {canApprove && row.status === "REJECTED" && (
-              <button
-                type="button"
-                disabled={actingId === row.id}
-                onClick={() => void updateRequisitionStatus(row.id, "reopen")}
-                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-              >
-                Reopen
-              </button>
+            {row.status === "REJECTED" && (
+              <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700">
+                Rejected
+              </span>
             )}
           </div>
         ];
       }),
-    [actingId, canApprove, projects, rigs, rows, statusNotes, updateRequisitionStatus]
+    [projects, rigs, rows]
   );
   const currentStepError = validateStep(wizardStep);
 
@@ -725,12 +645,15 @@ export function RequisitionWorkflowCard({
                 <SelectInput
                   label={form.type === "INVENTORY_STOCK_UP" ? "Project (not required)" : "Project"}
                   value={form.projectId}
-                  onChange={(value) =>
+                  onChange={(value) => {
+                    const selectedProject = projects.find((project) => project.id === value);
                     setForm((current) => ({
                       ...current,
-                      projectId: value
-                    }))
-                  }
+                      projectId: value,
+                      clientId: selectedProject?.clientId || current.clientId,
+                      rigId: selectedProject?.assignedRigId || current.rigId
+                    }));
+                  }}
                   disabled={form.type === "INVENTORY_STOCK_UP"}
                   options={[
                     {
@@ -778,6 +701,11 @@ export function RequisitionWorkflowCard({
                   />
                 )}
               </div>
+              {form.type === "LIVE_PROJECT_PURCHASE" && form.projectId && (
+                <p className="text-xs text-slate-600">
+                  Project context auto-fills known client and primary rig where available.
+                </p>
+              )}
             </div>
           )}
 
@@ -1036,9 +964,9 @@ export function RequisitionWorkflowCard({
         </form>
       </Card>
 
-      <details className="rounded-xl border border-slate-200 bg-white">
+      <details open className="rounded-xl border border-slate-200 bg-white">
         <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
-          View Approval / Status Insights
+          Requisition History
         </summary>
         <div className="space-y-3 border-t border-slate-200 p-4">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">

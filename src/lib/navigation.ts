@@ -18,7 +18,6 @@ export const navItems: NavItem[] = [
   { href: "/rigs", label: "Rigs", permission: "rigs:view" },
   { href: "/drilling-reports", label: "Drilling Reports", permission: "drilling:view" },
   { href: "/expenses", label: "Purchase Requests", permission: "expenses:manual" },
-  { href: "/purchasing/receipt-follow-up", label: "Purchase Follow-up", permission: "inventory:view" },
   { href: "/breakdowns", label: "Breakdowns", permission: "breakdowns:view" },
   { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
   { href: "/inventory", label: "Inventory", permission: "inventory:view" },

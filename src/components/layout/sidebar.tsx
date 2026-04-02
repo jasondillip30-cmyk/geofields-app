@@ -32,7 +32,6 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Revenue: BarChart3,
   Approvals: ClipboardList,
   "Purchase Requests": Gauge,
-  "Purchase Follow-up": ClipboardList,
   "Cost Tracking": Gauge,
   "Budget vs Actual": Gauge,
   Inventory: Boxes,
@@ -58,7 +57,6 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
       "Rigs",
       "Drilling Reports",
       "Purchase Requests",
-      "Purchase Follow-up",
       "Breakdowns",
       "Maintenance",
       "Inventory",
@@ -261,11 +259,12 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                       }
 
                       const Icon = iconMap[item.label] || LayoutDashboard;
-                      const purchaseFollowUpAliasActive =
-                        item.href === "/purchasing/receipt-follow-up" &&
-                        pathname.startsWith("/inventory/receipt-intake");
+                      const purchaseRequestsAliasActive =
+                        item.href === "/expenses" &&
+                        (pathname.startsWith("/purchasing/receipt-follow-up") ||
+                          pathname.startsWith("/inventory/receipt-intake"));
                       const isActive =
-                        purchaseFollowUpAliasActive ||
+                        purchaseRequestsAliasActive ||
                         pathname === item.href ||
                         (item.href !== "/" && pathname.startsWith(`${item.href}/`));
                       return (

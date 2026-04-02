@@ -17,6 +17,7 @@ import { WorkflowAssistPanel, type WorkflowAssistModel } from "@/components/layo
 import { Card, MetricCard } from "@/components/ui/card";
 import {
   canManageDrillingApprovalActions,
+  canManageExpenseApprovalActions,
   canManageInventoryApprovalActions,
   canManageMaintenanceApprovalActions
 } from "@/lib/auth/approval-policy";
@@ -33,7 +34,7 @@ import {
 } from "@/lib/receipt-approval-classification";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-type ApprovalTab = "drilling" | "maintenance" | "inventory";
+type ApprovalTab = "requisitions" | "drilling" | "maintenance" | "inventory";
 
 interface DrillingApprovalRow {
   id: string;
@@ -105,18 +106,53 @@ interface ReceiptSubmissionApprovalRow {
   classification: ReceiptApprovalClassification;
 }
 
+interface RequisitionApprovalRow {
+  id: string;
+  requisitionCode: string;
+  type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE";
+  status: "SUBMITTED" | "APPROVED" | "REJECTED" | "PURCHASE_COMPLETED";
+  liveProjectSpendType: "BREAKDOWN" | "NORMAL_EXPENSE" | null;
+  submittedAt: string;
+  category: string;
+  subcategory: string | null;
+  context: {
+    clientId: string | null;
+    projectId: string | null;
+    rigId: string | null;
+    maintenanceRequestId: string | null;
+  };
+  contextLabels?: {
+    clientName: string | null;
+    projectName: string | null;
+    rigCode: string | null;
+    maintenanceRequestCode: string | null;
+  };
+  totals: {
+    estimatedTotalCost: number;
+    approvedTotalCost: number;
+    actualPostedCost: number;
+  };
+  submittedBy: {
+    userId: string;
+    name: string;
+    role: string;
+  };
+}
+
 export default function ApprovalsPage() {
   const { user } = useRole();
   const { filters } = useAnalyticsFilters();
-  const [activeTab, setActiveTab] = useState<ApprovalTab>("drilling");
+  const [activeTab, setActiveTab] = useState<ApprovalTab>("requisitions");
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [drillingRows, setDrillingRows] = useState<DrillingApprovalRow[]>([]);
+  const [requisitionRows, setRequisitionRows] = useState<RequisitionApprovalRow[]>([]);
   const [maintenanceRows, setMaintenanceRows] = useState<MaintenanceApprovalRow[]>([]);
   const [inventoryRows, setInventoryRows] = useState<InventoryUsageApprovalRow[]>([]);
   const [receiptSubmissionRows, setReceiptSubmissionRows] = useState<ReceiptSubmissionApprovalRow[]>([]);
   const [drillingNotes, setDrillingNotes] = useState<Record<string, string>>({});
+  const [requisitionNotes, setRequisitionNotes] = useState<Record<string, string>>({});
   const [maintenanceNotes, setMaintenanceNotes] = useState<Record<string, string>>({});
   const [inventoryNotes, setInventoryNotes] = useState<Record<string, string>>({});
   const [inventoryActionError, setInventoryActionError] = useState<string | null>(null);
@@ -130,6 +166,7 @@ export default function ApprovalsPage() {
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const [assistTarget, setAssistTarget] = useState<CopilotFocusTarget | null>(null);
   const canManageDrillingApprovals = canManageDrillingApprovalActions(user?.role);
+  const canManageRequisitionApprovals = canManageExpenseApprovalActions(user?.role);
   const canManageMaintenanceApprovals = canManageMaintenanceApprovalActions(user?.role);
   const canManageInventoryApprovals = canManageInventoryApprovalActions(user?.role);
 
@@ -144,6 +181,19 @@ export default function ApprovalsPage() {
     const response = await fetch(`/api/drilling-reports?${search.toString()}`, { cache: "no-store" });
     const payload = response.ok ? await response.json() : { data: [] };
     setDrillingRows(payload.data || []);
+  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+
+  const loadRequisitionApprovals = useCallback(async () => {
+    const search = new URLSearchParams();
+    if (filters.from) search.set("from", filters.from);
+    if (filters.to) search.set("to", filters.to);
+    if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+    if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+    search.set("status", "SUBMITTED");
+
+    const response = await fetch(`/api/requisitions?${search.toString()}`, { cache: "no-store" });
+    const payload = response.ok ? await response.json() : { data: [] };
+    setRequisitionRows(payload.data || []);
   }, [filters.clientId, filters.from, filters.rigId, filters.to]);
 
   const loadMaintenanceApprovals = useCallback(async () => {
@@ -268,6 +318,7 @@ export default function ApprovalsPage() {
     setLoading(true);
     try {
       await Promise.all([
+        loadRequisitionApprovals(),
         loadDrillingApprovals(),
         loadMaintenanceApprovals(),
         loadInventoryApprovals(),
@@ -276,7 +327,7 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadDrillingApprovals, loadInventoryApprovals, loadMaintenanceApprovals, loadReceiptSubmissionApprovals]);
+  }, [loadDrillingApprovals, loadInventoryApprovals, loadMaintenanceApprovals, loadReceiptSubmissionApprovals, loadRequisitionApprovals]);
 
   useEffect(() => {
     void refreshApprovalsWorkspace();
@@ -321,6 +372,53 @@ export default function ApprovalsPage() {
     }
     return inventoryRows.find((entry) => entry.rig?.id === filters.rigId)?.rig?.rigCode || null;
   }, [drillingRows, filters.rigId, inventoryRows, maintenanceRows]);
+
+  const updateRequisitionStatus = useCallback(
+    async (requisitionId: string, action: "approve" | "reject") => {
+      if (!canManageRequisitionApprovals) {
+        setActionError("You do not have permission to approve or reject purchase requisitions.");
+        return;
+      }
+      const note = requisitionNotes[requisitionId]?.trim() || "";
+      if (action === "reject" && note.length < 3) {
+        setActionError("Please enter a rejection reason (minimum 3 characters).");
+        return;
+      }
+
+      setActionError(null);
+      setActingRowId(requisitionId);
+      try {
+        const response = await fetch(`/api/requisitions/${requisitionId}/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            action,
+            reason: action === "reject" ? note : undefined
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(await readApiError(response, "Failed to update requisition status."));
+        }
+
+        setNotice(
+          action === "approve"
+            ? "Purchase requisition approved."
+            : "Purchase requisition rejected and returned to requester."
+        );
+        setRequisitionNotes((current) => ({ ...current, [requisitionId]: "" }));
+        await refreshApprovalsWorkspace();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to update requisition status.";
+        setActionError(message);
+      } finally {
+        setActingRowId(null);
+      }
+    },
+    [canManageRequisitionApprovals, requisitionNotes, refreshApprovalsWorkspace]
+  );
 
   const updateDrillingStatus = useCallback(
     async (reportId: string, action: "approve" | "reject") => {
@@ -499,6 +597,10 @@ export default function ApprovalsPage() {
     () => [...drillingRows].sort((a, b) => toPendingTimestamp(getDrillingPendingDate(a)) - toPendingTimestamp(getDrillingPendingDate(b))),
     [drillingRows]
   );
+  const sortedRequisitionRows = useMemo(
+    () => [...requisitionRows].sort((a, b) => toPendingTimestamp(a.submittedAt) - toPendingTimestamp(b.submittedAt)),
+    [requisitionRows]
+  );
   const sortedMaintenanceRows = useMemo(
     () =>
       [...maintenanceRows].sort(
@@ -537,11 +639,17 @@ export default function ApprovalsPage() {
   const pendingSummary = useMemo(() => {
     const counts = {
       receiptSubmissions: receiptSubmissionRows.length,
+      requisitions: requisitionRows.length,
       maintenance: maintenanceRows.length,
       inventoryUsage: inventoryRows.length,
       drilling: drillingRows.length
     };
-    const total = counts.receiptSubmissions + counts.maintenance + counts.inventoryUsage + counts.drilling;
+    const total =
+      counts.receiptSubmissions +
+      counts.requisitions +
+      counts.maintenance +
+      counts.inventoryUsage +
+      counts.drilling;
     const buckets = {
       under24: 0,
       over24: 0,
@@ -549,6 +657,7 @@ export default function ApprovalsPage() {
     };
     const pendingDates = [
       ...drillingRows.map(getDrillingPendingDate),
+      ...requisitionRows.map((row) => row.submittedAt),
       ...maintenanceRows.map(getMaintenancePendingDate),
       ...inventoryRows.map(getInventoryPendingDate),
       ...receiptSubmissionRows.map(getReceiptSubmissionPendingDate)
@@ -567,6 +676,7 @@ export default function ApprovalsPage() {
 
     const attentionEntries = [
       { key: "drilling", label: "Drilling Reports", count: counts.drilling },
+      { key: "requisitions", label: "Purchase Requisitions", count: counts.requisitions },
       { key: "maintenance", label: "Maintenance", count: counts.maintenance },
       { key: "inventory", label: "Inventory Usage", count: counts.inventoryUsage },
       { key: "receipt", label: "Receipt Submissions", count: counts.receiptSubmissions }
@@ -578,7 +688,7 @@ export default function ApprovalsPage() {
       buckets,
       mostAttention: attentionEntries[0] || null
     };
-  }, [drillingRows, inventoryRows, maintenanceRows, receiptSubmissionRows]);
+  }, [drillingRows, inventoryRows, maintenanceRows, receiptSubmissionRows, requisitionRows]);
 
   const buildApprovalHref = useCallback(
     (extras?: Record<string, string | null | undefined>) => {
@@ -639,6 +749,34 @@ export default function ApprovalsPage() {
         sectionId: APPROVAL_SECTION_IDS.drilling,
         actionLabel: "Review approval",
         inspectHint: "Inspect meters, work hours, and comments before approve/reject.",
+        targetPageKey: "approvals",
+        score
+      });
+    });
+
+    sortedRequisitionRows.slice(0, 10).forEach((row) => {
+      const pendingAt = row.submittedAt;
+      const pendingMeta = getPendingAgeMeta(pendingAt);
+      const pendingTimestamp = toPendingTimestamp(pendingAt);
+      const severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" =
+        pendingMeta?.bucket === "OVER_3_DAYS" ? "HIGH" : pendingMeta?.bucket === "OVER_24_HOURS" ? "MEDIUM" : "LOW";
+      const score =
+        (severity === "HIGH" ? 36 : severity === "MEDIUM" ? 22 : 10) +
+        Math.min(18, Math.round((row.totals.estimatedTotalCost || 0) / 10000));
+      candidates.push({
+        id: `approval-requisition-${row.id}`,
+        label: `Requisition approval • ${row.requisitionCode}`,
+        reason: `${formatRequisitionType(row.type)} pending ${pendingMeta?.label || "review"}.`,
+        severity,
+        amount: row.totals.estimatedTotalCost || 0,
+        pendingAt,
+        pendingTimestamp,
+        issueType: "APPROVAL_BACKLOG",
+        href: buildApprovalHref({ tab: "requisitions" }),
+        targetId: makeApprovalFocusRowId("requisition", row.id),
+        sectionId: APPROVAL_SECTION_IDS.requisitions,
+        actionLabel: "Review approval",
+        inspectHint: "Inspect requisition context, line items, and estimated value before approve/reject.",
         targetPageKey: "approvals",
         score
       });
@@ -752,6 +890,7 @@ export default function ApprovalsPage() {
   }, [
     buildApprovalHref,
     sortedDrillingRows,
+    sortedRequisitionRows,
     sortedInventoryRows,
     sortedMaintenanceRows,
     sortedReceiptSubmissionRows
@@ -800,6 +939,7 @@ export default function ApprovalsPage() {
       },
       summaryMetrics: [
         { key: "pendingReceiptSubmissions", label: "Pending receipt submissions", value: pendingSummary.counts.receiptSubmissions },
+        { key: "pendingRequisitionApprovals", label: "Pending requisition approvals", value: pendingSummary.counts.requisitions },
         { key: "pendingMaintenanceApprovals", label: "Pending maintenance approvals", value: pendingSummary.counts.maintenance },
         { key: "pendingInventoryUsageApprovals", label: "Pending inventory usage approvals", value: pendingSummary.counts.inventoryUsage },
         { key: "pendingDrillingApprovals", label: "Pending drilling approvals", value: pendingSummary.counts.drilling },
@@ -811,6 +951,21 @@ export default function ApprovalsPage() {
         { key: "bestNextApproval", label: "Best next approval to review", value: bestNextApproval?.label || "N/A" }
       ],
       tablePreviews: [
+        {
+          key: "approvals-requisitions",
+          title: "Pending Purchase Requisitions",
+          rowCount: sortedRequisitionRows.length,
+          columns: ["requisitionCode", "type", "project", "rig", "estimatedTotal", "pendingHours"],
+          rows: sortedRequisitionRows.slice(0, 8).map((row) => ({
+            id: makeApprovalFocusRowId("requisition", row.id),
+            requisitionCode: row.requisitionCode,
+            type: formatRequisitionType(row.type),
+            project: row.contextLabels?.projectName || row.context.projectId || "Unlinked",
+            rig: row.contextLabels?.rigCode || row.context.rigId || "Unlinked",
+            estimatedTotal: row.totals.estimatedTotalCost,
+            pendingHours: Math.max(0, (Date.now() - toPendingTimestamp(row.submittedAt)) / (1000 * 60 * 60))
+          }))
+        },
         {
           key: "approvals-receipt-submissions",
           title: "Pending Receipt Submissions",
@@ -944,6 +1099,15 @@ export default function ApprovalsPage() {
       ],
       navigationTargets: [
         {
+          label: "Open requisition approvals",
+          href: buildApprovalHref({ tab: "requisitions" }),
+          reason: "Review submitted purchase requisitions before procurement proceeds.",
+          actionLabel: "Review approval",
+          inspectHint: "Inspect requisition type, operational context, and total estimate.",
+          pageKey: "approvals",
+          sectionId: APPROVAL_SECTION_IDS.requisitions
+        },
+        {
           label: "Open receipt submissions",
           href: buildApprovalHref(),
           reason: "Review pending receipt submissions first.",
@@ -998,10 +1162,12 @@ export default function ApprovalsPage() {
       pendingSummary.counts.drilling,
       pendingSummary.counts.inventoryUsage,
       pendingSummary.counts.maintenance,
+      pendingSummary.counts.requisitions,
       pendingSummary.counts.receiptSubmissions,
       pendingSummary.total,
       sortedInventoryRows,
       sortedMaintenanceRows,
+      sortedRequisitionRows,
       sortedReceiptSubmissionRows
     ]
   );
@@ -1335,16 +1501,18 @@ export default function ApprovalsPage() {
               : undefined
           }
         >
-        <Card title="Approvals Hub" subtitle="Centralized approval workflow for drilling reports, maintenance, and inventory usage">
+        <Card title="Approvals Hub" subtitle="Centralized approval workflow for requisitions, drilling reports, maintenance, inventory usage, and receipt submissions.">
           <div className="space-y-4">
             <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              Manual expense records are approved in{" "}
-              <Link href="/expenses" className="font-semibold text-brand-700 underline-offset-2 hover:underline">
-                Expenses
-              </Link>
-              . This workspace handles drilling, maintenance, inventory usage, and receipt submissions.
+              This workspace handles requisitions, drilling, maintenance, inventory usage, and receipt submissions.
+              Approved requisitions can then continue to receipt intake from Purchase Requests history.
             </p>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <MetricCard
+                label="Pending Requisition Approvals"
+                value={String(pendingSummary.counts.requisitions)}
+                tone={pendingSummary.counts.requisitions > 0 ? "warn" : "neutral"}
+              />
               <MetricCard
                 label="Pending Receipt Submissions"
                 value={String(pendingSummary.counts.receiptSubmissions)}
@@ -1543,7 +1711,109 @@ export default function ApprovalsPage() {
 
             <WorkflowAssistPanel model={approvalWorkflowAssist} />
 
-            {activeTab === "drilling" ? (
+            {activeTab === "requisitions" ? (
+              loading ? (
+                <p className="text-sm text-ink-600">Loading submitted requisitions...</p>
+              ) : sortedRequisitionRows.length === 0 ? (
+                <p className="text-sm text-ink-600">No submitted requisitions pending approval for current filters.</p>
+              ) : (
+                <div
+                  id={APPROVAL_SECTION_IDS.requisitions}
+                  className={`overflow-hidden rounded-xl border border-slate-200 ${
+                    focusedSectionId === APPROVAL_SECTION_IDS.requisitions
+                      ? "ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+                      : ""
+                  }`}
+                >
+                  {!canManageRequisitionApprovals ? (
+                    <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      View only: requisition approval actions are available to ADMIN and MANAGER roles.
+                    </div>
+                  ) : null}
+                  <div className="max-h-[620px] overflow-auto">
+                    <table className="min-w-full text-left text-sm">
+                      <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
+                        <tr>
+                          <th className="px-3 py-2">Submitted</th>
+                          <th className="px-3 py-2">Requisition</th>
+                          <th className="px-3 py-2">Type</th>
+                          <th className="px-3 py-2">Path</th>
+                          <th className="px-3 py-2">Context</th>
+                          <th className="px-3 py-2 text-right">Estimated Total</th>
+                          <th className="px-3 py-2">Pending Age</th>
+                          <th className="px-3 py-2">Submitted By</th>
+                          <th className="px-3 py-2">Comment</th>
+                          <th className="px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {sortedRequisitionRows.map((row) => {
+                          const pendingMeta = getPendingAgeMeta(row.submittedAt);
+                          return (
+                            <tr
+                              key={row.id}
+                              id={`ai-focus-${makeApprovalFocusRowId("requisition", row.id)}`}
+                              className={`transition-colors duration-150 hover:bg-slate-50/80 ${
+                                focusedRowId === makeApprovalFocusRowId("requisition", row.id)
+                                  ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200"
+                                  : pendingMeta?.rowClass || ""
+                              }`}
+                            >
+                              <td className="px-3 py-2 text-ink-700">{formatReceiptSubmissionDate(row.submittedAt, row.submittedAt)}</td>
+                              <td className="px-3 py-2 text-ink-800">{row.requisitionCode}</td>
+                              <td className="px-3 py-2 text-ink-700">{formatRequisitionType(row.type)}</td>
+                              <td className="px-3 py-2 text-ink-700">{formatLiveProjectSpendType(row.liveProjectSpendType)}</td>
+                              <td className="px-3 py-2 text-ink-700">
+                                {formatRequisitionContext(row.context, row.contextLabels)}
+                              </td>
+                              <td className="px-3 py-2 text-right text-ink-800">{formatCurrency(row.totals.estimatedTotalCost || 0)}</td>
+                              <td className="px-3 py-2">
+                                {pendingMeta ? <StatusBadge label={pendingMeta.label} tone={pendingMeta.badgeTone} /> : "-"}
+                              </td>
+                              <td className="px-3 py-2 text-ink-700">{row.submittedBy.name || "-"}</td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="text"
+                                  value={requisitionNotes[row.id] || ""}
+                                  onChange={(event) =>
+                                    setRequisitionNotes((current) => ({
+                                      ...current,
+                                      [row.id]: event.target.value
+                                    }))
+                                  }
+                                  placeholder="Optional rejection reason"
+                                  className="w-52 rounded-md border border-slate-200 px-2 py-1 text-xs"
+                                />
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={!canManageRequisitionApprovals || actingRowId === row.id}
+                                    onClick={() => void updateRequisitionStatus(row.id, "approve")}
+                                    className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={!canManageRequisitionApprovals || actingRowId === row.id}
+                                    onClick={() => void updateRequisitionStatus(row.id, "reject")}
+                                    className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            ) : activeTab === "drilling" ? (
               loading ? (
                 <p className="text-sm text-ink-600">Loading submitted drilling reports...</p>
               ) : sortedDrillingRows.length === 0 ? (
@@ -1870,6 +2140,7 @@ export default function ApprovalsPage() {
 }
 
 const APPROVAL_TABS: Array<{ key: ApprovalTab; label: string }> = [
+  { key: "requisitions", label: "Purchase Requisitions" },
   { key: "drilling", label: "Drilling Reports" },
   { key: "maintenance", label: "Maintenance" },
   { key: "inventory", label: "Inventory Usage" }
@@ -1878,18 +2149,22 @@ const APPROVAL_TABS: Array<{ key: ApprovalTab; label: string }> = [
 const APPROVAL_SECTION_IDS = {
   summary: "approvals-summary-section",
   receipts: "approvals-receipts-section",
+  requisitions: "approvals-tab-purchase-requisitions",
   drilling: "approvals-tab-drilling-reports",
   maintenance: "approvals-tab-maintenance",
   inventory: "approvals-tab-inventory-usage"
 } as const;
 
-type ApprovalRowKind = "receipt" | "drilling" | "maintenance" | "inventory";
+type ApprovalRowKind = "receipt" | "requisition" | "drilling" | "maintenance" | "inventory";
 
 function makeApprovalFocusRowId(kind: ApprovalRowKind, id: string) {
   return `${kind}-${id}`;
 }
 
 function resolveApprovalTabForFocus(sectionId?: string | null, targetId?: string | null): ApprovalTab | null {
+  if (sectionId === APPROVAL_SECTION_IDS.requisitions) {
+    return "requisitions";
+  }
   if (sectionId === APPROVAL_SECTION_IDS.drilling) {
     return "drilling";
   }
@@ -1900,6 +2175,9 @@ function resolveApprovalTabForFocus(sectionId?: string | null, targetId?: string
     return "inventory";
   }
   if (targetId) {
+    if (targetId.startsWith("requisition-")) {
+      return "requisitions";
+    }
     if (targetId.startsWith("drilling-")) {
       return "drilling";
     }
@@ -1919,6 +2197,9 @@ function resolveApprovalSectionFromTargetId(targetId?: string | null) {
   }
   if (targetId.startsWith("receipt-")) {
     return APPROVAL_SECTION_IDS.receipts;
+  }
+  if (targetId.startsWith("requisition-")) {
+    return APPROVAL_SECTION_IDS.requisitions;
   }
   if (targetId.startsWith("drilling-")) {
     return APPROVAL_SECTION_IDS.drilling;
@@ -1953,6 +2234,52 @@ function resolveApprovalsAssistRoleLabel(role: string | null) {
     return "Operations review";
   }
   return null;
+}
+
+function formatRequisitionType(
+  type: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE"
+) {
+  if (type === "LIVE_PROJECT_PURCHASE") {
+    return "Live project";
+  }
+  if (type === "MAINTENANCE_PURCHASE") {
+    return "Maintenance";
+  }
+  return "Inventory stock-up";
+}
+
+function formatLiveProjectSpendType(value: "BREAKDOWN" | "NORMAL_EXPENSE" | null) {
+  if (value === "BREAKDOWN") {
+    return "Breakdown";
+  }
+  if (value === "NORMAL_EXPENSE") {
+    return "Normal expense";
+  }
+  return "-";
+}
+
+function formatRequisitionContext(
+  context: RequisitionApprovalRow["context"],
+  labels?: RequisitionApprovalRow["contextLabels"]
+) {
+  const tokens: string[] = [];
+  if (context.projectId) {
+    tokens.push(labels?.projectName || `Project ${context.projectId.slice(0, 8)}`);
+  }
+  if (context.rigId) {
+    tokens.push(labels?.rigCode ? `Rig ${labels.rigCode}` : `Rig ${context.rigId.slice(0, 8)}`);
+  }
+  if (context.clientId) {
+    tokens.push(labels?.clientName || `Client ${context.clientId.slice(0, 8)}`);
+  }
+  if (context.maintenanceRequestId) {
+    tokens.push(
+      labels?.maintenanceRequestCode
+        ? `MR ${labels.maintenanceRequestCode}`
+        : `MR ${context.maintenanceRequestId.slice(0, 8)}`
+    );
+  }
+  return tokens.length > 0 ? tokens.join(" • ") : "Unlinked";
 }
 
 function StatusBadge({ label, tone }: { label: string; tone: "blue" | "green" | "red" | "gray" | "amber" }) {

@@ -42,6 +42,12 @@ interface RequisitionRowOutput {
     rigId: string | null;
     maintenanceRequestId: string | null;
   };
+  contextLabels: {
+    clientName: string | null;
+    projectName: string | null;
+    rigCode: string | null;
+    maintenanceRequestCode: string | null;
+  };
   lineItems: PurchaseRequisitionLineItem[];
   totals: {
     estimatedTotalCost: number;
@@ -108,7 +114,7 @@ export async function GET(request: NextRequest) {
     orderBy: [{ reportDate: "desc" }, { createdAt: "desc" }]
   });
 
-  const parsed = requisitionRows
+  const parsedEntries = requisitionRows
     .map((row) => {
       const parsedPayload = parsePurchaseRequisitionPayload(row.payloadJson);
       if (!parsedPayload) {
@@ -133,8 +139,92 @@ export async function GET(request: NextRequest) {
         return false;
       }
       return true;
+    });
+
+  const clientIds = Array.from(
+    new Set(
+      parsedEntries
+        .map((entry) => entry.payload.context.clientId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const projectIds = Array.from(
+    new Set(
+      parsedEntries
+        .map((entry) => entry.payload.context.projectId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const rigIds = Array.from(
+    new Set(
+      parsedEntries
+        .map((entry) => entry.payload.context.rigId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+  const maintenanceRequestIds = Array.from(
+    new Set(
+      parsedEntries
+        .map((entry) => entry.payload.context.maintenanceRequestId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+
+  const [clients, projects, rigs, maintenanceRequests] = await Promise.all([
+    clientIds.length > 0
+      ? prisma.client.findMany({
+          where: { id: { in: clientIds } },
+          select: { id: true, name: true }
+        })
+      : Promise.resolve([]),
+    projectIds.length > 0
+      ? prisma.project.findMany({
+          where: { id: { in: projectIds } },
+          select: { id: true, name: true }
+        })
+      : Promise.resolve([]),
+    rigIds.length > 0
+      ? prisma.rig.findMany({
+          where: { id: { in: rigIds } },
+          select: { id: true, rigCode: true }
+        })
+      : Promise.resolve([]),
+    maintenanceRequestIds.length > 0
+      ? prisma.maintenanceRequest.findMany({
+          where: { id: { in: maintenanceRequestIds } },
+          select: { id: true, requestCode: true }
+        })
+      : Promise.resolve([])
+  ]);
+
+  const clientNameById = new Map(clients.map((entry) => [entry.id, entry.name]));
+  const projectNameById = new Map(projects.map((entry) => [entry.id, entry.name]));
+  const rigCodeById = new Map(rigs.map((entry) => [entry.id, entry.rigCode]));
+  const maintenanceCodeById = new Map(
+    maintenanceRequests.map((entry) => [entry.id, entry.requestCode])
+  );
+
+  const parsed = parsedEntries.map((entry) =>
+    serializeRequisitionRow(entry.row, entry.payload, {
+      clientName:
+        entry.payload.context.clientId && clientNameById.has(entry.payload.context.clientId)
+          ? clientNameById.get(entry.payload.context.clientId) || null
+          : null,
+      projectName:
+        entry.payload.context.projectId && projectNameById.has(entry.payload.context.projectId)
+          ? projectNameById.get(entry.payload.context.projectId) || null
+          : null,
+      rigCode:
+        entry.payload.context.rigId && rigCodeById.has(entry.payload.context.rigId)
+          ? rigCodeById.get(entry.payload.context.rigId) || null
+          : null,
+      maintenanceRequestCode:
+        entry.payload.context.maintenanceRequestId &&
+        maintenanceCodeById.has(entry.payload.context.maintenanceRequestId)
+          ? maintenanceCodeById.get(entry.payload.context.maintenanceRequestId) || null
+          : null
     })
-    .map((entry) => serializeRequisitionRow(entry.row, entry.payload));
+  );
 
   return NextResponse.json({
     data: parsed,
@@ -396,7 +486,13 @@ function serializeRequisitionRow(
     createdAt: Date;
     updatedAt: Date;
   },
-  payload: PurchaseRequisitionPayload
+  payload: PurchaseRequisitionPayload,
+  contextLabels?: {
+    clientName: string | null;
+    projectName: string | null;
+    rigCode: string | null;
+    maintenanceRequestCode: string | null;
+  }
 ): RequisitionRowOutput {
   return {
     id: row.id,
@@ -411,6 +507,12 @@ function serializeRequisitionRow(
     submittedAt: payload.submittedAt,
     submittedBy: payload.submittedBy,
     context: payload.context,
+    contextLabels: {
+      clientName: contextLabels?.clientName || null,
+      projectName: contextLabels?.projectName || null,
+      rigCode: contextLabels?.rigCode || null,
+      maintenanceRequestCode: contextLabels?.maintenanceRequestCode || null
+    },
     lineItems: payload.lineItems,
     totals: payload.totals,
     approval: payload.approval,
