@@ -2,13 +2,11 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { ReceiptIntakePanel } from "@/components/inventory/receipt-intake-panel";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
-import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
-import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { useRole } from "@/components/layout/role-provider";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
@@ -215,12 +213,13 @@ export default function InventoryReceiptIntakePage() {
 }
 
 function InventoryReceiptIntakePageContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useRole();
   const canManage = Boolean(user?.role && canAccess(user.role, "inventory:manage"));
-  const { filters } = useAnalyticsFilters();
-  const currentView = (searchParams.get("view") || "").toLowerCase() === "history" ? "history" : "scan";
+  const requestedView = (searchParams.get("view") || "").toLowerCase();
   const activeSubmissionId = searchParams.get("submissionId") || "";
+  const currentView = activeSubmissionId ? "scan" : requestedView === "history" ? "history" : "scan";
   const urlRequisitionPrefill = useMemo<RequisitionPrefill | null>(() => {
     const requisitionId = normalizeOptionalId(searchParams.get("requisitionId"));
     if (!requisitionId) {
@@ -241,7 +240,10 @@ function InventoryReceiptIntakePageContent() {
     };
   }, [searchParams]);
 
-  const [entryMode, setEntryMode] = useState<ReceiptEntryMode>("");
+  const isApprovedContinuationEntry = Boolean(urlRequisitionPrefill);
+  const [entryMode, setEntryMode] = useState<ReceiptEntryMode>(
+    () => (isApprovedContinuationEntry ? "REQUISITION" : "")
+  );
   const [receiptInputMethod, setReceiptInputMethod] =
     useState<ReceiptInputMethod>("");
   const [selectedRequisitionId, setSelectedRequisitionId] = useState<string>(
@@ -307,7 +309,9 @@ function InventoryReceiptIntakePageContent() {
       rigCode
     };
   }, [clients, projects, rigs, selectedRequisitionPrefill]);
-  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(1);
+  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(
+    () => (isApprovedContinuationEntry ? 2 : 1)
+  );
   const canRenderReceiptPanel =
     entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
   const stepOneBlockedReason =
@@ -322,15 +326,30 @@ function InventoryReceiptIntakePageContent() {
         : !receiptInputMethod
           ? "Choose scan or manual receipt input to continue."
           : "";
+  const isLockedApprovedContinuation =
+    isApprovedContinuationEntry && entryMode === "REQUISITION";
+  const workflowStepLabels = isLockedApprovedContinuation
+    ? [
+        "1. Receipt method",
+        "2. Upload / enter receipt",
+        "3. Review receipt data",
+        "4. Finalize posting"
+      ]
+    : [
+        "1. Choose intake path",
+        "2. Setup requisition/manual context",
+        "3. Upload / scan receipt",
+        "4. Review parsed data",
+        "5. Finalize posting"
+      ];
 
   useEffect(() => {
     if (!urlRequisitionPrefill) {
       return;
     }
     setEntryMode("REQUISITION");
-    setReceiptInputMethod("SCAN");
     setSelectedRequisitionId(urlRequisitionPrefill.id);
-    setWizardStep(2);
+    setWizardStep((current) => (current < 2 ? 2 : current));
   }, [urlRequisitionPrefill]);
 
   useEffect(() => {
@@ -340,29 +359,23 @@ function InventoryReceiptIntakePageContent() {
     setWizardStep(3);
   }, [activeSubmissionId]);
 
-  const selectedClientLabel = useMemo(() => {
-    if (filters.clientId === "all") {
-      return null;
+  function handleReceiptMethodSelection(method: ReceiptInputMethod) {
+    setReceiptInputMethod(method);
+    if (
+      entryMode === "REQUISITION" &&
+      !activeRequisitionPrefill &&
+      !activeSubmission
+    ) {
+      return;
     }
-    return clients.find((client) => client.id === filters.clientId)?.name || null;
-  }, [clients, filters.clientId]);
-
-  const selectedRigLabel = useMemo(() => {
-    if (filters.rigId === "all") {
-      return null;
-    }
-    return rigs.find((rig) => rig.id === filters.rigId)?.rigCode || null;
-  }, [filters.rigId, rigs]);
+    setWizardStep(3);
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const movementQuery = new URLSearchParams();
-      if (filters.from) movementQuery.set("from", filters.from);
-      if (filters.to) movementQuery.set("to", filters.to);
-      if (filters.clientId !== "all") movementQuery.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") movementQuery.set("rigId", filters.rigId);
       const submissionsQuery = new URLSearchParams(movementQuery);
       const requisitionsQuery = new URLSearchParams(movementQuery);
       requisitionsQuery.set("status", "APPROVED");
@@ -496,7 +509,7 @@ function InventoryReceiptIntakePageContent() {
     } finally {
       setLoading(false);
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+  }, []);
 
   useEffect(() => {
     void loadData();
@@ -584,7 +597,7 @@ function InventoryReceiptIntakePageContent() {
           )}.`,
           severity: (row.summary.total || 0) >= 10000 ? ("HIGH" as const) : ("MEDIUM" as const),
           amount: row.summary.total || 0,
-          href: `/purchasing/receipt-follow-up?view=history&submissionId=${row.id}`,
+          href: `/purchasing/receipt-follow-up?submissionId=${row.id}`,
           issueType: "APPROVAL_BACKLOG",
           targetId: row.id,
           sectionId: "inventory-receipt-history-section",
@@ -600,7 +613,7 @@ function InventoryReceiptIntakePageContent() {
           reason: `Movement value ${formatCurrency(row.totalCost || 0)} with linked receipt evidence.`,
           severity: (row.totalCost || 0) >= 10000 ? ("HIGH" as const) : ("MEDIUM" as const),
           amount: row.totalCost || 0,
-          href: `/purchasing/receipt-follow-up?view=history`,
+          href: `/purchasing/receipt-follow-up`,
           issueType: "INVENTORY_MOVEMENT",
           targetId: row.id,
           sectionId: "inventory-receipt-history-section",
@@ -612,10 +625,10 @@ function InventoryReceiptIntakePageContent() {
       pageKey: "inventory-receipt-intake",
       pageName: "Purchase Receipt Follow-up",
       filters: {
-        clientId: filters.clientId,
-        rigId: filters.rigId,
-        from: filters.from || null,
-        to: filters.to || null
+        clientId: null,
+        rigId: null,
+        from: null,
+        to: null
       },
       summaryMetrics: [
         { key: "receiptsInScope", label: "Receipts in Scope", value: historyRows.length },
@@ -636,7 +649,7 @@ function InventoryReceiptIntakePageContent() {
             supplier: row.summary.supplierName || "-",
             receipt: row.summary.receiptNumber || "-",
             total: row.summary.total || 0,
-            href: `/purchasing/receipt-follow-up?view=history&submissionId=${row.id}`,
+            href: `/purchasing/receipt-follow-up?submissionId=${row.id}`,
             targetId: row.id,
             sectionId: "inventory-receipt-history-section",
             targetPageKey: "inventory-receipt-intake"
@@ -653,7 +666,7 @@ function InventoryReceiptIntakePageContent() {
             supplier: row.supplier?.name || "-",
             item: row.item?.name || "-",
             value: row.totalCost || 0,
-            href: "/purchasing/receipt-follow-up?view=history",
+            href: "/purchasing/receipt-follow-up",
             targetId: row.id,
             sectionId: "inventory-receipt-history-section",
             targetPageKey: "inventory-receipt-intake"
@@ -671,7 +684,7 @@ function InventoryReceiptIntakePageContent() {
         },
         {
           label: "Open Follow-up History",
-          href: "/purchasing/receipt-follow-up?view=history",
+          href: "/purchasing/receipt-follow-up",
           reason: "Review pending/finalized receipt records.",
           pageKey: "inventory-receipt-intake",
           sectionId: "inventory-receipt-history-section"
@@ -696,7 +709,7 @@ function InventoryReceiptIntakePageContent() {
         "Use the global copilot to triage pending receipt submissions and linked inventory impact."
       ]
     };
-  }, [filters.clientId, filters.from, filters.rigId, filters.to, historyRows, submissions, totalReceiptValue]);
+  }, [historyRows, submissions, totalReceiptValue]);
 
   useRegisterCopilotContext(copilotContext);
   useCopilotFocusTarget({
@@ -725,28 +738,14 @@ function InventoryReceiptIntakePageContent() {
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
         )}
 
-        <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
-
         <section className="gf-page-header">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
-                Complete Approved Purchase
-              </h1>
-              <p className="mt-1 text-sm text-slate-600">
-                Follow approved requisitions through receipt capture, review, and final posting.
-              </p>
-            </div>
-            <Link
-              href={
-                currentView === "history"
-                  ? "/purchasing/receipt-follow-up"
-                  : "/purchasing/receipt-follow-up?view=history"
-              }
-              className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              {currentView === "history" ? "Back to follow-up flow" : "View intake history"}
-            </Link>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
+              Complete Approved Purchase
+            </h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Continue approved requisitions through receipt capture, review, and final posting.
+            </p>
           </div>
           <div className="mt-3 border-t border-slate-200/80" />
         </section>
@@ -755,23 +754,23 @@ function InventoryReceiptIntakePageContent() {
           <section className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Guided Workflow</p>
             <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
-              {[
-                "1. Choose intake path",
-                "2. Setup requisition/manual context",
-                "3. Upload / scan receipt",
-                "4. Review parsed data",
-                "5. Finalize posting"
-              ].map((label, index) => (
+              {workflowStepLabels.map((label, index) => (
                 <div
                   key={label}
                   className={`rounded-lg border px-2 py-1.5 ${
-                    wizardStep === 1 && index === 0
-                      ? "border-brand-300 bg-brand-50 text-brand-900"
-                      : wizardStep === 2 && index === 1
+                    isLockedApprovedContinuation
+                      ? wizardStep === 2 && index === 0
                         ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : wizardStep === 3 && index >= 2
+                        : wizardStep === 3 && index >= 1
                           ? "border-brand-300 bg-brand-50 text-brand-900"
                           : "border-slate-200 bg-slate-50 text-slate-700"
+                      : wizardStep === 1 && index === 0
+                        ? "border-brand-300 bg-brand-50 text-brand-900"
+                        : wizardStep === 2 && index === 1
+                          ? "border-brand-300 bg-brand-50 text-brand-900"
+                          : wizardStep === 3 && index >= 2
+                            ? "border-brand-300 bg-brand-50 text-brand-900"
+                            : "border-slate-200 bg-slate-50 text-slate-700"
                   }`}
                 >
                   {label}
@@ -782,10 +781,18 @@ function InventoryReceiptIntakePageContent() {
               {wizardStep > 1 && (
                 <button
                   type="button"
-                  onClick={() => setWizardStep((current) => Math.max(1, current - 1) as ReceiptFlowWizardStep)}
+                  onClick={() => {
+                    if (isLockedApprovedContinuation && wizardStep === 2) {
+                      router.push("/expenses");
+                      return;
+                    }
+                    setWizardStep((current) => Math.max(1, current - 1) as ReceiptFlowWizardStep);
+                  }}
                   className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
                 >
-                  Back
+                  {isLockedApprovedContinuation && wizardStep === 2
+                    ? "Back to Purchase Requests"
+                    : "Back"}
                 </button>
               )}
               {wizardStep < 3 && (
@@ -819,7 +826,7 @@ function InventoryReceiptIntakePageContent() {
           </section>
         )}
 
-        {currentView === "scan" && wizardStep === 1 && (
+        {currentView === "scan" && wizardStep === 1 && !isLockedApprovedContinuation && (
           <section id="inventory-receipt-entry-section" className="rounded-2xl border border-brand-200 bg-brand-50/70 p-4 shadow-sm md:p-5">
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Step 1 — Choose Intake Path</p>
             <p className="mt-1 text-sm text-brand-900">
@@ -830,7 +837,7 @@ function InventoryReceiptIntakePageContent() {
                 type="button"
                 onClick={() => {
                   setEntryMode("REQUISITION");
-                  setReceiptInputMethod("SCAN");
+                  setReceiptInputMethod("");
                 }}
                 className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
                   entryMode === "REQUISITION"
@@ -844,7 +851,7 @@ function InventoryReceiptIntakePageContent() {
                 type="button"
                 onClick={() => {
                   setEntryMode("MANUAL");
-                  setReceiptInputMethod("MANUAL");
+                  setReceiptInputMethod("");
                 }}
                 className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
                   entryMode === "MANUAL"
@@ -860,8 +867,12 @@ function InventoryReceiptIntakePageContent() {
 
         {currentView === "scan" && wizardStep === 2 && (
           <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Configure Approved Purchase Follow-up</p>
-            {entryMode === "REQUISITION" ? (
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              {isLockedApprovedContinuation
+                ? "Step 1 — Choose Receipt Method"
+                : "Step 2 — Configure Approved Purchase Follow-up"}
+            </p>
+            {entryMode === "REQUISITION" && !isLockedApprovedContinuation ? (
               <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
                 <label className="text-xs text-ink-700">
                   <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
@@ -905,6 +916,12 @@ function InventoryReceiptIntakePageContent() {
                   </p>
                 )}
               </div>
+            ) : entryMode === "REQUISITION" && isLockedApprovedContinuation ? (
+              <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+                Continuing approved requisition{" "}
+                <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>.
+                Receipt context is already locked to this requisition.
+              </div>
             ) : (
               <p className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
                 Manual path selected. Continue to scanning and then complete required context during review.
@@ -920,7 +937,7 @@ function InventoryReceiptIntakePageContent() {
               <div className="mt-2 grid gap-2 md:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => setReceiptInputMethod("SCAN")}
+                  onClick={() => handleReceiptMethodSelection("SCAN")}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                     receiptInputMethod === "SCAN"
                       ? "border-brand-300 bg-brand-50 text-brand-800"
@@ -931,7 +948,7 @@ function InventoryReceiptIntakePageContent() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setReceiptInputMethod("MANUAL")}
+                  onClick={() => handleReceiptMethodSelection("MANUAL")}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
                     receiptInputMethod === "MANUAL"
                       ? "border-brand-300 bg-brand-50 text-brand-800"
@@ -990,8 +1007,8 @@ function InventoryReceiptIntakePageContent() {
                 clients={clients}
                 projects={projects}
                 rigs={rigs}
-                defaultClientId={activeRequisitionPrefill?.clientId || (filters.clientId !== "all" ? filters.clientId : "")}
-                defaultRigId={activeRequisitionPrefill?.rigId || (filters.rigId !== "all" ? filters.rigId : "")}
+                defaultClientId={activeRequisitionPrefill?.clientId || ""}
+                defaultRigId={activeRequisitionPrefill?.rigId || ""}
                 initialRequisition={activeRequisitionPrefill}
                 preferredInputMethod={receiptInputMethod || "SCAN"}
                 activeSubmission={activeSubmission}
@@ -1016,10 +1033,17 @@ function InventoryReceiptIntakePageContent() {
                 "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
             )}
           >
+          <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            Receipt history is secondary. Primary lifecycle tracking is under{" "}
+            <Link href="/expenses" className="font-semibold text-brand-700 underline-offset-2 hover:underline">
+              Purchase Requests → Requisition History
+            </Link>
+            .
+          </div>
           <Card
             className="min-w-0"
-            title="Intake History"
-            subtitle="Receipt-centered history with linked movement and expense records"
+            title="Legacy Receipt Submission History"
+            subtitle="Secondary receipt evidence and submission log"
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading receipt history...</p>
@@ -1032,7 +1056,7 @@ function InventoryReceiptIntakePageContent() {
                   </div>
                   {submissions.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-ink-600">
-                      No receipt submissions found for current filters.
+                      No receipt submissions found yet.
                     </p>
                   ) : (
                     <DataTable
@@ -1103,7 +1127,7 @@ function InventoryReceiptIntakePageContent() {
                   </div>
                   {historyRows.length === 0 ? (
                     <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-ink-600">
-                      No receipt-linked inventory movements found for current filters.
+                      No receipt-linked inventory movements found yet.
                     </p>
                   ) : (
                     <DataTable

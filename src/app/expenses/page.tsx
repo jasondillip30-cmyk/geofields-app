@@ -4,8 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
 import { AccessGate } from "@/components/layout/access-gate";
-import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
-import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import type { AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { Card } from "@/components/ui/card";
 
 interface ClientOption {
@@ -34,7 +33,12 @@ export default function ExpensesPage() {
 }
 
 function ExpensesPageContent() {
-  const { filters } = useAnalyticsFilters();
+  const filters: AnalyticsFilters = {
+    clientId: "all",
+    rigId: "all",
+    from: "",
+    to: ""
+  };
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rigs, setRigs] = useState<RigOption[]>([]);
@@ -101,7 +105,6 @@ function ExpensesPageContent() {
             {errorMessage}
           </div>
         )}
-        <FilterScopeBanner filters={filters} />
 
         <section className="gf-page-header">
           <div>
