@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
   const moduleName = nullable(request.nextUrl.searchParams.get("module"));
   const action = nullable(request.nextUrl.searchParams.get("action"));
   const entityType = nullable(request.nextUrl.searchParams.get("entityType"));
+  const entityId = nullable(request.nextUrl.searchParams.get("entityId"));
   const limit = parseLimit(request.nextUrl.searchParams.get("limit"));
 
   const where: Prisma.AuditLogWhereInput = {
@@ -25,6 +26,7 @@ export async function GET(request: NextRequest) {
     ...(moduleName ? { module: moduleName } : {}),
     ...(action ? { action } : {}),
     ...(entityType ? { entityType } : {}),
+    ...(entityId ? { entityId } : {}),
     ...(from || to
       ? {
           createdAt: {

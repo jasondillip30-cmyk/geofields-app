@@ -83,6 +83,7 @@ export default async function ClientWorkspacePage({
               <p>Phone: {client.phone || "-"}</p>
               <p>Address: {client.address || "-"}</p>
               {client.logoUrl && (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={client.logoUrl}
                   alt={`${client.name} logo`}

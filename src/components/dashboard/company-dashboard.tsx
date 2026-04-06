@@ -12,7 +12,15 @@ import { DonutStatusChart } from "@/components/charts/donut-status-chart";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
 import { ActualVsForecastChart } from "@/components/charts/actual-vs-forecast-chart";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import {
+  FilterScopeBanner,
+  hasActiveScopeFilters
+} from "@/components/layout/filter-scope-banner";
+import {
+  AnalyticsEmptyState,
+  getScopedKpiHelper,
+  getScopedKpiValue
+} from "@/components/layout/analytics-empty-state";
 import { getBucketDateRange } from "@/lib/drilldown";
 import { isDashboardSmartRecommendationsEnabled } from "@/lib/feature-flags";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -147,6 +155,7 @@ const emptySummary: DashboardSummary = {
 export function CompanyDashboard() {
   const router = useRouter();
   const { filters, setFilters, resetFilters } = useAnalyticsFilters();
+  const debugLoggingEnabled = process.env.NEXT_PUBLIC_GEOFIELDS_DEBUG_DASHBOARD === "1";
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
   const [loadState, setLoadState] = useState<"loading" | "success" | "error">("loading");
   const [hasLoadedSummary, setHasLoadedSummary] = useState(false);
@@ -172,7 +181,9 @@ export function CompanyDashboard() {
   const loadSummary = useCallback(async () => {
     const filterKey = `${filters.clientId}|${filters.rigId}|${filters.from}|${filters.to}`;
     if (inFlightFilterKeyRef.current === filterKey) {
-      console.info("[dashboard-summary][ui-fetch-skip-duplicate]", { filterKey });
+      if (debugLoggingEnabled) {
+        console.info("[dashboard-summary][ui-fetch-skip-duplicate]", { filterKey });
+      }
       return;
     }
 
@@ -210,10 +221,12 @@ export function CompanyDashboard() {
 
       const query = search.toString();
       const endpoint = `/api/dashboard/summary${query ? `?${query}` : ""}`;
-      console.info("[dashboard-summary][ui-fetch-start]", {
-        query: query || "none",
-        endpoint
-      });
+      if (debugLoggingEnabled) {
+        console.info("[dashboard-summary][ui-fetch-start]", {
+          query: query || "none",
+          endpoint
+        });
+      }
 
       const response = await fetch(`/api/dashboard/summary${query ? `?${query}` : ""}`, {
         cache: "no-store",
@@ -271,10 +284,12 @@ export function CompanyDashboard() {
       hasLoadedSummaryRef.current = true;
       setErrorMessage(null);
       setLoadState("success");
-      console.info("[dashboard-summary][ui-fetch-success]", {
-        query: query || "none",
-        snapshot: normalized.snapshot
-      });
+      if (debugLoggingEnabled) {
+        console.info("[dashboard-summary][ui-fetch-success]", {
+          query: query || "none",
+          snapshot: normalized.snapshot
+        });
+      }
     } catch (error) {
       if (requestSequenceRef.current !== requestId) {
         return;
@@ -298,7 +313,7 @@ export function CompanyDashboard() {
         inFlightFilterKeyRef.current = null;
       }
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+  }, [debugLoggingEnabled, filters.clientId, filters.from, filters.rigId, filters.to]);
 
   useEffect(() => {
     void loadSummary();
@@ -337,7 +352,7 @@ export function CompanyDashboard() {
             ])
           )
         });
-      } catch (_error) {
+      } catch {
         if (cancelled) {
           return;
         }
@@ -600,13 +615,8 @@ export function CompanyDashboard() {
     }
     return filterLabels.rigs.get(filters.rigId) || filters.rigId;
   }, [filterLabels.rigs, filters.rigId]);
-  const dateRangeLabel = useMemo(() => {
-    if (!filters.from && !filters.to) {
-      return "Any date";
-    }
-    return `${formatDateForScope(filters.from) || "Any"} - ${formatDateForScope(filters.to) || "Any"}`;
-  }, [filters.from, filters.to]);
   const loading = loadState === "loading";
+  const isFilteredEmpty = !loading && hasScopeFilters && !hasAnyOperationalData;
   const visibleErrorMessage =
     process.env.NODE_ENV === "production" ? "Please try again in a moment." : errorMessage;
   const applyDatePreset = useCallback(
@@ -636,38 +646,12 @@ export function CompanyDashboard() {
 
   return (
     <div className="gf-page-stack">
-      <Card title="Filter Scope" subtitle="Current dashboard scope from the top filter bar">
-        <div className="space-y-3">
-          <p className="text-sm text-ink-700">
-            {hasScopeFilters
-              ? `Showing data for: ${selectedClientLabel} • ${selectedRigLabel} • ${dateRangeLabel}`
-              : "Showing data for: All data"}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleClearFilters}
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-50"
-            >
-              Clear filters
-            </button>
-            <button
-              type="button"
-              onClick={handleLast30Days}
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-50"
-            >
-              Last 30 days
-            </button>
-            <button
-              type="button"
-              onClick={handleLast90Days}
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-50"
-            >
-              Last 90 days
-            </button>
-          </div>
-        </div>
-      </Card>
+      <FilterScopeBanner
+        filters={filters}
+        clientLabel={selectedClientLabel}
+        rigLabel={selectedRigLabel}
+        onClearFilters={handleClearFilters}
+      />
 
       {errorMessage && (
         <Card title="Failed to load dashboard data" subtitle="Showing available layout while we retry in the background.">
@@ -676,9 +660,11 @@ export function CompanyDashboard() {
       )}
 
       {!loading && !hasAnyOperationalData && (
-        <Card title="No data for current filters" subtitle="The dashboard is working, but your current scope returned no records.">
-          <DashboardEmptyState
-            message="No revenue, expenses, or drilling activity found for the selected filters."
+        <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
+          <AnalyticsEmptyState
+            variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
+            moduleHint="Add drilling reports and recognized expenses to populate the dashboard."
+            scopeHint={`${summary.snapshot?.totalProjects ?? 0} projects in current scope • ${summary.snapshot?.totalRigs ?? 0} rigs in scope`}
             onClearFilters={handleClearFilters}
             onLast30Days={handleLast30Days}
             onLast90Days={handleLast90Days}
@@ -703,28 +689,32 @@ export function CompanyDashboard() {
             />
             <div className="gf-kpi-grid-primary">
               <MetricCard
-                label={hasScopeFilters ? "Revenue (Scope)" : "Total Revenue"}
-                value={formatCurrency(summary.snapshot?.totalRevenue ?? 0)}
+                label={hasScopeFilters ? "Revenue (Scope)" : "Revenue"}
+                value={getScopedKpiValue(formatCurrency(summary.snapshot?.totalRevenue ?? 0), isFilteredEmpty)}
                 tone="good"
                 href={buildHref("/revenue")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
-                label={hasScopeFilters ? "Costs (Scope)" : "Total Costs"}
-                value={formatCurrency(summary.snapshot?.totalExpenses ?? 0)}
+                label={hasScopeFilters ? "Costs (Scope)" : "Costs"}
+                value={getScopedKpiValue(formatCurrency(summary.snapshot?.totalExpenses ?? 0), isFilteredEmpty)}
                 tone="warn"
                 href={buildHref("/expenses")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
-                label={hasScopeFilters ? "Profit (Scope)" : "Gross Profit"}
-                value={formatCurrency(summary.snapshot?.grossProfit ?? 0)}
+                label={hasScopeFilters ? "Profit (Scope)" : "Profit"}
+                value={getScopedKpiValue(formatCurrency(summary.snapshot?.grossProfit ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.grossProfit ?? 0) >= 0 ? "good" : "danger"}
                 href={buildHref("/profit")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
-                label={hasScopeFilters ? "Margin (Scope)" : "Profit Margin"}
-                value={`${grossMarginPct.toFixed(1)}%`}
+                label={hasScopeFilters ? "Margin (Scope)" : "Margin"}
+                value={getScopedKpiValue(`${grossMarginPct.toFixed(1)}%`, isFilteredEmpty)}
                 tone={grossMarginTone}
                 href={buildHref("/profit")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
             </div>
           </section>
@@ -737,54 +727,62 @@ export function CompanyDashboard() {
             <div className="gf-kpi-grid-secondary">
               <MetricCard
                 label={hasScopeFilters ? "Clients in Scope" : "Total Clients"}
-                value={String(summary.snapshot?.totalClients ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.totalClients ?? 0), isFilteredEmpty)}
                 href={buildHref("/clients")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label={hasScopeFilters ? "Projects in Scope" : "Total Projects"}
-                value={String(summary.snapshot?.totalProjects ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.totalProjects ?? 0), isFilteredEmpty)}
                 href={buildHref("/projects")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label={hasScopeFilters ? "Rigs in Scope" : "Total Rigs"}
-                value={String(summary.snapshot?.totalRigs ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.totalRigs ?? 0), isFilteredEmpty)}
                 href={buildHref("/rigs")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Active Rigs"
-                value={String(summary.snapshot?.activeRigs ?? 0)}
-                change={`${summary.snapshot?.idleRigs ?? 0} idle`}
+                value={getScopedKpiValue(String(summary.snapshot?.activeRigs ?? 0), isFilteredEmpty)}
+                change={isFilteredEmpty ? "No data for current filters" : `${summary.snapshot?.idleRigs ?? 0} idle`}
                 tone="good"
                 href={buildHref("/rigs", { status: "ACTIVE" })}
               />
               <MetricCard
                 label="Rigs Under Maintenance"
-                value={String(summary.snapshot?.maintenanceRigs ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.maintenanceRigs ?? 0), isFilteredEmpty)}
                 tone="warn"
                 href={buildHref("/rigs", { status: "MAINTENANCE" })}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Current Breakdowns"
-                value={String(breakdownRigCount)}
+                value={getScopedKpiValue(String(breakdownRigCount), isFilteredEmpty)}
                 tone={breakdownRigCount > 0 ? "danger" : "good"}
                 href={buildHref("/rigs", { status: "BREAKDOWN" })}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Total Meters Drilled"
-                value={formatNumber(summary.snapshot?.totalMeters ?? 0)}
+                value={getScopedKpiValue(formatNumber(summary.snapshot?.totalMeters ?? 0), isFilteredEmpty)}
                 href={buildHref("/drilling-reports")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Pending Approvals"
-                value={String(summary.snapshot?.pendingApprovals ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.pendingApprovals ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.pendingApprovals ?? 0) > 0 ? "warn" : "good"}
                 href={buildHref("/approvals")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Approved Today"
-                value={String(summary.snapshot?.approvedToday ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.approvedToday ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.approvedToday ?? 0) > 0 ? "good" : "neutral"}
                 href={buildHref("/approvals")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
             </div>
           </section>
@@ -797,45 +795,52 @@ export function CompanyDashboard() {
             <div className="gf-kpi-grid-secondary">
               <MetricCard
                 label="Best Client"
-                value={summary.snapshot?.bestPerformingClient || "N/A"}
+                value={getScopedKpiValue(summary.snapshot?.bestPerformingClient || "N/A", isFilteredEmpty)}
                 href={hasBestClientTarget ? buildHref(`/clients/${bestClientId || ""}`, { clientId: bestClientId }) : undefined}
                 disabled={!hasBestClientTarget}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Best Rig"
-                value={summary.snapshot?.bestPerformingRig || "N/A"}
+                value={getScopedKpiValue(summary.snapshot?.bestPerformingRig || "N/A", isFilteredEmpty)}
                 href={hasBestRigTarget ? buildHref(`/rigs/${bestRigId || ""}`, { rigId: bestRigId }) : undefined}
                 disabled={!hasBestRigTarget}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Top Revenue Rig"
-                value={summary.snapshot?.topRevenueRig || "N/A"}
+                value={getScopedKpiValue(summary.snapshot?.topRevenueRig || "N/A", isFilteredEmpty)}
                 href={hasTopRevenueRigTarget ? buildHref("/revenue", { rigId: topRevenueRigId }) : undefined}
                 disabled={!hasTopRevenueRigTarget}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Forecasted Profit (7 Days)"
-                value={formatCurrency(summary.profitForecast?.forecastNext7Profit ?? 0)}
+                value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext7Profit ?? 0), isFilteredEmpty)}
                 tone={forecast7Tone}
                 href={buildHref("/forecasting")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Forecasted Profit (30 Days)"
-                value={formatCurrency(summary.profitForecast?.forecastNext30Profit ?? 0)}
+                value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext30Profit ?? 0), isFilteredEmpty)}
                 tone={forecast30Tone}
                 href={buildHref("/forecasting")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Top Forecast Rig (30 Days)"
-                value={summary.profitForecast?.topForecastRig || "N/A"}
+                value={getScopedKpiValue(summary.profitForecast?.topForecastRig || "N/A", isFilteredEmpty)}
                 href={hasTopForecastRigTarget ? buildHref("/forecasting", { rigId: topForecastRigId }) : buildHref("/forecasting")}
                 disabled={!hasTopForecastRigTarget}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Rejected This Week"
-                value={String(summary.snapshot?.rejectedThisWeek ?? 0)}
+                value={getScopedKpiValue(String(summary.snapshot?.rejectedThisWeek ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.rejectedThisWeek ?? 0) > 0 ? "danger" : "good"}
                 href={buildHref("/activity-log", { action: "reject", from: startOfCurrentWeekIso(), to: todayIso() })}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
             </div>
           </section>
@@ -979,6 +984,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <LineTrendChart
@@ -1022,6 +1028,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <LineTrendChart
@@ -1069,6 +1076,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <>
@@ -1115,6 +1123,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <BarCategoryChart
@@ -1151,6 +1160,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <BarCategoryChart
@@ -1188,6 +1198,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <LineTrendChart
@@ -1231,6 +1242,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <DonutStatusChart
@@ -1267,6 +1279,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <BarCategoryChart
@@ -1300,6 +1313,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <DataTable
@@ -1325,6 +1339,7 @@ export function CompanyDashboard() {
               onClearFilters={handleClearFilters}
               onLast30Days={handleLast30Days}
               onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
           ) : (
             <DataTable
@@ -1389,19 +1404,6 @@ function startOfCurrentWeekIso() {
 
 function toIsoDate(date: Date) {
   return date.toISOString().slice(0, 10);
-}
-
-function formatDateForScope(value: string) {
-  if (!value) {
-    return "";
-  }
-
-  const parsed = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return parsed.toLocaleDateString("en-US");
 }
 
 async function readApiError(response: Response, fallbackMessage: string) {
@@ -1494,42 +1496,24 @@ function DashboardSummarySkeleton({ count = 8 }: { count?: number }) {
 
 function DashboardEmptyState({
   message,
+  isFiltered,
   onClearFilters,
   onLast30Days,
   onLast90Days
 }: {
   message: string;
+  isFiltered: boolean;
   onClearFilters: () => void;
   onLast30Days: () => void;
   onLast90Days: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-4 text-center">
-      <p className="text-sm font-medium text-ink-800">{message}</p>
-      <p className="mt-1 text-xs text-ink-600">Try adjusting or clearing filters.</p>
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-        <button
-          type="button"
-          onClick={onClearFilters}
-          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-        >
-          Clear filters
-        </button>
-        <button
-          type="button"
-          onClick={onLast30Days}
-          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-        >
-          Last 30 days
-        </button>
-        <button
-          type="button"
-          onClick={onLast90Days}
-          className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-        >
-          Last 90 days
-        </button>
-      </div>
-    </div>
+    <AnalyticsEmptyState
+      variant={isFiltered ? "filtered-empty" : "no-data"}
+      moduleHint={message}
+      onClearFilters={onClearFilters}
+      onLast30Days={onLast30Days}
+      onLast90Days={onLast90Days}
+    />
   );
 }

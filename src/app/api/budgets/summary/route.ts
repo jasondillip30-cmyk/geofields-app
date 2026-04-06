@@ -10,8 +10,9 @@ import {
   summarizeBudgetAlerts,
   type BudgetVsActualSummaryResponse
 } from "@/lib/budget-vs-actual";
-import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
 const UNASSIGNED_RIG_ID = "__unassigned_rig__";
 const UNASSIGNED_RIG_NAME = "Unassigned Rig";
@@ -29,17 +30,11 @@ export async function GET(request: NextRequest) {
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
 
-  const expenseWhere = withFinancialExpenseApproval({
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(fromDate || toDate
-      ? {
-          date: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {})
-          }
-        }
-      : {})
+  const spendContext = await buildRecognizedSpendContext({
+    clientId,
+    rigId,
+    fromDate,
+    toDate
   });
 
   const budgetWhere = {
@@ -64,30 +59,23 @@ export async function GET(request: NextRequest) {
       : {})
   };
 
-  const [expenses, budgetPlans] = await Promise.all([
-    prisma.expense.findMany({
-      where: expenseWhere,
-      include: {
-        rig: { select: { id: true, rigCode: true } },
-        project: { select: { id: true, name: true } }
-      }
-    }),
-    prisma.budgetPlan.findMany({
+  const budgetPlans = await prisma.budgetPlan.findMany({
       where: budgetWhere,
       include: {
         rig: { select: { id: true, rigCode: true } },
         project: { select: { id: true, name: true } }
       },
       orderBy: [{ periodStart: "asc" }, { createdAt: "asc" }]
-    })
-  ]);
+    });
+  const rawExpenses = spendContext.rawExpenses;
+  const expenses = spendContext.recognizedExpenses;
 
   const spendByRig = new Map<string, { id: string; name: string; spend: number }>();
   const spendByProject = new Map<string, { id: string; name: string; spend: number }>();
-  let totalApprovedSpend = 0;
+  let totalRecognizedSpend = 0;
 
   for (const expense of expenses) {
-    totalApprovedSpend += expense.amount;
+    totalRecognizedSpend += expense.amount;
 
     const rigKey = expense.rigId || UNASSIGNED_RIG_ID;
     const rigName = expense.rig?.rigCode || UNASSIGNED_RIG_NAME;
@@ -136,7 +124,7 @@ export async function GET(request: NextRequest) {
         id: key,
         name,
         budgetAmount: roundCurrency(budget),
-        approvedSpend: roundCurrency(spend),
+        recognizedSpend: roundCurrency(spend),
         remainingBudget: roundCurrency(budget - spend),
         percentUsed: derived.percentUsed,
         status: derived.status,
@@ -145,8 +133,8 @@ export async function GET(request: NextRequest) {
       };
     })
     .sort((a, b) => {
-      if (b.approvedSpend !== a.approvedSpend) {
-        return b.approvedSpend - a.approvedSpend;
+      if (b.recognizedSpend !== a.recognizedSpend) {
+        return b.recognizedSpend - a.recognizedSpend;
       }
       if (b.budgetAmount !== a.budgetAmount) {
         return b.budgetAmount - a.budgetAmount;
@@ -165,7 +153,7 @@ export async function GET(request: NextRequest) {
         id: key,
         name,
         budgetAmount: roundCurrency(budget),
-        approvedSpend: roundCurrency(spend),
+        recognizedSpend: roundCurrency(spend),
         remainingBudget: roundCurrency(budget - spend),
         percentUsed: derived.percentUsed,
         status: derived.status,
@@ -174,8 +162,8 @@ export async function GET(request: NextRequest) {
       };
     })
     .sort((a, b) => {
-      if (b.approvedSpend !== a.approvedSpend) {
-        return b.approvedSpend - a.approvedSpend;
+      if (b.recognizedSpend !== a.recognizedSpend) {
+        return b.recognizedSpend - a.recognizedSpend;
       }
       if (b.budgetAmount !== a.budgetAmount) {
         return b.budgetAmount - a.budgetAmount;
@@ -183,10 +171,8 @@ export async function GET(request: NextRequest) {
       return a.name.localeCompare(b.name);
     });
 
-  const overspentCount =
-    byRig.filter((entry) => entry.status === "OVERSPENT").length +
-    byProject.filter((entry) => entry.status === "OVERSPENT").length;
-  const alerts = summarizeBudgetAlerts([...byRig, ...byProject]);
+  const overspentCount = byProject.filter((entry) => entry.status === "OVERSPENT").length;
+  const alerts = summarizeBudgetAlerts(byProject);
 
   const response: BudgetVsActualSummaryResponse = {
     filters: {
@@ -197,14 +183,52 @@ export async function GET(request: NextRequest) {
     },
     totals: {
       totalBudget: roundCurrency(totalBudget),
-      approvedSpend: roundCurrency(totalApprovedSpend),
-      remainingBudget: roundCurrency(totalBudget - totalApprovedSpend),
+      recognizedSpend: roundCurrency(totalRecognizedSpend),
+      remainingBudget: roundCurrency(totalBudget - totalRecognizedSpend),
       overspentCount
     },
     byRig,
     byProject,
-    alerts
+    alerts,
+    classification: {
+      rows: spendContext.classifiedRows.map((row) => ({
+        expenseId: row.expenseId,
+        date: row.date,
+        amount: row.amount,
+        purposeBucket: row.purposeBucket,
+        purposeLabel: row.purposeLabel,
+        accountingCategoryKey: row.accountingCategoryKey,
+        accountingCategoryLabel: row.accountingCategoryLabel,
+        traceability: row.traceability,
+        sourceType: row.sourceType,
+        linkedProjectId: row.linkedProjectId,
+        linkedRigId: row.linkedRigId,
+        maintenanceRequestId: row.maintenanceRequestId,
+        breakdownReportId: row.breakdownReportId,
+        requisitionCode: row.requisitionCode,
+        movementSummary: row.movementSummary,
+        legacyFlags: row.legacyFlags
+      })),
+      purposeTotals: spendContext.purposeTotals,
+      categoryTotals: spendContext.categoryTotals,
+      audit: spendContext.classificationAudit
+    }
   };
+
+  debugLog(
+    "[budgets][summary]",
+    {
+      filters: response.filters,
+      rawExpenseCount: rawExpenses.length,
+      recognizedExpenseCount: expenses.length,
+      recognition: spendContext.recognitionStats,
+      recognizedSpend: response.totals.recognizedSpend,
+      purposeTotals: response.classification?.purposeTotals,
+      legacyUnlinkedCount: response.classification?.audit.legacyUnlinkedCount,
+      reconciliationDelta: response.classification?.audit.reconciliationDelta
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json(response);
 }

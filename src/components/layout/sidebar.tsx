@@ -48,15 +48,20 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Maintenance: Wrench
 };
 
+const NAV_ICON_SIZE = 15;
+const NAV_ICON_STROKE = 1.9;
+
 const navGroups: Array<{ title: string; labels: string[] }> = [
   {
     title: "Core Workflow",
     labels: [
       "Dashboard",
       "Projects",
+      "Purchase Requests",
+      "Clients",
+      "Employees",
       "Rigs",
       "Drilling Reports",
-      "Purchase Requests",
       "Breakdowns",
       "Maintenance",
       "Inventory",
@@ -65,7 +70,7 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
   },
   {
     title: "Profitability",
-    labels: ["Revenue", "Cost Tracking", "Budget vs Actual", "Profit"]
+    labels: ["Revenue", "Cost Tracking", "Profit", "Budget vs Actual"]
   },
   {
     title: "System",
@@ -100,14 +105,17 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
     pathname === "/inventory" ||
     pathname.startsWith("/inventory/items") ||
     pathname.startsWith("/inventory/stock-movements") ||
+    pathname.startsWith("/inventory/expenses") ||
     pathname.startsWith("/inventory/issues");
   const activeInventoryChildHref = resolveActiveInventoryChildHref({
     pathname,
     children: visibleInventoryChildren
   });
   const setupRouteActive =
-    pathname.startsWith("/clients") ||
-    pathname.startsWith("/employees") ||
+    pathname.startsWith("/rigs/setup") ||
+    pathname.startsWith("/projects/setup") ||
+    pathname.startsWith("/clients/setup") ||
+    pathname.startsWith("/employees/setup") ||
     pathname.startsWith("/inventory/suppliers") ||
     pathname.startsWith("/inventory/locations");
   const activeSetupChildHref = resolveActiveSetupChildHref({
@@ -174,7 +182,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
           <p className="text-sm text-slate-600">Drilling Profitability</p>
         </div>
 
-        <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4">
+        <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
           {loading && (
             <div className="space-y-2 px-1 py-1">
               <p className="px-3 py-1 text-sm text-slate-600">Loading menu...</p>
@@ -195,27 +203,43 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
               }
 
               return (
-                <div key={group.title} className="space-y-1.5">
+                <div key={group.title} className="space-y-1">
                   <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     {group.title}
                   </p>
-                  <div className="space-y-1">
-                    {groupItems.map((item) => {
+                  <div className="space-y-0.5">
+                    {groupItems.map((item, index) => {
+                      const currentSegment =
+                        group.title === "Core Workflow"
+                          ? resolveCoreWorkflowSegment(item.label)
+                          : "secondary";
+                      const previousSegment =
+                        group.title === "Core Workflow" && index > 0
+                          ? resolveCoreWorkflowSegment(groupItems[index - 1]?.label || "")
+                          : currentSegment;
+                      const startsSegment =
+                        group.title === "Core Workflow" &&
+                        index > 0 &&
+                        currentSegment !== previousSegment;
+                      const wrapperClass = startsSegment
+                        ? "mt-1.5 border-t border-slate-200/70 pt-1.5"
+                        : "";
+
                       if (item.label === "Inventory") {
                         return (
-                          <div key={item.href} className="space-y-1">
+                          <div key={item.href} className={cn("space-y-1", wrapperClass)}>
                             <button
                               type="button"
                               onClick={() => setInventoryExpanded((current) => !current)}
                               className={cn(
-                                "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
+                                "flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
                                 inventoryRouteActive
                                   ? "border border-brand-200 bg-brand-50 text-brand-900 shadow-sm"
                                   : "border border-transparent text-ink-700 hover:bg-slate-100"
                               )}
                             >
                               <span className="flex items-center gap-2">
-                                <Boxes size={16} />
+                                <Boxes size={NAV_ICON_SIZE} strokeWidth={NAV_ICON_STROKE} />
                                 {item.label}
                               </span>
                               {inventoryExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -235,7 +259,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                                         key={child.href}
                                         href={child.href}
                                         className={cn(
-                                          "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
+                                          "flex items-center gap-2 rounded-md px-2.5 py-1 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
                                           isActive
                                             ? "bg-brand-100/80 font-medium text-brand-900 shadow-sm"
                                             : "text-ink-700 hover:bg-slate-100"
@@ -259,28 +283,52 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                       }
 
                       const Icon = iconMap[item.label] || LayoutDashboard;
+                      const isDashboardEntry = item.label === "Dashboard";
                       const purchaseRequestsAliasActive =
                         item.href === "/expenses" &&
                         (pathname.startsWith("/purchasing/receipt-follow-up") ||
                           pathname.startsWith("/inventory/receipt-intake"));
+                      const rigSetupAliasActive =
+                        item.href === "/rigs" && pathname.startsWith("/rigs/setup");
+                      const projectSetupAliasActive =
+                        item.href === "/projects" && pathname.startsWith("/projects/setup");
+                      const clientSetupAliasActive =
+                        item.href === "/clients" && pathname.startsWith("/clients/setup");
+                      const employeeSetupAliasActive =
+                        item.href === "/employees" && pathname.startsWith("/employees/setup");
+                      const costTrackingChildActive =
+                        item.href === "/cost-tracking" &&
+                        pathname.startsWith("/cost-tracking/budget-vs-actual");
                       const isActive =
                         purchaseRequestsAliasActive ||
                         pathname === item.href ||
-                        (item.href !== "/" && pathname.startsWith(`${item.href}/`));
+                        (item.href !== "/" &&
+                          pathname.startsWith(`${item.href}/`) &&
+                          !costTrackingChildActive &&
+                          !rigSetupAliasActive &&
+                          !projectSetupAliasActive &&
+                          !clientSetupAliasActive &&
+                          !employeeSetupAliasActive);
                       return (
-                        <Link
-                          key={item.href}
-                          href={item.href}
-                          className={cn(
-                            "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out",
-                            isActive
-                              ? "bg-brand-100 text-brand-900 shadow-sm"
-                              : "text-ink-700 hover:translate-x-[1px] hover:bg-slate-100"
-                          )}
-                        >
-                          <Icon size={16} />
-                          {item.label}
-                        </Link>
+                        <div key={item.href} className={wrapperClass}>
+                          <Link
+                            href={item.href}
+                            className={cn(
+                              "flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-all duration-200 ease-out",
+                              isActive
+                                ? "bg-brand-100 text-brand-900 shadow-sm"
+                                : costTrackingChildActive
+                                  ? "border border-brand-100 bg-brand-50/60 text-brand-800"
+                                : "text-ink-700 hover:translate-x-[1px] hover:bg-slate-100",
+                              isDashboardEntry &&
+                                !isActive &&
+                                "border border-slate-200/80 bg-slate-50/80 font-medium text-ink-800"
+                            )}
+                          >
+                            <Icon size={NAV_ICON_SIZE} strokeWidth={NAV_ICON_STROKE} />
+                            {item.label}
+                          </Link>
+                        </div>
                       );
                     })}
                   </div>
@@ -289,22 +337,22 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
             })}
 
           {!loading && visibleSetupChildren.length > 0 ? (
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <p className="px-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Setup</p>
-              <div className="space-y-1">
-                <div className="space-y-1">
+              <div className="space-y-0.5">
+                <div className="space-y-0.5">
                   <button
                     type="button"
                     onClick={() => setSetupExpanded((current) => !current)}
                     className={cn(
-                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
+                      "flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-sm transition-all duration-200 ease-out hover:-translate-y-[1px]",
                       setupRouteActive
                         ? "border border-brand-200 bg-brand-50 text-brand-900 shadow-sm"
                         : "border border-transparent text-ink-700 hover:bg-slate-100"
                     )}
                   >
                     <span className="flex items-center gap-2">
-                      <Settings size={16} />
+                      <Settings size={NAV_ICON_SIZE} strokeWidth={NAV_ICON_STROKE} />
                       Setup
                     </span>
                     {setupExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -324,7 +372,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                               key={child.href}
                               href={child.href}
                               className={cn(
-                                "flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
+                                "flex items-center gap-2 rounded-md px-2.5 py-1 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
                                 isActive
                                   ? "bg-brand-100/80 font-medium text-brand-900 shadow-sm"
                                   : "text-ink-700 hover:bg-slate-100"
@@ -353,6 +401,22 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
   );
 }
 
+function resolveCoreWorkflowSegment(label: string): "primary" | "secondary" | "operational" {
+  if (label === "Dashboard") {
+    return "primary";
+  }
+  if (
+    label === "Drilling Reports" ||
+    label === "Breakdowns" ||
+    label === "Maintenance" ||
+    label === "Inventory" ||
+    label === "Approvals"
+  ) {
+    return "operational";
+  }
+  return "secondary";
+}
+
 function resolveActiveInventoryChildHref({
   pathname,
   children
@@ -362,6 +426,7 @@ function resolveActiveInventoryChildHref({
 }) {
   if (pathname === "/inventory/items") return "/inventory/items";
   if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
+  if (pathname === "/inventory/expenses") return "/inventory/expenses";
   if (pathname === "/inventory/issues") return "/inventory/issues";
   if (pathname !== "/inventory") return "";
 
@@ -376,8 +441,10 @@ function resolveActiveSetupChildHref({
   pathname: string;
   children: Array<{ href: string }>;
 }) {
-  if (pathname.startsWith("/clients")) return "/clients";
-  if (pathname.startsWith("/employees")) return "/employees";
+  if (pathname.startsWith("/rigs/setup")) return "/rigs/setup";
+  if (pathname.startsWith("/projects/setup")) return "/projects/setup";
+  if (pathname.startsWith("/clients/setup")) return "/clients/setup";
+  if (pathname.startsWith("/employees/setup")) return "/employees/setup";
   if (pathname.startsWith("/inventory/suppliers")) return "/inventory/suppliers";
   if (pathname.startsWith("/inventory/locations")) return "/inventory/locations";
   const firstChild = children[0];

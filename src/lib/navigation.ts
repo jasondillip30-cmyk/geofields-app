@@ -37,12 +37,15 @@ export const inventoryNavChildren: NavChildItem[] = [
   { href: "/inventory", label: "Inventory Overview", permission: "inventory:view" },
   { href: "/inventory/items", label: "Items", permission: "inventory:view" },
   { href: "/inventory/stock-movements", label: "Stock Movements", permission: "inventory:view" },
-  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" }
+  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" },
+  { href: "/inventory/expenses", label: "Expenses", permission: "inventory:view" }
 ];
 
 export const setupNavChildren: NavChildItem[] = [
-  { href: "/clients", label: "Clients", permission: "clients:view" },
-  { href: "/employees", label: "Employees", permission: "employees:view" },
+  { href: "/rigs/setup", label: "Rigs", permission: "rigs:manage" },
+  { href: "/projects/setup", label: "Projects", permission: "projects:manage" },
+  { href: "/clients/setup", label: "Clients", permission: "clients:manage" },
+  { href: "/employees/setup", label: "Employees", permission: "employees:manage" },
   { href: "/inventory/suppliers", label: "Vendors", permission: "inventory:view" },
   { href: "/inventory/locations", label: "Locations", permission: "inventory:view" }
 ];

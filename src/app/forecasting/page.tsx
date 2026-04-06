@@ -274,7 +274,7 @@ export default function ForecastingPage() {
     setProjects(projectsPayload.data || []);
   }
 
-  async function loadForecastData() {
+  const loadForecastData = useCallback(async () => {
     setLoading(true);
     setAutoAdjustSummary(null);
     try {
@@ -291,14 +291,14 @@ export default function ForecastingPage() {
       setMonthly(payload.monthly || []);
       setBaseline(payload.simulationBaseline || emptyBaseline);
       setExpenseCategories(payload.expenseCategoryBaselines || []);
-    } catch (_error) {
+    } catch {
       setMonthly([]);
       setBaseline(emptyBaseline);
       setExpenseCategories([]);
     } finally {
       setLoading(false);
     }
-  }
+  }, [filters.clientId, filters.from, filters.rigId, filters.to, localFilters.projectId]);
 
   function addSimulationRow() {
     setSimulationRows((current) => {
@@ -435,7 +435,7 @@ export default function ForecastingPage() {
 
   useEffect(() => {
     void loadForecastData();
-  }, [filters.clientId, filters.from, filters.rigId, filters.to, localFilters.projectId]);
+  }, [loadForecastData]);
 
   useEffect(() => {
     if (localFilters.projectId === "all") {
@@ -476,7 +476,7 @@ export default function ForecastingPage() {
           )
         );
       }
-    } catch (_error) {
+    } catch {
       setSavedScenarios([]);
     }
   }, []);
@@ -487,7 +487,7 @@ export default function ForecastingPage() {
     }
     try {
       window.localStorage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify(savedScenarios));
-    } catch (_error) {
+    } catch {
       // ignore quota/storage write failures
     }
   }, [savedScenarios]);
@@ -1293,7 +1293,7 @@ export default function ForecastingPage() {
         {
           label: "Open Cost Tracking",
           href: buildHref("/cost-tracking"),
-          reason: "Review approved cost trends behind forecast shifts.",
+          reason: "Review recognized cost trends behind forecast shifts.",
           pageKey: "cost-tracking"
         }
       ],
@@ -1837,9 +1837,9 @@ export default function ForecastingPage() {
                         <th className="px-2 py-2">30-day Forecast</th>
                         <th className="px-2 py-2">Forecast Change vs Baseline</th>
                         <th className="px-2 py-2">Margin %</th>
+                        <th className="px-2 py-2">Break-even</th>
                       </tr>
                     </thead>
-                    {/* TODO: Re-enable break-even UI after profitability logic is validated against scenario.profit < 0 / >= 0. */}
                     <tbody>
                       {comparisonEntries.map((entry) => {
                         const dailyProfitChange = roundValue(entry.metrics.dailyProfit - baselineTotals.dailyProfit);
@@ -1948,6 +1948,17 @@ export default function ForecastingPage() {
                             </td>
                             <td className="px-2 py-2 text-ink-700">
                               {formatPercent(entry.metrics.margin30)}
+                            </td>
+                            <td
+                              className={`px-2 py-2 font-medium ${
+                                entry.metrics.forecast30Profit >= 0
+                                  ? "text-emerald-700"
+                                  : "text-amber-800"
+                              }`}
+                            >
+                              {entry.metrics.forecast30Profit >= 0
+                                ? "Above break-even"
+                                : `${formatCurrency(Math.abs(entry.metrics.forecast30Profit))} below`}
                             </td>
                           </tr>
                         );

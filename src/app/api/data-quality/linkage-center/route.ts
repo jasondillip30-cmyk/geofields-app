@@ -2,7 +2,7 @@ import type { MaintenanceStatus, Prisma, UserRole } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import type { AuthSession } from "@/lib/auth/session";
+import type { AuthSession } from "@/lib/auth/session-types";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
@@ -29,11 +29,9 @@ interface MissingLinkageRow {
 const LINKAGE_AUDIT_MODULE = "data_quality_linkage";
 const LINKAGE_AUDIT_ACTIONS = ["link_rig", "link_project", "link_maintenance"] as const;
 const ACTIVE_MAINTENANCE_STATUSES: MaintenanceStatus[] = [
-  "SUBMITTED",
-  "UNDER_REVIEW",
-  "APPROVED",
-  "WAITING_FOR_PARTS",
+  "OPEN",
   "IN_REPAIR",
+  "WAITING_FOR_PARTS",
   "COMPLETED"
 ];
 
@@ -91,6 +89,7 @@ export async function GET(request: NextRequest) {
         where: {
           movementType: "OUT",
           maintenanceRequestId: null,
+          breakdownReportId: null,
           expenseId: { not: null },
           ...(rigId ? { rigId } : {}),
           ...(fromDate || toDate
@@ -227,7 +226,7 @@ export async function GET(request: NextRequest) {
     maintenanceRequestId: movement.maintenanceRequestId
   }));
 
-  const totalApprovedCostAffected = sumUniqueAffectedCost({
+  const totalRecognizedCostAffected = sumUniqueAffectedCost({
     missingRigRows,
     missingProjectRows,
     missingMaintenanceRows
@@ -244,7 +243,7 @@ export async function GET(request: NextRequest) {
       missingRigCount: missingRigRows.length,
       missingProjectCount: missingProjectRows.length,
       missingMaintenanceCount: missingMaintenanceRows.length,
-      totalApprovedCostAffected: roundCurrency(totalApprovedCostAffected),
+      totalRecognizedCostAffected: roundCurrency(totalRecognizedCostAffected),
       fixedToday
     },
     rows: {

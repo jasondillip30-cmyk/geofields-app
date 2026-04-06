@@ -34,13 +34,19 @@ export interface ExecutiveCopilotContext {
   generatedAt: string;
   totals: {
     revenue: number;
-    approvedExpenses: number;
+    recognizedSpend: number;
     profit: number;
     pendingApprovals: number;
   };
   budget: BudgetAlertSummary;
-  highestCostRig: { name: string; totalApprovedCost: number } | null;
-  highestCostProject: { name: string; totalApprovedCost: number } | null;
+  highestCostRig: {
+    name: string;
+    totalRecognizedCost: number;
+  } | null;
+  highestCostProject: {
+    name: string;
+    totalRecognizedCost: number;
+  } | null;
   topMaintenanceArea: { reference: string; rigName: string; totalLinkedCost: number } | null;
   missingLinkageCount: number;
   approvalQueues: ExecutiveCopilotQueueSummary[];
@@ -235,8 +241,9 @@ function findOwnerByKeyword(owners: AlertOwnerCandidate[], keywords: string[]) {
 }
 
 function buildTodaysSummary(context: ExecutiveCopilotContext) {
+  const recognizedSpend = context.totals.recognizedSpend;
   const direction = context.totals.profit >= 0 ? "positive" : "negative";
-  return `Approved finance snapshot is ${direction}: revenue ${formatMoneyShort(context.totals.revenue)} vs expenses ${formatMoneyShort(context.totals.approvedExpenses)}, with ${context.totals.pendingApprovals} pending approvals still open.`;
+  return `Recognized finance snapshot is ${direction}: revenue ${formatMoneyShort(context.totals.revenue)} vs expenses ${formatMoneyShort(recognizedSpend)}, with ${context.totals.pendingApprovals} pending approvals still open.`;
 }
 
 function deriveTopRisks(context: ExecutiveCopilotContext) {
@@ -253,7 +260,7 @@ function deriveTopRisks(context: ExecutiveCopilotContext) {
     risks.push(`${staleApprovals} approval item(s) are older than 3 days.`);
   }
   if (context.missingLinkageCount > 0) {
-    risks.push(`${context.missingLinkageCount} approved spend item(s) still need linkage cleanup.`);
+    risks.push(`${context.missingLinkageCount} recognized spend item(s) still need linkage cleanup.`);
   }
   if (risks.length === 0) {
     risks.push("No immediate critical risk signals detected from current scope.");
@@ -300,6 +307,9 @@ function answerExecutiveQuestion({
   question: string;
 }) {
   const q = question.toLowerCase();
+  const recognizedSpend = context.totals.recognizedSpend;
+  const highestRigCost = context.highestCostRig?.totalRecognizedCost || 0;
+  const highestProjectCost = context.highestCostProject?.totalRecognizedCost || 0;
   if (q.includes("budget")) {
     return `Budget pressure: ${buildBudgetPressureSummary(context)} Focus first on overspent and critical buckets.`;
   }
@@ -307,16 +317,16 @@ function answerExecutiveQuestion({
     return `Approval backlog: ${buildApprovalBacklogSummary(context)}`;
   }
   if (q.includes("profit") || q.includes("revenue") || q.includes("expense")) {
-    return `Finance snapshot: revenue ${formatMoneyShort(context.totals.revenue)}, approved expenses ${formatMoneyShort(context.totals.approvedExpenses)}, profit ${formatMoneyShort(context.totals.profit)}.`;
+    return `Finance snapshot: revenue ${formatMoneyShort(context.totals.revenue)}, recognized expenses ${formatMoneyShort(recognizedSpend)}, profit ${formatMoneyShort(context.totals.profit)}.`;
   }
   if (q.includes("rig")) {
     return context.highestCostRig
-      ? `Highest cost rig is ${context.highestCostRig.name} at ${formatMoneyShort(context.highestCostRig.totalApprovedCost)} approved spend.`
+      ? `Highest cost rig is ${context.highestCostRig.name} at ${formatMoneyShort(highestRigCost)} recognized spend.`
       : "No rig cost concentration found in current scope.";
   }
   if (q.includes("project")) {
     return context.highestCostProject
-      ? `Highest cost project is ${context.highestCostProject.name} at ${formatMoneyShort(context.highestCostProject.totalApprovedCost)} approved spend.`
+      ? `Highest cost project is ${context.highestCostProject.name} at ${formatMoneyShort(highestProjectCost)} recognized spend.`
       : "No project cost concentration found in current scope.";
   }
   return `Top risks right now: ${deriveTopRisks(context).join(" ")}`;

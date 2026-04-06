@@ -7,11 +7,9 @@ import type { MechanicDirectoryRow, MechanicsDirectoryPayload } from "@/lib/mech
 import { prisma } from "@/lib/prisma";
 
 const OPEN_MAINTENANCE_STATUSES: MaintenanceStatus[] = [
-  "SUBMITTED",
-  "UNDER_REVIEW",
-  "APPROVED",
-  "WAITING_FOR_PARTS",
-  "IN_REPAIR"
+  "OPEN",
+  "IN_REPAIR",
+  "WAITING_FOR_PARTS"
 ];
 const OVERDUE_THRESHOLD_HOURS = 72;
 

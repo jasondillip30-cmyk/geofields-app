@@ -37,9 +37,9 @@ export async function GET(request: NextRequest) {
     ...(search
       ? {
           OR: [
-            { name: { contains: search } },
-            { sku: { contains: search } },
-            { partNumber: { contains: search } }
+            { name: { contains: search, mode: "insensitive" } },
+            { sku: { contains: search, mode: "insensitive" } },
+            { partNumber: { contains: search, mode: "insensitive" } }
           ]
         }
       : {}),

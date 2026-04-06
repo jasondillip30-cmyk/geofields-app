@@ -11,9 +11,7 @@ const UNASSIGNED_RIG_ID = "__unassigned_rig__";
 const UNASSIGNED_RIG_NAME = "Unassigned Rig";
 
 const ACTIVE_MAINTENANCE_STATUSES: MaintenanceStatus[] = [
-  "SUBMITTED",
-  "UNDER_REVIEW",
-  "APPROVED",
+  "OPEN",
   "WAITING_FOR_PARTS",
   "IN_REPAIR"
 ];
@@ -288,7 +286,7 @@ export async function GET(request: NextRequest) {
   const unassignedExpenseClientCount = expenses.filter((entry) => !entry.clientId).length;
   const notes: string[] = [];
   if (unassignedExpenseProjectCount > 0 || unassignedExpenseRigCount > 0 || unassignedExpenseClientCount > 0) {
-    notes.push("Some approved expenses are missing project/rig/client linkage and are reported as Unassigned.");
+    notes.push("Some recognized costs are missing project/rig/client linkage and are reported as Unassigned.");
   }
 
   return NextResponse.json({

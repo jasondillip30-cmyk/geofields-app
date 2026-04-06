@@ -60,7 +60,7 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
         from: typeof parsed.from === "string" ? parsed.from : defaultFilters.from,
         to: typeof parsed.to === "string" ? parsed.to : defaultFilters.to
       });
-    } catch (_error) {
+    } catch {
       setFilters(defaultFilters);
     }
   }, []);

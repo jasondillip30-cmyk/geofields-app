@@ -1,11 +1,37 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Eye } from "lucide-react";
+import { Eye, X } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
+import { SystemFlowBar } from "@/components/inventory/system-flow-bar";
+import { InventoryIssuesWorkspace } from "@/components/inventory/inventory-issues-workspace";
+import { InventoryMovementsWorkspace } from "@/components/inventory/inventory-movements-workspace";
+import { InventoryManualMovementModal } from "@/components/inventory/inventory-manual-movement-modal";
+import { InventoryIssueWorkflowModal } from "@/components/inventory/inventory-issue-workflow-modal";
+import {
+  buildIssueOperationalContext,
+  deriveMovementRecognitionStatus,
+  formatUsageRequestDecision,
+  isIssueCostRecognitionGap,
+  isIssueNeedsLinking,
+  movementItemLabel,
+  toIsoDate,
+  type IssueOperationalContext
+} from "@/components/inventory/inventory-page-utils";
+import {
+  FilterSelect,
+  InputField,
+  IssueSeverityBadge,
+  SummaryBadge,
+  StockSeverityBadge,
+  UsageRequestStatusBadge,
+  isOperationalMaintenanceOpen,
+  normalizeBreakdownLikeStatus,
+  readApiError
+} from "@/components/inventory/inventory-page-shared";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
@@ -13,13 +39,14 @@ import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout
 import { useRole } from "@/components/layout/role-provider";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
 import { canAccess } from "@/lib/auth/permissions";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { buildScopedHref } from "@/lib/drilldown";
-import { formatInventoryCategory, formatMovementType, inventoryCategoryOptions, inventoryMovementTypeOptions } from "@/lib/inventory";
+import { formatInventoryCategory, formatMovementType, inventoryCategoryOptions } from "@/lib/inventory";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
-interface InventoryItemRow {
+export interface InventoryItemRow {
   id: string;
   name: string;
   sku: string;
@@ -47,7 +74,7 @@ interface InventoryItemRow {
   updatedAt: string;
 }
 
-interface InventorySupplier {
+export interface InventorySupplier {
   id: string;
   name: string;
   contactPerson: string | null;
@@ -62,7 +89,7 @@ interface InventorySupplier {
   latestPurchaseDate: string | null;
 }
 
-interface InventoryLocation {
+export interface InventoryLocation {
   id: string;
   name: string;
   description: string | null;
@@ -94,12 +121,64 @@ interface InventoryMovementRow {
   rig: { id: string; rigCode: string } | null;
   project: { id: string; name: string } | null;
   client: { id: string; name: string } | null;
-  maintenanceRequest: { id: string; requestCode: string; status: string } | null;
-  expense: { id: string; amount: number; category: string; approvalStatus: string } | null;
+  maintenanceRequest: {
+    id: string;
+    requestCode: string;
+    status: string;
+    breakdownReportId?: string | null;
+  } | null;
+  breakdownReport?: {
+    id: string;
+    title: string;
+    status: string;
+    severity: string;
+    reportDate?: string | null;
+  } | null;
+  expense: {
+    id: string;
+    amount: number;
+    category: string;
+    approvalStatus: string;
+    entrySource?: string;
+    approvedAt?: string | null;
+    submittedAt?: string | null;
+  } | null;
   supplier: { id: string; name: string } | null;
   locationFrom: { id: string; name: string } | null;
   locationTo: { id: string; name: string } | null;
   performedBy: { id: string; fullName: string; role: string } | null;
+  linkedUsageRequest?: {
+    id: string;
+    status: string;
+    reason: string;
+    reasonType?: "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+    breakdownReportId?: string | null;
+    maintenanceRequestId?: string | null;
+    requestedForDate?: string | null;
+    decidedAt?: string | null;
+    createdAt?: string;
+    requestedBy?: { id: string; fullName: string; role: string } | null;
+    decidedBy?: { id: string; fullName: string; role: string } | null;
+    maintenanceRequest?: {
+      id: string;
+      requestCode: string;
+      status: string;
+      breakdownReportId?: string | null;
+    } | null;
+    breakdownReport?: {
+      id: string;
+      title: string;
+      status: string;
+      severity: string;
+    } | null;
+  } | null;
+  linkedBreakdown?: {
+    id: string;
+    title: string;
+    status: string;
+    severity: string;
+    reportDate?: string | null;
+  } | null;
 }
 
 interface InventoryOverviewResponse {
@@ -167,7 +246,7 @@ interface CategorySuggestionState {
   similarCategoryNames: string[];
 }
 
-interface InventoryIssueRow {
+export interface InventoryIssueRow {
   id: string;
   type: "CATEGORY_CONFLICT" | "DUPLICATE_ITEM" | "NAMING_INCONSISTENCY" | "STOCK_ANOMALY" | "PRICE_ANOMALY";
   severity: "HIGH" | "MEDIUM" | "LOW";
@@ -216,7 +295,7 @@ interface ItemFormState {
   notes: string;
 }
 
-interface MovementFormState {
+export interface MovementFormState {
   itemId: string;
   movementType: "IN" | "OUT" | "ADJUSTMENT" | "TRANSFER";
   quantity: string;
@@ -254,18 +333,41 @@ interface LocationFormState {
 
 interface UseRequestFormState {
   quantity: string;
-  reason: string;
+  reasonType: "MAINTENANCE" | "BREAKDOWN" | "";
+  reasonDetails: string;
+  maintenanceRigId: string;
   projectId: string;
   rigId: string;
   maintenanceRequestId: string;
+  breakdownReportId: string;
   locationId: string;
-  requestedForDate: string;
+}
+
+export interface MaintenanceContextOption {
+  id: string;
+  requestCode: string;
+  status: string;
+  issueDescription: string;
+  rig: { id: string; rigCode: string } | null;
+  project: { id: string; name: string } | null;
+}
+
+interface BreakdownContextOption {
+  id: string;
+  title: string;
+  status: string;
+  severity: string;
+  reportDate: string;
+  rig: { id: string; rigCode: string } | null;
+  project: { id: string; name: string } | null;
 }
 
 interface InventoryUsageRequestRow {
   id: string;
   quantity: number;
   reason: string;
+  reasonType?: "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+  breakdownReportId?: string | null;
   status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
   decisionNote: string | null;
   requestedForDate: string | null;
@@ -277,6 +379,12 @@ interface InventoryUsageRequestRow {
   rig: { id: string; rigCode: string } | null;
   location: { id: string; name: string } | null;
   maintenanceRequest: { id: string; requestCode: string; status: string } | null;
+  breakdownReport: {
+    id: string;
+    title: string;
+    status: string;
+    severity: string;
+  } | null;
   requestedBy: { id: string; fullName: string; role: string } | null;
   decidedBy: { id: string; fullName: string; role: string } | null;
 }
@@ -331,6 +439,7 @@ const defaultIssues: InventoryIssuesResponse = {
 };
 
 type InventorySection = "overview" | "items" | "stock-movements" | "issues" | "suppliers" | "locations";
+type IssueTriageFilter = "ALL" | "HIGH_PRIORITY" | "NEEDS_LINKING" | "COST_NOT_RECOGNIZED" | "LOW_PRIORITY";
 
 function resolveInventorySection(pathname: string | null, sectionQuery: string | null): InventorySection {
   if (pathname === "/inventory/items") return "items";
@@ -366,12 +475,18 @@ function InventoryPageContent() {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const preselectedUsageReason = (searchParams.get("usageReason") || "").trim().toUpperCase();
+  const preselectedBreakdownId = searchParams.get("breakdownId")?.trim() || "";
+  const preselectedMaintenanceRequestId =
+    searchParams.get("maintenanceRequestId")?.trim() || "";
   const canManage = Boolean(user?.role && canAccess(user.role, "inventory:manage"));
+  const canApproveMovement = Boolean(user?.role && canManageExpenseApprovalActions(user.role));
 
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
   const [projects, setProjects] = useState<Array<{ id: string; name: string; clientId: string }>>([]);
   const [rigs, setRigs] = useState<Array<{ id: string; rigCode: string }>>([]);
-  const [maintenanceRequests, setMaintenanceRequests] = useState<Array<{ id: string; requestCode: string }>>([]);
+  const [maintenanceRequests, setMaintenanceRequests] = useState<MaintenanceContextOption[]>([]);
+  const [breakdownReports, setBreakdownReports] = useState<BreakdownContextOption[]>([]);
   const [suppliers, setSuppliers] = useState<InventorySupplier[]>([]);
   const [locations, setLocations] = useState<InventoryLocation[]>([]);
   const [items, setItems] = useState<InventoryItemRow[]>([]);
@@ -381,7 +496,6 @@ function InventoryPageContent() {
   const [selectedItemDetails, setSelectedItemDetails] = useState<InventoryItemDetailsResponse | null>(null);
   const [selectedMovementId, setSelectedMovementId] = useState<string>("");
   const [selectedMovementDetails, setSelectedMovementDetails] = useState<InventoryMovementRow | null>(null);
-  const [relatedMovementRows, setRelatedMovementRows] = useState<InventoryMovementRow[]>([]);
 
   const [itemSearch, setItemSearch] = useState("");
   const [itemCategoryFilter, setItemCategoryFilter] = useState("all");
@@ -417,8 +531,13 @@ function InventoryPageContent() {
   const [issueTypeFilter, setIssueTypeFilter] = useState<"all" | InventoryIssueRow["type"]>("all");
   const [issueCategoryFilter, setIssueCategoryFilter] = useState<"all" | string>("all");
   const [issueItemQuery, setIssueItemQuery] = useState("");
+  const [issueTriageFilter, setIssueTriageFilter] = useState<IssueTriageFilter>("ALL");
+  const [selectedIssueId, setSelectedIssueId] = useState<string>("");
+  const [issueWorkflowModalOpen, setIssueWorkflowModalOpen] = useState(false);
+  const [issueWorkflowInitialStep, setIssueWorkflowInitialStep] = useState<1 | 2 | 3>(1);
   const [itemDetailModalOpen, setItemDetailModalOpen] = useState(false);
   const [movementDetailDrawerOpen, setMovementDetailDrawerOpen] = useState(false);
+  const [manualMovementModalOpen, setManualMovementModalOpen] = useState(false);
   const [showCreateItemForm, setShowCreateItemForm] = useState(false);
   const [requestUseModalOpen, setRequestUseModalOpen] = useState(false);
   const [submittingUseRequest, setSubmittingUseRequest] = useState(false);
@@ -428,18 +547,21 @@ function InventoryPageContent() {
     "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED"
   >("ALL");
   const [myUsageRequests, setMyUsageRequests] = useState<InventoryUsageRequestRow[]>([]);
+  const usageRequestFetchSeq = useRef(0);
   const [usageRequestToast, setUsageRequestToast] = useState<{
     tone: "success" | "error";
     message: string;
   } | null>(null);
   const [useRequestForm, setUseRequestForm] = useState<UseRequestFormState>({
     quantity: "",
-    reason: "",
+    reasonType: "",
+    reasonDetails: "",
+    maintenanceRigId: "",
     projectId: "",
     rigId: "",
     maintenanceRequestId: "",
+    breakdownReportId: "",
     locationId: "",
-    requestedForDate: new Date().toISOString().slice(0, 10)
   });
 
   const [movementForm, setMovementForm] = useState<MovementFormState>(() => ({
@@ -481,6 +603,7 @@ function InventoryPageContent() {
   const [loading, setLoading] = useState(true);
   const [savingItem, setSavingItem] = useState(false);
   const [savingMovement, setSavingMovement] = useState(false);
+  const movementSubmitInFlightRef = useRef(false);
   const [savingSupplier, setSavingSupplier] = useState(false);
   const [savingLocation, setSavingLocation] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -502,12 +625,48 @@ function InventoryPageContent() {
     return rigs.find((rig) => rig.id === filters.rigId)?.rigCode || null;
   }, [filters.rigId, rigs]);
 
-  const filteredProjectsForMovement = useMemo(() => {
-    if (!movementForm.clientId) {
-      return projects;
+  const openMaintenanceRequests = useMemo(
+    () => maintenanceRequests.filter((requestRow) => isOperationalMaintenanceOpen(requestRow.status)),
+    [maintenanceRequests]
+  );
+  const openBreakdownReports = useMemo(
+    () => breakdownReports.filter((entry) => normalizeBreakdownLikeStatus(entry.status) === "OPEN"),
+    [breakdownReports]
+  );
+  const maintenanceRigOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; rigCode: string }>();
+    for (const requestRow of openMaintenanceRequests) {
+      if (requestRow.rig?.id && requestRow.rig?.rigCode) {
+        byId.set(requestRow.rig.id, {
+          id: requestRow.rig.id,
+          rigCode: requestRow.rig.rigCode
+        });
+      }
     }
-    return projects.filter((project) => project.clientId === movementForm.clientId);
-  }, [movementForm.clientId, projects]);
+    return Array.from(byId.values()).sort((a, b) =>
+      a.rigCode.localeCompare(b.rigCode)
+    );
+  }, [openMaintenanceRequests]);
+  const selectedMaintenanceContext = useMemo(
+    () =>
+      openMaintenanceRequests.find((requestRow) => requestRow.id === useRequestForm.maintenanceRequestId) ||
+      null,
+    [openMaintenanceRequests, useRequestForm.maintenanceRequestId]
+  );
+  const openMaintenanceRequestsForSelectedRig = useMemo(
+    () =>
+      useRequestForm.maintenanceRigId
+        ? openMaintenanceRequests.filter(
+            (requestRow) => requestRow.rig?.id === useRequestForm.maintenanceRigId
+          )
+        : [],
+    [openMaintenanceRequests, useRequestForm.maintenanceRigId]
+  );
+  const selectedBreakdownContext = useMemo(
+    () =>
+      openBreakdownReports.find((entry) => entry.id === useRequestForm.breakdownReportId) || null,
+    [openBreakdownReports, useRequestForm.breakdownReportId]
+  );
 
   const lowStockItems = useMemo(() => overview.lowStockItems || [], [overview.lowStockItems]);
   const outOfStockItems = useMemo(() => overview.outOfStockItems || [], [overview.outOfStockItems]);
@@ -555,6 +714,26 @@ function InventoryPageContent() {
       return haystack.includes(query);
     });
   }, [movementQuery, movementTypeFilter, movements]);
+  const visibleMovements = useMemo(() => filteredMovements.slice(0, 80), [filteredMovements]);
+  const movementLedgerSummary = useMemo(() => {
+    const summary = {
+      total: filteredMovements.length,
+      recognized: 0,
+      pending: 0,
+      stockOnly: 0
+    };
+    for (const movement of filteredMovements) {
+      const recognition = deriveMovementRecognitionStatus(movement);
+      if (recognition.label === "Cost Recognized") {
+        summary.recognized += 1;
+      } else if (recognition.label === "Pending Recognition") {
+        summary.pending += 1;
+      } else {
+        summary.stockOnly += 1;
+      }
+    }
+    return summary;
+  }, [filteredMovements]);
   const selectedItemIssues = useMemo(() => {
     if (!selectedItemId) {
       return [];
@@ -632,6 +811,49 @@ function InventoryPageContent() {
     () => issuesResponse.issues.filter((issue) => issue.severity === "LOW").length,
     [issuesResponse.issues]
   );
+  const needsLinkingCount = useMemo(
+    () => filteredIssues.filter((issue) => isIssueNeedsLinking(issue)).length,
+    [filteredIssues]
+  );
+  const costNotRecognizedCount = useMemo(
+    () => filteredIssues.filter((issue) => isIssueCostRecognitionGap(issue)).length,
+    [filteredIssues]
+  );
+  const triageQueueIssues = useMemo(() => {
+    if (issueTriageFilter === "HIGH_PRIORITY") {
+      return filteredIssues.filter((issue) => issue.severity === "HIGH");
+    }
+    if (issueTriageFilter === "NEEDS_LINKING") {
+      return filteredIssues.filter((issue) => isIssueNeedsLinking(issue));
+    }
+    if (issueTriageFilter === "COST_NOT_RECOGNIZED") {
+      return filteredIssues.filter((issue) => isIssueCostRecognitionGap(issue));
+    }
+    if (issueTriageFilter === "LOW_PRIORITY") {
+      return filteredIssues.filter((issue) => issue.severity === "LOW");
+    }
+    return filteredIssues;
+  }, [filteredIssues, issueTriageFilter]);
+  const issueContextById = useMemo(() => {
+    const contextMap = new Map<string, IssueOperationalContext>();
+    for (const issue of filteredIssues) {
+      contextMap.set(issue.id, buildIssueOperationalContext(issue, itemById, movements));
+    }
+    return contextMap;
+  }, [filteredIssues, itemById, movements]);
+  const selectedIssue = useMemo(
+    () =>
+      triageQueueIssues.find((issue) => issue.id === selectedIssueId) ||
+      filteredIssues.find((issue) => issue.id === selectedIssueId) ||
+      triageQueueIssues[0] ||
+      filteredIssues[0] ||
+      null,
+    [filteredIssues, selectedIssueId, triageQueueIssues]
+  );
+  const selectedIssueContext = useMemo(
+    () => (selectedIssue ? issueContextById.get(selectedIssue.id) || null : null),
+    [issueContextById, selectedIssue]
+  );
   const lowRiskNamingFixes = useMemo(
     () => {
       const byItemId = new Map<string, { itemId: string; suggestedName: string }>();
@@ -664,21 +886,23 @@ function InventoryPageContent() {
     itemForm.category !== categorySuggestion.suggestedCategory;
 
   const loadReferenceData = useCallback(async () => {
-    const [clientsRes, projectsRes, rigsRes, maintenanceRes, suppliersRes, locationsRes] = await Promise.all([
+    const [clientsRes, projectsRes, rigsRes, maintenanceRes, breakdownsRes, suppliersRes, locationsRes] = await Promise.all([
       fetch("/api/clients", { cache: "no-store" }),
       fetch("/api/projects", { cache: "no-store" }),
       fetch("/api/rigs", { cache: "no-store" }),
       fetch("/api/maintenance-requests", { cache: "no-store" }),
+      fetch("/api/breakdowns?status=OPEN", { cache: "no-store" }),
       fetch("/api/inventory/suppliers", { cache: "no-store" }),
       fetch("/api/inventory/locations", { cache: "no-store" })
     ]);
 
-    const [clientsPayload, projectsPayload, rigsPayload, maintenancePayload, suppliersPayload, locationsPayload] =
+    const [clientsPayload, projectsPayload, rigsPayload, maintenancePayload, breakdownsPayload, suppliersPayload, locationsPayload] =
       await Promise.all([
         clientsRes.ok ? clientsRes.json() : Promise.resolve({ data: [] }),
         projectsRes.ok ? projectsRes.json() : Promise.resolve({ data: [] }),
         rigsRes.ok ? rigsRes.json() : Promise.resolve({ data: [] }),
         maintenanceRes.ok ? maintenanceRes.json() : Promise.resolve({ data: [] }),
+        breakdownsRes.ok ? breakdownsRes.json() : Promise.resolve({ data: [] }),
         suppliersRes.ok ? suppliersRes.json() : Promise.resolve({ data: [] }),
         locationsRes.ok ? locationsRes.json() : Promise.resolve({ data: [] })
       ]);
@@ -693,10 +917,56 @@ function InventoryPageContent() {
     );
     setRigs((rigsPayload.data || []).map((rig: { id: string; rigCode: string }) => ({ id: rig.id, rigCode: rig.rigCode })));
     setMaintenanceRequests(
-      (maintenancePayload.data || []).map((requestRow: { id: string; requestCode?: string }) => ({
-        id: requestRow.id,
-        requestCode: requestRow.requestCode || requestRow.id
-      }))
+      (maintenancePayload.data || []).map(
+        (requestRow: {
+          id: string;
+          requestCode?: string;
+          status?: string;
+          issueDescription?: string;
+          rig?: { id?: string; rigCode?: string } | null;
+          project?: { id?: string; name?: string } | null;
+        }) => ({
+          id: requestRow.id,
+          requestCode: requestRow.requestCode || requestRow.id,
+          status: requestRow.status || "IN_REPAIR",
+          issueDescription: requestRow.issueDescription || "",
+          rig:
+            requestRow.rig?.id && requestRow.rig?.rigCode
+              ? { id: requestRow.rig.id, rigCode: requestRow.rig.rigCode }
+              : null,
+          project:
+            requestRow.project?.id && requestRow.project?.name
+              ? { id: requestRow.project.id, name: requestRow.project.name }
+              : null
+        })
+      )
+    );
+    setBreakdownReports(
+      (breakdownsPayload.data || []).map(
+        (entry: {
+          id: string;
+          title?: string;
+          status?: string;
+          severity?: string;
+          reportDate?: string;
+          rig?: { id?: string; rigCode?: string } | null;
+          project?: { id?: string; name?: string } | null;
+        }) => ({
+          id: entry.id,
+          title: entry.title || "Breakdown",
+          status: entry.status || "OPEN",
+          severity: entry.severity || "MEDIUM",
+          reportDate: entry.reportDate || new Date().toISOString(),
+          rig:
+            entry.rig?.id && entry.rig?.rigCode
+              ? { id: entry.rig.id, rigCode: entry.rig.rigCode }
+              : null,
+          project:
+            entry.project?.id && entry.project?.name
+              ? { id: entry.project.id, name: entry.project.name }
+              : null
+        })
+      )
     );
     setSuppliers(suppliersPayload.data || []);
     setLocations(locationsPayload.data || []);
@@ -755,35 +1025,33 @@ function InventoryPageContent() {
 
   const loadMyUsageRequests = useCallback(
     async (statusOverride?: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => {
-    if (!user?.id) {
-      setMyUsageRequests([]);
-      return;
-    }
-
+    const requestSeq = ++usageRequestFetchSeq.current;
     setUsageRequestsLoading(true);
     try {
       const query = new URLSearchParams();
       query.set("scope", "mine");
       query.set("requestedBy", "me");
       query.set("status", statusOverride || usageRequestStatusFilter);
-      if (filters.from) query.set("from", filters.from);
-      if (filters.to) query.set("to", filters.to);
-      if (filters.clientId !== "all") query.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") query.set("rigId", filters.rigId);
 
       const response = await fetch(`/api/inventory/usage-requests?${query.toString()}`, { cache: "no-store" });
       if (!response.ok) {
         throw new Error(await readApiError(response, "Failed to load your usage requests."));
       }
       const payload = (await response.json()) as { data?: InventoryUsageRequestRow[] };
-      setMyUsageRequests(payload.data || []);
+      if (requestSeq === usageRequestFetchSeq.current) {
+        setMyUsageRequests(payload.data || []);
+      }
     } catch {
-      setMyUsageRequests([]);
+      if (requestSeq === usageRequestFetchSeq.current) {
+        setMyUsageRequests([]);
+      }
     } finally {
-      setUsageRequestsLoading(false);
+      if (requestSeq === usageRequestFetchSeq.current) {
+        setUsageRequestsLoading(false);
+      }
     }
     },
-    [filters.clientId, filters.from, filters.rigId, filters.to, usageRequestStatusFilter, user?.id]
+    [usageRequestStatusFilter]
   );
 
   const loadSelectedItemDetails = useCallback(async () => {
@@ -807,7 +1075,6 @@ function InventoryPageContent() {
   const loadSelectedMovementDetails = useCallback(async () => {
     if (!selectedMovementId) {
       setSelectedMovementDetails(null);
-      setRelatedMovementRows([]);
       return;
     }
     try {
@@ -817,10 +1084,8 @@ function InventoryPageContent() {
       }
       const payload = await response.json();
       setSelectedMovementDetails((payload?.data || null) as InventoryMovementRow | null);
-      setRelatedMovementRows((payload?.relatedMovements || []) as InventoryMovementRow[]);
     } catch {
       setSelectedMovementDetails(null);
-      setRelatedMovementRows([]);
     }
   }, [selectedMovementId]);
 
@@ -933,7 +1198,10 @@ function InventoryPageContent() {
           ? (movementType as MovementFormState["movementType"])
           : current.movementType
     }));
-  }, [searchParams]);
+    if (canManage && resolveInventorySection(pathname, searchParams.get("section")) === "stock-movements") {
+      setManualMovementModalOpen(true);
+    }
+  }, [canManage, pathname, searchParams]);
 
   useEffect(() => {
     if (pathname !== "/inventory/items") {
@@ -1012,6 +1280,10 @@ function InventoryPageContent() {
 
   async function submitMovementForm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (movementSubmitInFlightRef.current) {
+      return;
+    }
+    movementSubmitInFlightRef.current = true;
     setSavingMovement(true);
     setNotice(null);
     setErrorMessage(null);
@@ -1077,6 +1349,7 @@ function InventoryPageContent() {
       }
 
       setNotice("Stock movement recorded and inventory updated.");
+      setManualMovementModalOpen(false);
       setMovementForm((current) => ({
         ...current,
         quantity: "",
@@ -1094,6 +1367,7 @@ function InventoryPageContent() {
       setErrorMessage(error instanceof Error ? error.message : "Failed to create stock movement.");
     } finally {
       setSavingMovement(false);
+      movementSubmitInFlightRef.current = false;
     }
   }
 
@@ -1184,7 +1458,7 @@ function InventoryPageContent() {
       if (!response.ok) {
         throw new Error(await readApiError(response, "Failed to apply quick fix."));
       }
-      setNotice("Inventory issue quick fix applied.");
+      setNotice("Issue resolved.");
       await loadInventoryData();
       if (selectedItemId === targetItemId) {
         await loadSelectedItemDetails();
@@ -1211,7 +1485,7 @@ function InventoryPageContent() {
       if (!response.ok) {
         throw new Error(await readApiError(response, "Failed to auto-fix naming."));
       }
-      setNotice("Naming format standardized.");
+      setNotice("Issue resolved.");
       await loadInventoryData();
       if (selectedItemId === itemId) {
         await loadSelectedItemDetails();
@@ -1240,7 +1514,7 @@ function InventoryPageContent() {
       }
       const payload = await response.json().catch(() => null);
       const updatedCount = Number(payload?.data?.updatedCount || 0);
-      setNotice(updatedCount > 0 ? `Applied ${updatedCount} low-risk naming auto-fix(es).` : "No naming fixes were needed.");
+      setNotice(updatedCount > 0 ? `Resolved ${updatedCount} low-risk issue(s).` : "No naming fixes were needed.");
       await loadInventoryData();
       await loadSelectedItemDetails();
     } catch (error) {
@@ -1265,7 +1539,7 @@ function InventoryPageContent() {
       if (!response.ok) {
         throw new Error(await readApiError(response, "Failed to merge duplicate items."));
       }
-      setNotice("Duplicate inventory items merged successfully.");
+      setNotice("Issue resolved.");
       setSelectedItemId(primaryItemId);
       await loadInventoryData();
       await loadSelectedItemDetails();
@@ -1291,6 +1565,37 @@ function InventoryPageContent() {
     router.push(`/inventory/items?itemId=${encodeURIComponent(itemId)}`);
   }
 
+  function fixInventoryIssue(issue: InventoryIssueRow) {
+    if (issue.suggestedCategory) {
+      void applyIssueQuickFix(issue, "category");
+      return;
+    }
+    if (issue.suggestedName) {
+      const targetItemId = issue.itemIds[0] || "";
+      if (issue.autoFixSafe && targetItemId) {
+        void applyNamingAutoFix(targetItemId, issue.suggestedName);
+      } else {
+        void applyIssueQuickFix(issue, "name");
+      }
+      return;
+    }
+    if (issue.type === "DUPLICATE_ITEM" && issue.itemIds.length > 1) {
+      void mergeDuplicateIssue(issue);
+      return;
+    }
+    if (issue.type === "STOCK_ANOMALY") {
+      focusStockAdjustment(issue.itemIds[0] || "");
+      return;
+    }
+    if (issue.type === "PRICE_ANOMALY") {
+      focusPricingReview(issue.itemIds[0] || "");
+      return;
+    }
+    if (issue.itemIds[0]) {
+      openItemDetail(issue.itemIds[0]);
+    }
+  }
+
   function openItemDetail(itemId: string) {
     if (!itemId) {
       return;
@@ -1303,23 +1608,86 @@ function InventoryPageContent() {
     if (!movementId) {
       return;
     }
+    const movementExists = movements.some((movement) => movement.id === movementId);
+    if (!movementExists) {
+      setErrorMessage("Movement record is no longer available. Refresh and try again.");
+      return;
+    }
     setSelectedMovementId(movementId);
     setMovementDetailDrawerOpen(true);
+  }
+
+  function openIssueQueueForMovement(movementId: string) {
+    if (!movementId) {
+      return;
+    }
+    setMovementDetailDrawerOpen(false);
+    router.push(`/inventory/issues?movementId=${encodeURIComponent(movementId)}`);
+  }
+
+  function openIssueWorkflow(issueId: string, initialStep: 1 | 2 | 3 = 1) {
+    if (!issueId) {
+      return;
+    }
+    const issueExists = issuesResponse.issues.some((issue) => issue.id === issueId);
+    if (!issueExists) {
+      setErrorMessage("Issue context could not be found. Refresh and try again.");
+      return;
+    }
+    setSelectedIssueId(issueId);
+    setIssueWorkflowInitialStep(initialStep);
+    setIssueWorkflowModalOpen(true);
   }
 
   function openRequestUseModal() {
     if (!selectedItemDetails?.data?.id) {
       return;
     }
+    const preselectedBreakdown =
+      preselectedBreakdownId.length > 0
+        ? openBreakdownReports.find((entry) => entry.id === preselectedBreakdownId) || null
+        : null;
+    const preselectedMaintenance =
+      preselectedMaintenanceRequestId.length > 0
+        ? openMaintenanceRequests.find(
+            (entry) => entry.id === preselectedMaintenanceRequestId
+          ) || null
+        : null;
+    const reasonType: UseRequestFormState["reasonType"] =
+      preselectedBreakdown
+        ? "BREAKDOWN"
+        : preselectedMaintenance || preselectedUsageReason === "MAINTENANCE"
+          ? "MAINTENANCE"
+          : "";
+    const defaultMaintenanceRigId = preselectedMaintenance?.rig?.id
+      ? preselectedMaintenance.rig.id
+      : selectedItemDetails.data.compatibleRigId &&
+          maintenanceRigOptions.some(
+            (entry) => entry.id === selectedItemDetails.data.compatibleRigId
+          )
+        ? selectedItemDetails.data.compatibleRigId
+        : "";
+    const maintenanceRequestsForDefaultRig = defaultMaintenanceRigId
+      ? openMaintenanceRequests.filter(
+          (requestRow) => requestRow.rig?.id === defaultMaintenanceRigId
+        )
+      : [];
+    const defaultMaintenanceRequestId =
+      preselectedMaintenance?.id ||
+      (maintenanceRequestsForDefaultRig.length === 1
+        ? maintenanceRequestsForDefaultRig[0].id
+        : "");
     setUseRequestError(null);
     setUseRequestForm({
       quantity: "1",
-      reason: "",
-      projectId: "",
-      rigId: selectedItemDetails.data.compatibleRigId || "",
-      maintenanceRequestId: "",
+      reasonType,
+      reasonDetails: "",
+      maintenanceRigId: defaultMaintenanceRigId,
+      projectId: preselectedMaintenance?.project?.id || "",
+      rigId: preselectedMaintenance?.rig?.id || selectedItemDetails.data.compatibleRigId || "",
+      maintenanceRequestId: defaultMaintenanceRequestId,
+      breakdownReportId: preselectedBreakdown?.id || "",
       locationId: selectedItemDetails.data.locationId || "",
-      requestedForDate: new Date().toISOString().slice(0, 10)
     });
     setRequestUseModalOpen(true);
   }
@@ -1344,14 +1712,45 @@ function InventoryPageContent() {
       if (selectedItemDetails.data.status !== "ACTIVE") {
         throw new Error("Only active inventory items can be requested.");
       }
-      if (!useRequestForm.projectId) {
-        throw new Error("Project is required.");
+      if (quantity > selectedItemDetails.data.quantityInStock) {
+        throw new Error("Requested quantity is above stock on hand. Create a purchase request to replenish first.");
       }
-      if (!useRequestForm.rigId) {
-        throw new Error("Rig is required.");
+      if (
+        useRequestForm.reasonType !== "MAINTENANCE" &&
+        useRequestForm.reasonType !== "BREAKDOWN"
+      ) {
+        throw new Error("Select Maintenance or Breakdown before submitting.");
       }
-      if (!useRequestForm.reason.trim()) {
-        throw new Error("Reason is required.");
+
+      if (useRequestForm.reasonType === "MAINTENANCE") {
+        if (!useRequestForm.maintenanceRigId) {
+          throw new Error("Select a rig under maintenance.");
+        }
+        if (openMaintenanceRequestsForSelectedRig.length === 0) {
+          throw new Error(
+            "No open maintenance case exists for the selected rig. Open a maintenance case first."
+          );
+        }
+      }
+
+      let resolvedMaintenanceRequestId = useRequestForm.maintenanceRequestId.trim();
+      if (useRequestForm.reasonType === "MAINTENANCE") {
+        if (openMaintenanceRequestsForSelectedRig.length === 1) {
+          resolvedMaintenanceRequestId = openMaintenanceRequestsForSelectedRig[0].id;
+        } else {
+          if (!resolvedMaintenanceRequestId) {
+            throw new Error("Select which open maintenance case this request belongs to.");
+          }
+          const linkedCase = openMaintenanceRequestsForSelectedRig.some(
+            (requestRow) => requestRow.id === resolvedMaintenanceRequestId
+          );
+          if (!linkedCase) {
+            throw new Error("Selected maintenance case is not open for the selected rig.");
+          }
+        }
+      }
+      if (useRequestForm.reasonType === "BREAKDOWN" && !useRequestForm.breakdownReportId) {
+        throw new Error("Select an open breakdown record.");
       }
 
       const response = await fetch("/api/inventory/usage-requests", {
@@ -1360,12 +1759,21 @@ function InventoryPageContent() {
         body: JSON.stringify({
           itemId: selectedItemDetails.data.id,
           quantity,
-          reason: useRequestForm.reason.trim(),
-          projectId: useRequestForm.projectId || null,
-          rigId: useRequestForm.rigId || null,
-          maintenanceRequestId: useRequestForm.maintenanceRequestId || null,
+          reasonType: useRequestForm.reasonType,
+          usageReason: useRequestForm.reasonType,
+          reasonDetails: useRequestForm.reasonDetails.trim(),
+          projectId: null,
+          rigId:
+            useRequestForm.reasonType === "MAINTENANCE"
+              ? useRequestForm.maintenanceRigId || null
+              : null,
+          maintenanceRequestId:
+            useRequestForm.reasonType === "MAINTENANCE"
+              ? resolvedMaintenanceRequestId || null
+              : null,
+          breakdownReportId: useRequestForm.breakdownReportId || null,
           locationId: useRequestForm.locationId || null,
-          requestedForDate: useRequestForm.requestedForDate || null
+          sourceLocationId: useRequestForm.locationId || null,
         })
       });
 
@@ -1383,12 +1791,14 @@ function InventoryPageContent() {
       setRequestUseModalOpen(false);
       setUseRequestForm({
         quantity: "",
-        reason: "",
+        reasonType: "",
+        reasonDetails: "",
+        maintenanceRigId: "",
         projectId: "",
         rigId: "",
         maintenanceRequestId: "",
+        breakdownReportId: "",
         locationId: "",
-        requestedForDate: new Date().toISOString().slice(0, 10)
       });
       await loadMyUsageRequests("ALL");
     } catch (error) {
@@ -1407,6 +1817,55 @@ function InventoryPageContent() {
   function closeRequestUseModal() {
     setRequestUseModalOpen(false);
     setUseRequestError(null);
+  }
+
+  function continueToPurchaseRequest() {
+    const query = new URLSearchParams();
+
+    if (useRequestForm.reasonType === "BREAKDOWN") {
+      if (useRequestForm.breakdownReportId) {
+        query.set("breakdownId", useRequestForm.breakdownReportId);
+      }
+      if (selectedBreakdownContext?.project?.id) {
+        query.set("projectId", selectedBreakdownContext.project.id);
+      }
+    } else if (useRequestForm.reasonType === "MAINTENANCE") {
+      if (!useRequestForm.maintenanceRigId) {
+        setUseRequestError("Select a rig under maintenance first.");
+        return;
+      }
+      if (openMaintenanceRequestsForSelectedRig.length === 0) {
+        setUseRequestError(
+          "No open maintenance case exists for this rig. Open maintenance first."
+        );
+        return;
+      }
+      if (
+        openMaintenanceRequestsForSelectedRig.length > 1 &&
+        !useRequestForm.maintenanceRequestId
+      ) {
+        setUseRequestError(
+          "Select which open maintenance case this purchase request belongs to."
+        );
+        return;
+      }
+      const resolvedMaintenanceContext =
+        selectedMaintenanceContext ||
+        (openMaintenanceRequestsForSelectedRig.length === 1
+          ? openMaintenanceRequestsForSelectedRig[0]
+          : null);
+      if (resolvedMaintenanceContext?.project?.id) {
+        query.set("projectId", resolvedMaintenanceContext.project.id);
+      }
+      if (resolvedMaintenanceContext?.id) {
+        query.set("maintenanceRequestId", resolvedMaintenanceContext.id);
+      }
+    }
+
+    const destination = query.toString() ? `/expenses?${query.toString()}` : "/expenses";
+    setRequestUseModalOpen(false);
+    setUseRequestError(null);
+    router.push(destination);
   }
 
   const inventorySection = resolveInventorySection(pathname, searchParams.get("section"));
@@ -1432,9 +1891,9 @@ function InventoryPageContent() {
     : showItems
       ? "Manage items, stock levels, suppliers, and linked history from one workspace."
       : showMovements
-        ? "Record stock changes and review movement history with linked records."
+        ? "Track inventory movement history, operational linkage, and cost recognition."
         : showIssues
-          ? "Detect, prioritize, and resolve inventory data quality issues."
+          ? "Resolve gaps in inventory, usage, and cost flow."
       : showSuppliers
         ? "Manage supplier records and purchasing context."
         : "Manage warehouse and site stock locations.";
@@ -1762,6 +2221,20 @@ function InventoryPageContent() {
     return () => window.clearTimeout(timeout);
   }, [usageRequestToast]);
 
+  useEffect(() => {
+    if (!showIssues) {
+      return;
+    }
+    const nextIssueId = triageQueueIssues[0]?.id || filteredIssues[0]?.id || "";
+    if (!selectedIssueId && nextIssueId) {
+      setSelectedIssueId(nextIssueId);
+      return;
+    }
+    if (selectedIssueId && !filteredIssues.some((issue) => issue.id === selectedIssueId)) {
+      setSelectedIssueId(nextIssueId);
+    }
+  }, [filteredIssues, selectedIssueId, showIssues, triageQueueIssues]);
+
   return (
     <AccessGate permission="inventory:view">
       <div className="gf-page-stack space-y-4 md:space-y-5">
@@ -1777,10 +2250,20 @@ function InventoryPageContent() {
         <section className="gf-page-header">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">{pageTitle}</h1>
+              {showMovements ? (
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Inventory</p>
+              ) : null}
+              <h1
+                className={cn(
+                  "font-semibold tracking-tight text-ink-900",
+                  showMovements ? "text-3xl md:text-[2rem]" : "text-2xl md:text-[1.7rem]"
+                )}
+              >
+                {pageTitle}
+              </h1>
               <p className="mt-1 text-sm text-slate-600">{pageSubtitle}</p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className={cn("flex flex-wrap gap-2", showMovements ? "ml-auto justify-end" : "")}>
               {showOverview ? (
                 <>
                   {canManage ? (
@@ -1795,6 +2278,24 @@ function InventoryPageContent() {
                   ) : null}
                   <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
                     Complete Purchase
+                  </Link>
+                </>
+              ) : showMovements ? (
+                <>
+                  {canManage ? (
+                    <button
+                      type="button"
+                      onClick={() => setManualMovementModalOpen(true)}
+                      className="gf-btn-primary px-3 py-1.5 text-xs"
+                    >
+                      New Manual Adjustment
+                    </button>
+                  ) : null}
+                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                    Open Purchase Follow-up
+                  </Link>
+                  <Link href="/inventory?section=overview" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                    Back to Overview
                   </Link>
                 </>
               ) : (
@@ -1924,215 +2425,38 @@ function InventoryPageContent() {
         )}
 
         {showIssues && (
-        <section
-          id="inventory-issues-section"
-          className={cn(
-            "grid min-w-0 items-start gap-4 xl:grid-cols-[1.25fr_1fr]",
-            focusedSectionId === "inventory-issues-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <Card className="min-w-0">
-            {issuesLoading ? (
-              <p className="text-sm text-ink-600">Analyzing inventory quality issues...</p>
-            ) : issuesResponse.summary.total === 0 ? (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                No major inventory inconsistencies detected in current scope.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <IssueSummaryBadge label="Total" value={issuesResponse.summary.total} tone="neutral" />
-                  <IssueSummaryBadge label="High" value={issuesResponse.summary.high} tone="danger" />
-                  <IssueSummaryBadge label="Medium" value={issuesResponse.summary.medium} tone="warn" />
-                  <IssueSummaryBadge label="Low" value={issuesResponse.summary.low} tone="neutral" />
-                </div>
-                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-                  <FilterSelect
-                    label="Severity"
-                    value={issueSeverityFilter}
-                    onChange={(value) => setIssueSeverityFilter((value as "all" | "HIGH" | "MEDIUM" | "LOW") || "all")}
-                    options={[
-                      { value: "all", label: "All severities" },
-                      { value: "HIGH", label: "High" },
-                      { value: "MEDIUM", label: "Medium" },
-                      { value: "LOW", label: "Low" }
-                    ]}
-                  />
-                  <FilterSelect
-                    label="Issue Type"
-                    value={issueTypeFilter}
-                    onChange={(value) =>
-                      setIssueTypeFilter(
-                        (value as "all" | "CATEGORY_CONFLICT" | "DUPLICATE_ITEM" | "NAMING_INCONSISTENCY" | "STOCK_ANOMALY" | "PRICE_ANOMALY") || "all"
-                      )
-                    }
-                    options={[
-                      { value: "all", label: "All types" },
-                      { value: "CATEGORY_CONFLICT", label: "Category conflict" },
-                      { value: "DUPLICATE_ITEM", label: "Duplicate item" },
-                      { value: "NAMING_INCONSISTENCY", label: "Naming" },
-                      { value: "STOCK_ANOMALY", label: "Stock anomaly" },
-                      { value: "PRICE_ANOMALY", label: "Price anomaly" }
-                    ]}
-                  />
-                  <FilterSelect
-                    label="Affected Category"
-                    value={issueCategoryFilter}
-                    onChange={(value) => setIssueCategoryFilter(value || "all")}
-                    options={[
-                      { value: "all", label: "All categories" },
-                      ...issueCategoryOptions.map((category) => ({
-                        value: category,
-                        label: formatInventoryCategory(category)
-                      }))
-                    ]}
-                  />
-                  <label className="text-xs text-ink-700 md:col-span-2 xl:col-span-2">
-                    <span className="mb-1 block uppercase tracking-wide text-slate-500">Affected Item</span>
-                    <input
-                      type="text"
-                      value={issueItemQuery}
-                      onChange={(event) => setIssueItemQuery(event.target.value)}
-                      placeholder="Search item name"
-                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    />
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowLowPriorityIssues((current) => !current)}
-                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-ink-700 hover:bg-slate-100"
-                  >
-                    {showLowPriorityIssues ? "Hide low-priority issues" : "Show low-priority issues"}
-                  </button>
-                  {!showLowPriorityIssues && lowPriorityHiddenCount > 0 && (
-                    <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-1 text-xs text-slate-700">
-                      {lowPriorityHiddenCount} low-priority issue(s) hidden (mostly formatting cleanup)
-                    </span>
-                  )}
-                  {canManage && lowRiskNamingFixes.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void applyBulkLowRiskNamingAutoFix()}
-                      className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-100"
-                    >
-                      Fix all low-risk naming issues ({lowRiskNamingFixes.length})
-                    </button>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  {filteredIssues.slice(0, 12).map((issue) => (
-                    <div key={issue.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-1 flex flex-wrap items-center gap-2">
-                        <IssueSeverityBadge severity={issue.severity} />
-                        <p className="text-sm font-semibold text-ink-900">{issue.title}</p>
-                        {issue.confidence && (
-                          <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-700">
-                            Confidence: {issue.confidence}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-ink-700">{issue.message}</p>
-                      <p className="mt-1 text-xs text-slate-600">{issue.suggestion}</p>
-                      {issue.itemIds.length > 0 && (
-                        <p className="mt-1 text-[11px] text-slate-600">
-                          Affected:{" "}
-                          {issue.itemIds
-                            .map((itemId) => itemById.get(itemId)?.name || "Unknown item")
-                            .slice(0, 3)
-                            .join(", ")}
-                        </p>
-                      )}
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openItemDetail(issue.itemIds[0] || "")}
-                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-ink-700 hover:bg-slate-100"
-                        >
-                          Open Item
-                        </button>
-                        {issue.suggestedCategory && (
-                          <button
-                            type="button"
-                            onClick={() => void applyIssueQuickFix(issue, "category")}
-                            className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-800 hover:bg-amber-100"
-                          >
-                            Reassign Category
-                          </button>
-                        )}
-                        {issue.suggestedName && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              issue.autoFixSafe
-                                ? void applyNamingAutoFix(issue.itemIds[0] || "", issue.suggestedName || "")
-                                : void applyIssueQuickFix(issue, "name")
-                            }
-                            className="rounded border border-blue-300 bg-blue-50 px-2 py-1 text-xs text-blue-800 hover:bg-blue-100"
-                          >
-                            {issue.autoFixSafe ? "Auto-fix naming format" : "Standardize Name"}
-                          </button>
-                        )}
-                        {issue.type === "DUPLICATE_ITEM" && issue.itemIds.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => void mergeDuplicateIssue(issue)}
-                            className="rounded border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-100"
-                          >
-                            Merge Duplicates
-                          </button>
-                        )}
-                        {issue.type === "STOCK_ANOMALY" && (
-                          <button
-                            type="button"
-                            onClick={() => focusStockAdjustment(issue.itemIds[0] || "")}
-                            className="rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs text-violet-800 hover:bg-violet-100"
-                          >
-                            Adjust Stock
-                          </button>
-                        )}
-                        {issue.type === "PRICE_ANOMALY" && (
-                          <button
-                            type="button"
-                            onClick={() => focusPricingReview(issue.itemIds[0] || "")}
-                            className="rounded border border-cyan-300 bg-cyan-50 px-2 py-1 text-xs text-cyan-800 hover:bg-cyan-100"
-                          >
-                            Review Pricing
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                  {filteredIssues.length === 0 && (
-                    <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-                      No issues found for current filters.
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
-          </Card>
-
-          <Card className="min-w-0" title="Category Management" subtitle="Central category usage and value distribution">
-            {issuesResponse.categorySummary.length === 0 ? (
-              <p className="text-sm text-ink-600">No category data available in current scope.</p>
-            ) : (
-              <DataTable
-                className="border-slate-200/70"
-                columns={["Category", "Items", "Inventory Value"]}
-                rows={issuesResponse.categorySummary.map((entry) => [
-                  entry.label,
-                  String(entry.itemCount),
-                  formatCurrency(entry.totalValue)
-                ])}
-              />
-            )}
-          </Card>
-        </section>
+          <InventoryIssuesWorkspace
+            focusedSectionId={focusedSectionId}
+            issuesLoading={issuesLoading}
+            issuesResponse={issuesResponse}
+            issueTriageFilter={issueTriageFilter}
+            setIssueTriageFilter={setIssueTriageFilter}
+            needsLinkingCount={needsLinkingCount}
+            costNotRecognizedCount={costNotRecognizedCount}
+            showLowPriorityIssues={showLowPriorityIssues}
+            setShowLowPriorityIssues={setShowLowPriorityIssues}
+            lowPriorityHiddenCount={lowPriorityHiddenCount}
+            filteredIssues={filteredIssues}
+            issueSeverityFilter={issueSeverityFilter}
+            setIssueSeverityFilter={setIssueSeverityFilter}
+            issueTypeFilter={issueTypeFilter}
+            setIssueTypeFilter={setIssueTypeFilter}
+            issueCategoryFilter={issueCategoryFilter}
+            setIssueCategoryFilter={setIssueCategoryFilter}
+            issueCategoryOptions={issueCategoryOptions}
+            issueItemQuery={issueItemQuery}
+            setIssueItemQuery={setIssueItemQuery}
+            triageQueueIssues={triageQueueIssues}
+            issueContextById={issueContextById}
+            selectedIssue={selectedIssue}
+            selectedIssueContext={selectedIssueContext}
+            openIssueWorkflow={openIssueWorkflow}
+            openItemDetail={openItemDetail}
+            openMovementDetail={openMovementDetail}
+            canManage={canManage}
+            lowRiskNamingFixes={lowRiskNamingFixes}
+            applyBulkLowRiskNamingAutoFix={applyBulkLowRiskNamingAutoFix}
+          />
         )}
 
         {showItems && (
@@ -2274,7 +2598,7 @@ function InventoryPageContent() {
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">My Usage Requests</p>
                         <p className="text-xs text-slate-600">
-                          Approved requests create stock-out history. Rejected or blocked approvals do not mutate stock.
+                          Scoped to your account. Approved requests create stock-out history; rejected requests do not mutate stock.
                         </p>
                       </div>
                       <div className="flex flex-wrap items-center gap-1">
@@ -2300,7 +2624,7 @@ function InventoryPageContent() {
                         <p className="text-sm text-slate-600">Loading your usage requests...</p>
                       ) : myUsageRequests.length === 0 ? (
                         <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
-                          No usage requests found in this filter scope.
+                          No usage requests found for your account in this status.
                         </p>
                       ) : (
                         <DataTable
@@ -2355,7 +2679,7 @@ function InventoryPageContent() {
         </section>
         )}
 
-        {(showMovements || (showItems && showCreateItemForm)) && (
+        {showItems && showCreateItemForm && (
         <section id="inventory-actions-section" className="grid min-w-0 items-start gap-4 xl:grid-cols-[1.2fr_1fr]">
           {canManage && showItems && showCreateItemForm && (
             <Card
@@ -2502,279 +2826,22 @@ function InventoryPageContent() {
             </Card>
           )}
 
-          {canManage && showMovements && (
-            <Card
-              className="min-w-0"
-              title="Manual Stock Movement"
-              subtitle="Record manual purchases/usage/adjustments. Receipt intake already attaches receipts automatically."
-            >
-              <div id="stock-movement-form" />
-              <form onSubmit={submitMovementForm} className="grid gap-2 md:grid-cols-2">
-                <FilterSelect
-                  label="Item"
-                  value={movementForm.itemId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, itemId: value }))}
-                  options={[
-                    { value: "", label: "Select item" },
-                    ...items.map((item) => ({ value: item.id, label: `${item.name} (${item.sku})` }))
-                  ]}
-                />
-                <FilterSelect
-                  label="Movement Type"
-                  value={movementForm.movementType}
-                  onChange={(value) =>
-                    setMovementForm((current) => ({
-                      ...current,
-                      movementType: value as MovementFormState["movementType"],
-                      createExpense: value === "IN" ? false : current.createExpense
-                    }))
-                  }
-                  options={inventoryMovementTypeOptions.map((entry) => ({ value: entry.value, label: entry.label }))}
-                />
-                <InputField label="Quantity" type="number" value={movementForm.quantity} onChange={(value) => setMovementForm((current) => ({ ...current, quantity: value }))} required />
-                <InputField label="Date" type="date" value={movementForm.date} onChange={(value) => setMovementForm((current) => ({ ...current, date: value }))} required />
-                <InputField label="Unit Cost" type="number" value={movementForm.unitCost} onChange={(value) => setMovementForm((current) => ({ ...current, unitCost: value }))} />
-                <InputField label="Total Cost (optional override)" type="number" value={movementForm.totalCost} onChange={(value) => setMovementForm((current) => ({ ...current, totalCost: value }))} />
-                <FilterSelect
-                  label="Client"
-                  value={movementForm.clientId}
-                  onChange={(value) =>
-                    setMovementForm((current) => ({
-                      ...current,
-                      clientId: value,
-                      projectId: value && current.projectId && !projects.some((project) => project.id === current.projectId && project.clientId === value) ? "" : current.projectId
-                    }))
-                  }
-                  options={[
-                    { value: "", label: "No client" },
-                    ...clients.map((client) => ({ value: client.id, label: client.name }))
-                  ]}
-                />
-                <FilterSelect
-                  label="Project"
-                  value={movementForm.projectId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, projectId: value }))}
-                  options={[
-                    { value: "", label: "No project" },
-                    ...filteredProjectsForMovement.map((project) => ({ value: project.id, label: project.name }))
-                  ]}
-                />
-                <FilterSelect
-                  label="Rig"
-                  value={movementForm.rigId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, rigId: value }))}
-                  options={[
-                    { value: "", label: "No rig" },
-                    ...rigs.map((rig) => ({ value: rig.id, label: rig.rigCode }))
-                  ]}
-                />
-                <FilterSelect
-                  label="Maintenance Request"
-                  value={movementForm.maintenanceRequestId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, maintenanceRequestId: value }))}
-                  options={[
-                    { value: "", label: "Not linked" },
-                    ...maintenanceRequests.map((requestRow) => ({ value: requestRow.id, label: requestRow.requestCode }))
-                  ]}
-                />
-                <FilterSelect
-                  label="Supplier"
-                  value={movementForm.supplierId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, supplierId: value }))}
-                  options={[
-                    { value: "", label: "No supplier" },
-                    ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))
-                  ]}
-                />
-                <FilterSelect
-                  label="From Location"
-                  value={movementForm.locationFromId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, locationFromId: value }))}
-                  options={[
-                    { value: "", label: "No location" },
-                    ...locations.map((location) => ({ value: location.id, label: location.name }))
-                  ]}
-                />
-                <FilterSelect
-                  label="To Location"
-                  value={movementForm.locationToId}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, locationToId: value }))}
-                  options={[
-                    { value: "", label: "No location" },
-                    ...locations.map((location) => ({ value: location.id, label: location.name }))
-                  ]}
-                />
-                <InputField label="TRA Receipt Number" value={movementForm.traReceiptNumber} onChange={(value) => setMovementForm((current) => ({ ...current, traReceiptNumber: value }))} />
-                <InputField label="Supplier Invoice Ref" value={movementForm.supplierInvoiceNumber} onChange={(value) => setMovementForm((current) => ({ ...current, supplierInvoiceNumber: value }))} />
-                <InputField
-                  label="Receipt URL (Optional manual)"
-                  value={movementForm.receiptUrl}
-                  onChange={(value) => setMovementForm((current) => ({ ...current, receiptUrl: value }))}
-                />
-                <label className="text-xs text-ink-700">
-                  <span className="mb-1 block uppercase tracking-wide text-slate-500">Receipt Upload (Optional manual)</span>
-                  <input
-                    type="file"
-                    accept="image/*,.pdf"
-                    onChange={(event) =>
-                      setMovementForm((current) => ({
-                        ...current,
-                        receiptFile: event.target.files && event.target.files.length > 0 ? event.target.files[0] : null
-                      }))
-                    }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                  />
-                </label>
-                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 md:col-span-2">
-                  Movements created from the <span className="font-semibold">From Receipt</span> intake already carry the receipt and metadata automatically.
-                  Use receipt upload here only for manual movements.
-                </p>
-                <label className="text-xs text-ink-700 md:col-span-2">
-                  <span className="mb-1 block uppercase tracking-wide text-slate-500">Notes</span>
-                  <textarea
-                    value={movementForm.notes}
-                    onChange={(event) => setMovementForm((current) => ({ ...current, notes: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                    rows={2}
-                  />
-                </label>
-                <label className="inline-flex items-center gap-2 text-xs text-ink-700">
-                  <input
-                    type="checkbox"
-                    checked={movementForm.createExpense}
-                    onChange={(event) => setMovementForm((current) => ({ ...current, createExpense: event.target.checked }))}
-                  />
-                  Create / link expense entry for this movement
-                </label>
-                {user?.role === "ADMIN" && (
-                  <label className="inline-flex items-center gap-2 text-xs text-ink-700">
-                    <input
-                      type="checkbox"
-                      checked={movementForm.allowNegativeStock}
-                      onChange={(event) => setMovementForm((current) => ({ ...current, allowNegativeStock: event.target.checked }))}
-                    />
-                    Allow negative stock (admin correction)
-                  </label>
-                )}
-                <div className="md:col-span-2">
-                  <button
-                    type="submit"
-                    disabled={savingMovement}
-                    className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {savingMovement ? "Saving..." : "Record Movement"}
-                  </button>
-                </div>
-              </form>
-            </Card>
-          )}
         </section>
         )}
 
         {showMovements && (
-        <section
-          id="inventory-movements-section"
-          className={cn(
-            focusedSectionId === "inventory-movements-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-        <Card className="min-w-0">
-          <div id="inventory-stock-movements-section" />
-          <div className="mb-4 rounded-xl border border-slate-200/85 bg-slate-50/75 p-3.5">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Filters</p>
-              <p className="text-xs text-slate-500">Search and narrow movement history quickly</p>
-            </div>
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-              <FilterSelect
-                label="Movement Type"
-                value={movementTypeFilter}
-                onChange={setMovementTypeFilter}
-                options={[
-                  { value: "all", label: "All movement types" },
-                  ...inventoryMovementTypeOptions.map((entry) => ({ value: entry.value, label: entry.label }))
-                ]}
-              />
-              <label className="text-xs text-ink-700 md:col-span-2 xl:col-span-3">
-                <span className="mb-1 block uppercase tracking-wide text-slate-500">Search movements</span>
-                <input
-                  type="text"
-                  value={movementQuery}
-                  onChange={(event) => setMovementQuery(event.target.value)}
-                  placeholder="Item, project, rig, supplier, maintenance code"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
-              </label>
-            </div>
-          </div>
-          {filteredMovements.length === 0 ? (
-            <p className="text-sm text-ink-600">No stock movements found for current scope.</p>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Movement History</p>
-              <DataTable
-                className="border-slate-200/70"
-                columns={["Date", "Item", "Type", "Qty", "Total Cost", "Origin", "Rig", "Project", "Maintenance", "Expense", "Receipt", "Action"]}
-                rows={filteredMovements.slice(0, 80).map((movement) => [
-                  toIsoDate(movement.date),
-                  movementItemLabel(movement),
-                  formatMovementType(movement.movementType),
-                  formatNumber(movement.quantity),
-                  formatCurrency(movement.totalCost || 0),
-                  movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber ? (
-                    <a
-                      key={`${movement.id}-origin`}
-                      href={`/purchasing/receipt-follow-up?movementId=${movement.id}`}
-                      className="inline-flex items-center rounded-full border border-brand-300 bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-800 hover:bg-brand-100"
-                    >
-                      Purchase Follow-up
-                    </a>
-                  ) : (
-                    "Manual"
-                  ),
-                  movement.rig?.rigCode || "-",
-                  movement.project?.name || "-",
-                  movement.maintenanceRequest?.requestCode || "-",
-                  movement.expense?.id ? `${movement.expense.id} (${movement.expense.approvalStatus})` : "-",
-                  movement.receiptUrl ? (
-                    <a
-                      key={`${movement.id}-receipt`}
-                      href={movement.receiptUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-brand-700 underline"
-                    >
-                      Open
-                    </a>
-                  ) : (
-                    "-"
-                  ),
-                  <button
-                    key={`${movement.id}-view`}
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      openMovementDetail(movement.id);
-                    }}
-                    className="gf-btn-subtle"
-                  >
-                    <span className="inline-flex items-center gap-1">
-                      <Eye size={13} />
-                      View
-                    </span>
-                  </button>
-                ])}
-                rowIds={filteredMovements.slice(0, 80).map((movement) => `ai-focus-${movement.id}`)}
-                rowClassNames={filteredMovements.slice(0, 80).map((movement) =>
-                  focusedRowId === movement.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""
-                )}
-                onRowClick={(rowIndex) => openMovementDetail(filteredMovements.slice(0, 80)[rowIndex]?.id || "")}
-              />
-            </div>
-          )}
-        </Card>
-        </section>
+          <InventoryMovementsWorkspace
+            focusedSectionId={focusedSectionId}
+            movementLedgerSummary={movementLedgerSummary}
+            movementTypeFilter={movementTypeFilter}
+            setMovementTypeFilter={setMovementTypeFilter}
+            movementQuery={movementQuery}
+            setMovementQuery={setMovementQuery}
+            filteredMovements={filteredMovements}
+            visibleMovements={visibleMovements}
+            focusedRowId={focusedRowId}
+            openMovementDetail={openMovementDetail}
+          />
         )}
 
         {canManage && (showSuppliers || showLocations) && (
@@ -2892,6 +2959,17 @@ function InventoryPageContent() {
           </aside>
         )}
 
+        <InventoryIssueWorkflowModal
+          open={issueWorkflowModalOpen}
+          onClose={() => setIssueWorkflowModalOpen(false)}
+          issue={selectedIssue}
+          issueContext={selectedIssueContext}
+          initialStep={issueWorkflowInitialStep}
+          onFixIssue={fixInventoryIssue}
+          onOpenItem={openItemDetail}
+          onOpenMovement={openMovementDetail}
+        />
+
         <ItemDetailModal
           open={itemDetailModalOpen}
           onClose={() => setItemDetailModalOpen(false)}
@@ -2922,21 +3000,41 @@ function InventoryPageContent() {
             }
           }}
         />
-        <MovementDetailDrawer
+        <InventoryManualMovementModal
+          open={manualMovementModalOpen}
+          onClose={() => setManualMovementModalOpen(false)}
+          onSubmit={submitMovementForm}
+          saving={savingMovement}
+          form={movementForm}
+          onFormChange={(patch) => setMovementForm((current) => ({ ...current, ...patch }))}
+          items={items}
+          clients={clients}
+          projects={projects}
+          rigs={rigs}
+          maintenanceRequests={maintenanceRequests}
+          suppliers={suppliers}
+          locations={locations}
+        />
+        <MovementDetailModal
           open={movementDetailDrawerOpen}
           onClose={() => setMovementDetailDrawerOpen(false)}
           movement={selectedMovementDetails}
-          relatedMovements={relatedMovementRows}
+          canApproveMovement={canApproveMovement}
+          onRefresh={async () => {
+            await loadInventoryData();
+            await loadSelectedMovementDetails();
+          }}
+          onFlagIssue={openIssueQueueForMovement}
         />
         <RequestUseModal
           open={requestUseModalOpen}
           onClose={closeRequestUseModal}
           onSubmit={submitUseRequest}
+          onContinueToPurchaseRequest={continueToPurchaseRequest}
           form={useRequestForm}
           onFormChange={setUseRequestForm}
-          projects={projects}
-          rigs={rigs}
-          maintenanceRequests={maintenanceRequests}
+          maintenanceRequests={openMaintenanceRequests}
+          breakdownReports={openBreakdownReports}
           locations={locations}
           item={selectedItemDetails?.data || null}
           submitting={submittingUseRequest}
@@ -2957,118 +3055,29 @@ function InventoryPageFallback() {
   );
 }
 
-function FilterSelect({
-  label,
-  value,
-  onChange,
-  options
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-}) {
-  return (
-    <label className="text-xs text-ink-700">
-      <span className="mb-1 block uppercase tracking-wide text-slate-500">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-      >
-        {options.map((option) => (
-          <option key={`${label}-${option.value}`} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function InputField({
-  label,
-  value,
-  onChange,
-  type = "text",
-  required = false
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  required?: boolean;
-}) {
-  return (
-    <label className="text-xs text-ink-700">
-      <span className="mb-1 block uppercase tracking-wide text-slate-500">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        required={required}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-      />
-    </label>
-  );
-}
-
-function SummaryBadge({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="text-sm font-medium text-ink-800">{value}</p>
-    </div>
-  );
-}
-
-function IssueSummaryBadge({
-  label,
-  value,
-  tone
-}: {
-  label: string;
-  value: number;
-  tone: "danger" | "warn" | "neutral";
-}) {
-  const toneClass =
-    tone === "danger"
-      ? "border-red-300 bg-red-50 text-red-800"
-      : tone === "warn"
-        ? "border-amber-300 bg-amber-50 text-amber-800"
-        : "border-slate-300 bg-slate-50 text-slate-700";
-
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>
-      {label}: {formatNumber(value)}
-    </span>
-  );
-}
-
-function IssueSeverityBadge({ severity }: { severity: "HIGH" | "MEDIUM" | "LOW" }) {
-  const toneClass =
-    severity === "HIGH"
-      ? "border-red-300 bg-red-100 text-red-800"
-      : severity === "MEDIUM"
-        ? "border-amber-300 bg-amber-100 text-amber-800"
-        : "border-slate-300 bg-slate-100 text-slate-700";
-
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>{severity}</span>;
-}
-
-function MovementDetailDrawer({
+function MovementDetailModal({
   open,
   onClose,
   movement,
-  relatedMovements
+  canApproveMovement,
+  onRefresh,
+  onFlagIssue
 }: {
   open: boolean;
   onClose: () => void;
   movement: InventoryMovementRow | null;
-  relatedMovements: InventoryMovementRow[];
+  canApproveMovement: boolean;
+  onRefresh: () => Promise<void>;
+  onFlagIssue: (movementId: string) => void;
 }) {
   const [isMounted, setIsMounted] = useState(open);
   const [isVisible, setIsVisible] = useState(open);
+  const [workflowStep, setWorkflowStep] = useState<1 | 2 | 3>(1);
+  const [submittingDecision, setSubmittingDecision] = useState(false);
+  const [decisionFeedback, setDecisionFeedback] = useState<{
+    tone: "success" | "error" | "info";
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     let timeoutId: number | undefined;
@@ -3087,125 +3096,272 @@ function MovementDetailDrawer({
     };
   }, [isMounted, open]);
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setWorkflowStep(1);
+    setDecisionFeedback(null);
+    setSubmittingDecision(false);
+  }, [movement?.id, open]);
+
   if (!isMounted) {
     return null;
   }
 
+  const stepSummary = [
+    { id: 1 as const, title: "Understand", subtitle: "Confirm item movement details." },
+    { id: 2 as const, title: "Validate", subtitle: "Check operational context before approval." },
+    { id: 3 as const, title: "Confirm", subtitle: "Approve this movement or flag an issue." }
+  ];
+  const linkedMaintenance =
+    movement?.linkedUsageRequest?.maintenanceRequest || movement?.maintenanceRequest || null;
+  const expenseStatus = String(movement?.expense?.approvalStatus || "").toUpperCase();
+  const expenseStatusLabel = movement?.expense?.approvalStatus
+    ? `${movement.expense.approvalStatus.charAt(0)}${movement.expense.approvalStatus
+        .slice(1)
+        .toLowerCase()}`
+    : "Not linked";
+  const modalTitle = movement
+    ? movement.item?.name?.trim()
+      ? `${movement.item.name.trim()} movement`
+      : `${formatMovementType(movement.movementType)} movement`
+    : "Loading movement";
+
+  async function approveMovement() {
+    if (!movement) {
+      return;
+    }
+    if (!movement.expense?.id) {
+      setDecisionFeedback({
+        tone: "error",
+        message: "No linked expense found. Flag this movement so traceability can be restored."
+      });
+      return;
+    }
+    if (!canApproveMovement) {
+      setDecisionFeedback({
+        tone: "error",
+        message: "Only Admin or Manager can approve this movement confirmation."
+      });
+      return;
+    }
+    if (expenseStatus === "APPROVED") {
+      setDecisionFeedback({
+        tone: "success",
+        message: "Movement already confirmed. Linked expense is approved."
+      });
+      return;
+    }
+    if (expenseStatus !== "SUBMITTED") {
+      setDecisionFeedback({
+        tone: "error",
+        message: `Linked expense is ${expenseStatus ? expenseStatus.toLowerCase() : "not submitted"}. Submit it before approval.`
+      });
+      return;
+    }
+
+    setSubmittingDecision(true);
+    setDecisionFeedback(null);
+    try {
+      const response = await fetch(`/api/expenses/${encodeURIComponent(movement.expense.id)}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve" })
+      });
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Failed to approve movement."));
+      }
+      await onRefresh();
+      setDecisionFeedback({
+        tone: "success",
+        message: "Movement approved. Linked expense is now recognized."
+      });
+    } catch (error) {
+      setDecisionFeedback({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Failed to approve movement."
+      });
+    } finally {
+      setSubmittingDecision(false);
+    }
+  }
+
   return (
     <div
-      className={`fixed inset-0 z-[75] flex transition-opacity duration-200 ease-out ${
+      className={`fixed inset-0 z-[84] flex items-center justify-center p-3 transition-opacity duration-200 ease-out sm:p-6 ${
         isVisible ? "opacity-100" : "pointer-events-none opacity-0"
       }`}
     >
       <button
         type="button"
         onClick={onClose}
-        className={`flex-1 bg-slate-900/35 backdrop-blur-[2px] transition-opacity duration-200 ${
+        className={`absolute inset-0 bg-slate-900/35 backdrop-blur-[2px] transition-opacity duration-200 ${
           isVisible ? "opacity-100" : "opacity-0"
         }`}
-        aria-label="Close movement detail drawer"
+        aria-label="Close movement detail modal"
       />
-      <aside
-        className={`h-full w-full max-w-3xl overflow-y-auto border-l border-slate-200 bg-white shadow-[0_18px_42px_rgba(15,23,42,0.22)] transition-transform duration-200 ease-out ${
-          isVisible ? "translate-x-0" : "translate-x-3"
+      <section
+        className={`relative z-10 flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,0.24)] transition-all duration-200 ease-out ${
+          isVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.985] opacity-0"
         }`}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-          <div>
-            <p className="text-sm font-semibold text-ink-900">
-              {movement ? `Stock Movement ${movement.id.slice(-8)}` : "Stock Movement Detail"}
-            </p>
-            <p className="text-xs text-slate-600">Focused full-view detail with linked records</p>
+        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 shadow-[0_1px_0_rgba(15,23,42,0.06)] backdrop-blur">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Movement Approval</p>
+              <p className="text-xl font-semibold text-ink-900">{modalTitle}</p>
+              <p className="mt-0.5 text-xs font-medium text-slate-600">Step {workflowStep} of 3</p>
+              <SystemFlowBar current="movement" className="mt-2" />
+              <div className="mt-2 flex items-center gap-1.5">
+                {stepSummary.map((step) => (
+                  <span
+                    key={step.id}
+                    className={cn(
+                      "h-1.5 w-6 rounded-full",
+                      workflowStep === step.id
+                        ? "bg-ink-900"
+                        : workflowStep > step.id
+                          ? "bg-emerald-400"
+                          : "bg-slate-200"
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-1">
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                aria-label="Close movement detail"
+              >
+                <X size={14} />
+              </button>
+            </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-ink-700 hover:bg-slate-100">
-            Close
-          </button>
         </div>
 
         {!movement ? (
           <div className="p-4 text-sm text-ink-600">Loading movement details...</div>
         ) : (
-          <div className="space-y-4 p-4">
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <SummaryBadge label="Movement Type" value={formatMovementType(movement.movementType)} />
-              <SummaryBadge label="Date" value={toIsoDate(movement.date)} />
-              <SummaryBadge label="Quantity" value={formatNumber(movement.quantity)} />
-              <SummaryBadge label="Unit Cost" value={formatCurrency(movement.unitCost || 0)} />
-              <SummaryBadge label="Total Cost" value={formatCurrency(movement.totalCost || 0)} />
-              <SummaryBadge label="Receipt #" value={movement.supplierInvoiceNumber || movement.traReceiptNumber || "-"} />
-              <SummaryBadge
-                label="Origin"
-                value={movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber ? "Purchase Follow-up" : "Manual"}
-              />
-              <SummaryBadge label="Item" value={movement.item?.name || "Unknown item"} />
-              <SummaryBadge label="Project" value={movement.project?.name || "-"} />
-              <SummaryBadge label="Rig" value={movement.rig?.rigCode || "-"} />
+          <>
+            <div className="flex-1 overflow-y-auto bg-slate-50/40 p-4 sm:p-5">
+              <section className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {stepSummary[workflowStep - 1]?.title}
+                </p>
+                <p className="text-xs text-slate-600">{stepSummary[workflowStep - 1]?.subtitle}</p>
+              </section>
+
+              {workflowStep === 1 ? (
+                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <SummaryBadge label="Item" value={movementItemLabel(movement)} />
+                    <SummaryBadge label="Type" value={formatMovementType(movement.movementType)} />
+                    <SummaryBadge label="Quantity" value={formatNumber(movement.quantity)} />
+                    <SummaryBadge label="Location From" value={movement.locationFrom?.name || "-"} />
+                    <SummaryBadge label="Location To" value={movement.locationTo?.name || "-"} />
+                    <SummaryBadge label="Date" value={toIsoDate(movement.date)} />
+                  </div>
+                </section>
+              ) : null}
+
+              {workflowStep === 2 ? (
+                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <SummaryBadge label="Project" value={movement.project?.name || "-"} />
+                    <SummaryBadge label="Rig" value={movement.rig?.rigCode || "-"} />
+                    <SummaryBadge
+                      label="User"
+                      value={
+                        movement.performedBy?.fullName ||
+                        movement.linkedUsageRequest?.requestedBy?.fullName ||
+                        "-"
+                      }
+                    />
+                    <SummaryBadge label="Maintenance" value={linkedMaintenance?.requestCode || "-"} />
+                  </div>
+                </section>
+              ) : null}
+
+              {workflowStep === 3 ? (
+                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    <SummaryBadge label="Linked Expense" value={movement.expense?.id ? movement.expense.id.slice(-8) : "Not linked"} />
+                    <SummaryBadge label="Expense Status" value={expenseStatusLabel} />
+                    <SummaryBadge
+                      label="Recognition"
+                      value={expenseStatus === "APPROVED" ? "Cost recognized" : "Pending recognition"}
+                    />
+                  </div>
+                  {decisionFeedback ? (
+                    <div
+                      className={cn(
+                        "mt-2 rounded-lg border px-3 py-2 text-xs",
+                        decisionFeedback.tone === "success"
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-900"
+                          : decisionFeedback.tone === "error"
+                            ? "border-red-300 bg-red-50 text-red-900"
+                            : "border-slate-200 bg-slate-50 text-slate-700"
+                      )}
+                    >
+                      {decisionFeedback.message}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {movement.item?.id && (
-                <a
-                  href={`/inventory/items?itemId=${movement.item.id}`}
-                  className="rounded border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
-                >
-                  Open Inventory Item
-                </a>
-              )}
-              {(movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber) && (
-                <a
-                  href={`/purchasing/receipt-follow-up?movementId=${movement.id}`}
-                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-                >
-                  Open Purchase Follow-up Record
-                </a>
-              )}
-              {movement.expense?.id && (
-                <a
-                  href={`/expenses?expenseId=${movement.expense.id}`}
-                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-                >
-                  Open Linked Expense
-                </a>
-              )}
-              {movement.receiptUrl && (
-                <a
-                  href={movement.receiptUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-100"
-                >
-                  Open Receipt File
-                </a>
-              )}
+            <div className="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
+              <div>
+                {workflowStep > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setWorkflowStep((step) => (step > 1 ? ((step - 1) as 1 | 2 | 3) : step))}
+                    className="gf-btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    Back
+                  </button>
+                ) : null}
+              </div>
+              <div>
+                {workflowStep < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => setWorkflowStep((step) => (step < 3 ? ((step + 1) as 1 | 2 | 3) : step))}
+                    className="gf-btn-primary px-3 py-1.5 text-xs"
+                  >
+                    Continue
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (movement?.id) {
+                          onFlagIssue(movement.id);
+                        }
+                      }}
+                      className="gf-btn-secondary px-3 py-1.5 text-xs"
+                    >
+                      Flag issue
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void approveMovement()}
+                      disabled={submittingDecision}
+                      className="gf-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {submittingDecision ? "Approving..." : "Approve movement"}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              <p className="font-semibold text-slate-800">Metadata</p>
-              <p className="mt-1">Performed by: {movement.performedBy?.fullName || "-"}</p>
-              <p>Supplier: {movement.supplier?.name || "-"}</p>
-              <p>Client: {movement.client?.name || "-"}</p>
-              <p>Maintenance: {movement.maintenanceRequest?.requestCode || "-"}</p>
-              <p>Location from: {movement.locationFrom?.name || "-"}</p>
-              <p>Location to: {movement.locationTo?.name || "-"}</p>
-              <p>Notes: {movement.notes || "-"}</p>
-            </div>
-
-            <DataTable
-              className="border-slate-200/70"
-              columns={["Related Movement", "Date", "Item", "Project", "Rig", "Amount", "Linked Expense"]}
-              rows={(relatedMovements || []).slice(0, 10).map((entry) => [
-                entry.id.slice(-8),
-                toIsoDate(entry.date),
-                entry.item?.name || "Unknown item",
-                entry.project?.name || "-",
-                entry.rig?.rigCode || "-",
-                formatCurrency(entry.totalCost || 0),
-                entry.expense?.id || "-"
-              ])}
-            />
-          </div>
+          </>
         )}
-      </aside>
+      </section>
     </div>
   );
 }
@@ -3460,11 +3616,11 @@ function RequestUseModal({
   open,
   onClose,
   onSubmit,
+  onContinueToPurchaseRequest,
   form,
   onFormChange,
-  projects,
-  rigs,
   maintenanceRequests,
+  breakdownReports,
   locations,
   item,
   submitting,
@@ -3473,11 +3629,11 @@ function RequestUseModal({
   open: boolean;
   onClose: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  onContinueToPurchaseRequest: () => void;
   form: UseRequestFormState;
   onFormChange: React.Dispatch<React.SetStateAction<UseRequestFormState>>;
-  projects: Array<{ id: string; name: string; clientId: string }>;
-  rigs: Array<{ id: string; rigCode: string }>;
-  maintenanceRequests: Array<{ id: string; requestCode: string }>;
+  maintenanceRequests: MaintenanceContextOption[];
+  breakdownReports: BreakdownContextOption[];
   locations: InventoryLocation[];
   item: InventoryItemRow | null;
   submitting: boolean;
@@ -3503,13 +3659,107 @@ function RequestUseModal({
     };
   }, [isMounted, open]);
 
+  const maintenanceRigOptions = useMemo(() => {
+    const byId = new Map<string, { id: string; rigCode: string }>();
+    for (const requestRow of maintenanceRequests) {
+      if (requestRow.rig?.id && requestRow.rig?.rigCode) {
+        byId.set(requestRow.rig.id, {
+          id: requestRow.rig.id,
+          rigCode: requestRow.rig.rigCode
+        });
+      }
+    }
+    return Array.from(byId.values()).sort((a, b) => a.rigCode.localeCompare(b.rigCode));
+  }, [maintenanceRequests]);
+  const maintenanceRequestsForSelectedRig = useMemo(() => {
+    if (!form.maintenanceRigId) {
+      return [];
+    }
+    return maintenanceRequests.filter(
+      (requestRow) => requestRow.rig?.id === form.maintenanceRigId
+    );
+  }, [form.maintenanceRigId, maintenanceRequests]);
+
+  useEffect(() => {
+    if (form.reasonType !== "MAINTENANCE") {
+      return;
+    }
+    if (!form.maintenanceRigId) {
+      if (form.maintenanceRequestId) {
+        onFormChange((current) =>
+          current.reasonType === "MAINTENANCE" && !current.maintenanceRigId
+            ? { ...current, maintenanceRequestId: "" }
+            : current
+        );
+      }
+      return;
+    }
+
+    if (maintenanceRequestsForSelectedRig.length === 1) {
+      const autoLinkedId = maintenanceRequestsForSelectedRig[0].id;
+      if (form.maintenanceRequestId !== autoLinkedId) {
+        onFormChange((current) =>
+          current.reasonType === "MAINTENANCE" &&
+          current.maintenanceRigId === form.maintenanceRigId
+            ? { ...current, maintenanceRequestId: autoLinkedId, rigId: current.maintenanceRigId }
+            : current
+        );
+      }
+      return;
+    }
+
+    if (
+      form.maintenanceRequestId &&
+      !maintenanceRequestsForSelectedRig.some(
+        (requestRow) => requestRow.id === form.maintenanceRequestId
+      )
+    ) {
+      onFormChange((current) =>
+        current.reasonType === "MAINTENANCE" &&
+        current.maintenanceRigId === form.maintenanceRigId
+          ? { ...current, maintenanceRequestId: "" }
+          : current
+      );
+    }
+  }, [
+    form.maintenanceRequestId,
+    form.maintenanceRigId,
+    form.reasonType,
+    maintenanceRequestsForSelectedRig,
+    onFormChange
+  ]);
+
   if (!isMounted) {
     return null;
   }
 
   const projectedStock = Number(form.quantity || 0) > 0 ? item ? item.quantityInStock - Number(form.quantity || 0) : null : null;
+  const selectedMaintenanceContext =
+    maintenanceRequests.find((requestRow) => requestRow.id === form.maintenanceRequestId) || null;
+  const resolvedMaintenanceContext =
+    selectedMaintenanceContext ||
+    (maintenanceRequestsForSelectedRig.length === 1
+      ? maintenanceRequestsForSelectedRig[0]
+      : null);
+  const selectedBreakdownContext =
+    breakdownReports.find((entry) => entry.id === form.breakdownReportId) || null;
+  const workflowStep = form.reasonType ? 2 : 1;
+  const hasStockShortage =
+    projectedStock !== null && Number.isFinite(projectedStock) && projectedStock < 0;
+  const hasRequiredContextSelection =
+    form.reasonType === "MAINTENANCE"
+      ? form.maintenanceRigId
+        ? maintenanceRequestsForSelectedRig.length === 1
+          ? true
+          : maintenanceRequestsForSelectedRig.length > 1
+            ? Boolean(form.maintenanceRequestId)
+            : false
+        : false
+      : form.reasonType === "BREAKDOWN"
+        ? Boolean(form.breakdownReportId)
+        : false;
   const projectedStockWarning =
-    projectedStock !== null && Number.isFinite(projectedStock) && projectedStock < 0
+    hasStockShortage
       ? "Requested quantity exceeds stock on hand. Approval will be blocked unless stock is replenished."
       : null;
 
@@ -3532,12 +3782,34 @@ function RequestUseModal({
           isVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.985] opacity-0"
         }`}
       >
-        <div className="border-b border-slate-200 px-4 py-3">
+        <div className="space-y-2 border-b border-slate-200 px-4 py-3">
           <p className="text-sm font-semibold text-ink-900">Request Item Use</p>
           <p className="text-xs text-slate-600">
             {item ? `${item.name} (${item.sku})` : "Submit usage request for approval"}
           </p>
           {item && <p className="mt-1 text-xs text-slate-500">Stock on hand: {formatNumber(item.quantityInStock)}</p>}
+          <div className="flex flex-wrap gap-1.5">
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                workflowStep === 1
+                  ? "border-brand-300 bg-brand-50 text-brand-800"
+                  : "border-slate-200 bg-slate-50 text-slate-500"
+              )}
+            >
+              1. Reason
+            </span>
+            <span
+              className={cn(
+                "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                workflowStep === 2
+                  ? "border-brand-300 bg-brand-50 text-brand-800"
+                  : "border-slate-200 bg-slate-50 text-slate-500"
+              )}
+            >
+              2. Operational context
+            </span>
+          </div>
         </div>
         {item?.status !== "ACTIVE" && (
           <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
@@ -3545,78 +3817,293 @@ function RequestUseModal({
           </div>
         )}
         {projectedStockWarning && (
-          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">{projectedStockWarning}</div>
+          <div className="space-y-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+            <p>{projectedStockWarning}</p>
+            <button
+              type="button"
+              onClick={onContinueToPurchaseRequest}
+              className="rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-200"
+            >
+              Create purchase request
+            </button>
+          </div>
         )}
         {errorMessage && (
           <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{errorMessage}</div>
         )}
-        <form onSubmit={(event) => void onSubmit(event)} className="grid gap-3 px-4 py-4 md:grid-cols-2">
-          <InputField
-            label="Quantity"
-            type="number"
-            value={form.quantity}
-            onChange={(value) => onFormChange((current) => ({ ...current, quantity: value }))}
-            required
-          />
-          <InputField
-            label="Requested Date"
-            type="date"
-            value={form.requestedForDate}
-            onChange={(value) => onFormChange((current) => ({ ...current, requestedForDate: value }))}
-          />
-          <FilterSelect
-            label="Project"
-            value={form.projectId}
-            onChange={(value) => onFormChange((current) => ({ ...current, projectId: value }))}
-            options={[
-              { value: "", label: "Select project" },
-              ...projects.map((project) => ({ value: project.id, label: project.name }))
-            ]}
-          />
-          <FilterSelect
-            label="Rig"
-            value={form.rigId}
-            onChange={(value) => onFormChange((current) => ({ ...current, rigId: value }))}
-            options={[
-              { value: "", label: "Select rig" },
-              ...rigs.map((rig) => ({ value: rig.id, label: rig.rigCode }))
-            ]}
-          />
-          <FilterSelect
-            label="Maintenance Request"
-            value={form.maintenanceRequestId}
-            onChange={(value) => onFormChange((current) => ({ ...current, maintenanceRequestId: value }))}
-            options={[
-              { value: "", label: "Not linked" },
-              ...maintenanceRequests.map((request) => ({ value: request.id, label: request.requestCode }))
-            ]}
-          />
-          <FilterSelect
-            label="From Location"
-            value={form.locationId}
-            onChange={(value) => onFormChange((current) => ({ ...current, locationId: value }))}
-            options={[
-              { value: "", label: "Select location" },
-              ...locations.map((location) => ({ value: location.id, label: location.name }))
-            ]}
-          />
-          <label className="text-xs text-ink-700 md:col-span-2">
-            <span className="mb-1 block uppercase tracking-wide text-slate-500">Reason</span>
-            <textarea
-              value={form.reason}
-              onChange={(event) => onFormChange((current) => ({ ...current, reason: event.target.value }))}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              rows={3}
-              required
-            />
-          </label>
+        <form onSubmit={(event) => void onSubmit(event)} className="space-y-3 px-4 py-4">
+          <section className="space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Step 1 — Reason for request
+            </p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {([
+                { value: "MAINTENANCE", label: "Maintenance" },
+                { value: "BREAKDOWN", label: "Breakdown" }
+              ] as const).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() =>
+                    onFormChange((current) => ({
+                      ...current,
+                      reasonType: option.value,
+                      maintenanceRigId:
+                        option.value === "MAINTENANCE"
+                          ? current.maintenanceRigId
+                          : "",
+                      maintenanceRequestId:
+                        option.value === "MAINTENANCE" ? current.maintenanceRequestId : "",
+                      breakdownReportId:
+                        option.value === "BREAKDOWN" ? current.breakdownReportId : ""
+                    }))
+                  }
+                  className={cn(
+                    "rounded-lg border px-3 py-2 text-left text-sm font-medium transition-colors",
+                    form.reasonType === option.value
+                      ? "border-brand-300 bg-brand-50 text-brand-900"
+                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Step 2 — Operational context
+            </p>
+            {!form.reasonType ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                Select a reason to continue.
+              </p>
+            ) : (
+              <div className="grid gap-3 md:grid-cols-2">
+                <InputField
+                  label="Quantity"
+                  type="number"
+                  value={form.quantity}
+                  onChange={(value) =>
+                    onFormChange((current) => ({ ...current, quantity: value }))
+                  }
+                  required
+                />
+                <FilterSelect
+                  label="From Location"
+                  value={form.locationId}
+                  onChange={(value) =>
+                    onFormChange((current) => ({ ...current, locationId: value }))
+                  }
+                  options={[
+                    { value: "", label: "Select location" },
+                    ...locations.map((location) => ({ value: location.id, label: location.name }))
+                  ]}
+                />
+
+                {form.reasonType === "MAINTENANCE" && (
+                  <>
+                    <FilterSelect
+                      label="Rig Under Maintenance"
+                      value={form.maintenanceRigId}
+                      onChange={(value) =>
+                        onFormChange((current) => ({
+                          ...current,
+                          maintenanceRigId: value,
+                          maintenanceRequestId: ""
+                        }))
+                      }
+                      options={[
+                        {
+                          value: "",
+                          label:
+                            maintenanceRigOptions.length > 0
+                              ? "Select rig"
+                              : "No rigs currently under maintenance"
+                        },
+                        ...maintenanceRigOptions.map((entry) => ({
+                          value: entry.id,
+                          label: entry.rigCode
+                        }))
+                      ]}
+                    />
+                    {form.maintenanceRigId && maintenanceRequestsForSelectedRig.length === 1 ? (
+                      <label className="text-xs text-ink-700">
+                        <span className="mb-1 block uppercase tracking-wide text-slate-500">
+                          Open Maintenance
+                        </span>
+                        <input
+                          value={`${maintenanceRequestsForSelectedRig[0].requestCode} (auto-linked)`}
+                          readOnly
+                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                        />
+                      </label>
+                    ) : (
+                      <FilterSelect
+                        label="Open Maintenance"
+                        value={form.maintenanceRequestId}
+                        onChange={(value) =>
+                          onFormChange((current) => ({
+                            ...current,
+                            maintenanceRequestId: value
+                          }))
+                        }
+                        options={[
+                          {
+                            value: "",
+                            label:
+                              form.maintenanceRigId
+                                ? maintenanceRequestsForSelectedRig.length > 1
+                                  ? "Select maintenance record"
+                                  : "No open records for selected rig"
+                                : "Select rig first"
+                          },
+                          ...maintenanceRequestsForSelectedRig.map((requestRow) => ({
+                            value: requestRow.id,
+                            label: `${requestRow.requestCode} • ${
+                              requestRow.rig?.rigCode || "No rig"
+                            }`
+                          }))
+                        ]}
+                      />
+                    )}
+                    <label className="text-xs text-ink-700">
+                      <span className="mb-1 block uppercase tracking-wide text-slate-500">
+                        Note (optional)
+                      </span>
+                      <input
+                        value={form.reasonDetails}
+                        onChange={(event) =>
+                          onFormChange((current) => ({
+                            ...current,
+                            reasonDetails: event.target.value
+                          }))
+                        }
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        placeholder="Short usage note"
+                      />
+                    </label>
+                    {form.maintenanceRigId &&
+                      maintenanceRequestsForSelectedRig.length === 0 && (
+                        <p className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          No open maintenance case found for this rig. Report maintenance first,
+                          then request item usage.
+                        </p>
+                      )}
+                    {form.maintenanceRigId &&
+                      maintenanceRequestsForSelectedRig.length > 1 &&
+                      !form.maintenanceRequestId && (
+                        <p className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                          Multiple open maintenance cases found for this rig. Select the case this
+                          request belongs to.
+                        </p>
+                      )}
+                    {resolvedMaintenanceContext && (
+                      <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <p>
+                          <span className="font-semibold">Rig:</span>{" "}
+                          {resolvedMaintenanceContext.rig?.rigCode || "-"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Project:</span>{" "}
+                          {resolvedMaintenanceContext.project?.name || "No active project"}
+                        </p>
+                        {resolvedMaintenanceContext.issueDescription ? (
+                          <p>
+                            <span className="font-semibold">Work:</span>{" "}
+                            {resolvedMaintenanceContext.issueDescription}
+                          </p>
+                        ) : null}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {form.reasonType === "BREAKDOWN" && (
+                  <>
+                    <FilterSelect
+                      label="Open Breakdown"
+                      value={form.breakdownReportId}
+                      onChange={(value) =>
+                        onFormChange((current) => ({
+                          ...current,
+                          breakdownReportId: value
+                        }))
+                      }
+                      options={[
+                        {
+                          value: "",
+                          label:
+                            breakdownReports.length > 0
+                              ? "Select breakdown record"
+                              : "No open breakdown records"
+                        },
+                        ...breakdownReports.map((entry) => ({
+                          value: entry.id,
+                          label: `${entry.title} • ${entry.rig?.rigCode || "No rig"}`
+                        }))
+                      ]}
+                    />
+                    <label className="text-xs text-ink-700">
+                      <span className="mb-1 block uppercase tracking-wide text-slate-500">
+                        Note (optional)
+                      </span>
+                      <input
+                        value={form.reasonDetails}
+                        onChange={(event) =>
+                          onFormChange((current) => ({
+                            ...current,
+                            reasonDetails: event.target.value
+                          }))
+                        }
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        placeholder="Short usage note"
+                      />
+                    </label>
+                    {selectedBreakdownContext && (
+                      <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        <p>
+                          <span className="font-semibold">Rig:</span>{" "}
+                          {selectedBreakdownContext.rig?.rigCode || "-"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Project:</span>{" "}
+                          {selectedBreakdownContext.project?.name || "-"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Severity:</span>{" "}
+                          {selectedBreakdownContext.severity}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+
           <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
             <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
               Cancel
             </button>
+            {hasStockShortage && (
+              <button
+                type="button"
+                onClick={onContinueToPurchaseRequest}
+                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              >
+                Create purchase request
+              </button>
+            )}
             <button
               type="submit"
-              disabled={submitting || item?.status !== "ACTIVE"}
+              disabled={
+                submitting ||
+                item?.status !== "ACTIVE" ||
+                hasStockShortage ||
+                !hasRequiredContextSelection
+              }
               className="gf-btn-primary px-3 py-1.5 text-xs"
             >
               {submitting ? "Submitting..." : "Submit Request"}
@@ -3626,77 +4113,4 @@ function RequestUseModal({
       </section>
     </div>
   );
-}
-
-function StockSeverityBadge({ severity }: { severity: "CRITICAL" | "LOW" }) {
-  const toneClass =
-    severity === "CRITICAL"
-      ? "border-red-300 bg-red-100 text-red-800"
-      : "border-amber-300 bg-amber-100 text-amber-800";
-  const label = severity === "CRITICAL" ? "Out of Stock" : "Low Stock";
-
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>{label}</span>;
-}
-
-function UsageRequestStatusBadge({ status }: { status: InventoryUsageRequestRow["status"] }) {
-  const toneClass =
-    status === "APPROVED"
-      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-      : status === "REJECTED"
-        ? "border-red-300 bg-red-100 text-red-800"
-        : status === "PENDING"
-          ? "border-amber-300 bg-amber-100 text-amber-800"
-          : "border-blue-300 bg-blue-100 text-blue-800";
-  const label = status.charAt(0) + status.slice(1).toLowerCase();
-
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>{label}</span>;
-}
-
-function formatUsageRequestDecision(requestRow: InventoryUsageRequestRow) {
-  if (requestRow.status === "APPROVED") {
-    const approvedOn = requestRow.decidedAt ? toIsoDate(requestRow.decidedAt) : "recently";
-    return `Approved ${approvedOn}${requestRow.approvedMovementId ? " • stock movement recorded" : ""}`;
-  }
-  if (requestRow.status === "REJECTED") {
-    return requestRow.decisionNote?.trim() ? `Rejected • ${requestRow.decisionNote}` : "Rejected by approver";
-  }
-  if (requestRow.status === "PENDING") {
-    return "Pending manager review";
-  }
-  return "Awaiting review";
-}
-
-function movementItemLabel(movement: InventoryMovementRow) {
-  const itemName = movement.item?.name?.trim() || "Unknown item";
-  const itemSku = movement.item?.sku?.trim();
-  if (!itemSku) {
-    return itemName;
-  }
-  return `${itemName} (${itemSku})`;
-}
-
-function toIsoDate(value: string) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return "-";
-  }
-  return parsed.toISOString().slice(0, 10);
-}
-
-async function readApiError(response: Response, fallbackMessage: string) {
-  const clone = response.clone();
-  const payload = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && "message" in payload) {
-    const message = payload.message;
-    if (typeof message === "string" && message.trim()) {
-      return message;
-    }
-  }
-
-  const rawBody = (await clone.text().catch(() => "")).trim();
-  if (rawBody) {
-    return rawBody;
-  }
-
-  return `${fallbackMessage} (HTTP ${response.status})`;
 }

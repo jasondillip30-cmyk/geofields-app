@@ -1,5 +1,5 @@
 import { resolveAuthSecretValue } from "@/lib/auth/secret";
-import type { AuthSession } from "@/lib/auth/session";
+import type { AuthSession } from "@/lib/auth/session-types";
 
 interface EdgeSessionPayload extends AuthSession {
   exp?: number;

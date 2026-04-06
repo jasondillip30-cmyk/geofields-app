@@ -2,8 +2,10 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import { withFinancialDrillReportApproval, withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
 interface AggregateRowBase {
   id: string;
@@ -74,20 +76,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const expenseWhere: Prisma.ExpenseWhereInput = withFinancialExpenseApproval({
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(fromDate || toDate
-      ? {
-          date: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {})
-          }
-        }
-      : {})
-  });
-
-  const [reports, expenses] = await Promise.all([
+  const [reports, spendContext] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -97,16 +86,19 @@ export async function GET(request: NextRequest) {
         rig: { select: { id: true, rigCode: true } }
       }
     }),
-    prisma.expense.findMany({
-      where: expenseWhere,
-      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-      include: {
-        client: { select: { id: true, name: true } },
-        project: { select: { id: true, name: true } },
-        rig: { select: { id: true, rigCode: true } }
-      }
+    buildRecognizedSpendContext({
+      clientId,
+      rigId,
+      fromDate,
+      toDate
     })
   ]);
+  const expenses = spendContext.recognizedExpenses;
+  const recognizedExpenseResult = {
+    stats: spendContext.recognitionStats
+  };
+  const purposeTotals = spendContext.purposeTotals;
+  const classificationAudit = spendContext.classificationAudit;
 
   const trendGranularity = resolveTrendGranularity({
     fromDate,
@@ -152,7 +144,7 @@ export async function GET(request: NextRequest) {
   }
 
   let totalExpenses = 0;
-  let approvedExpenses = 0;
+  let approvedIntentAmount = 0;
   for (const expense of expenses) {
     totalExpenses += expense.amount;
     const status = expense.approvalStatus as ExpenseStatusKey;
@@ -160,7 +152,7 @@ export async function GET(request: NextRequest) {
       expenseStatusCounts[status] += 1;
     }
     if (expense.approvalStatus === "APPROVED") {
-      approvedExpenses += expense.amount;
+      approvedIntentAmount += expense.amount;
     }
 
     const category = normalizeExpenseCategory(expense.category);
@@ -254,16 +246,22 @@ export async function GET(request: NextRequest) {
     }))
     .sort((a, b) => b.totalExpenses - a.totalExpenses);
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[expense-visibility][profit-summary]", {
+  debugLog(
+    "[expense-visibility][profit-summary]",
+    {
       appliedFilters,
       reportRecordCount: reports.length,
-      expenseRecordCount: expenses.length,
+      expenseRecordCount: spendContext.rawExpenses.length,
+      recognizedExpenseRecordCount: expenses.length,
+      recognition: recognizedExpenseResult.stats,
       totalExpenses,
-      approvedExpenses,
-      expenseStatusCounts
-    });
-  }
+      approvedIntentAmount,
+      expenseStatusCounts,
+      purposeTotals,
+      classificationAudit
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json({
     filters: {
@@ -275,9 +273,18 @@ export async function GET(request: NextRequest) {
     totals: {
       totalRevenue: roundCurrency(totalRevenue),
       totalExpenses: roundCurrency(totalExpenses),
-      approvedExpenses: roundCurrency(approvedExpenses),
+      recognizedSpend: roundCurrency(totalExpenses),
       totalProfit: roundCurrency(totalProfit)
     },
+    operationalPurposeSummary: {
+      totalRecognizedSpend: purposeTotals.recognizedSpendTotal,
+      breakdownCost: purposeTotals.breakdownCost,
+      maintenanceCost: purposeTotals.maintenanceCost,
+      stockReplenishmentCost: purposeTotals.stockReplenishmentCost,
+      operatingCost: purposeTotals.operatingCost,
+      otherUnlinkedCost: purposeTotals.otherUnlinkedCost
+    },
+    classificationAudit,
     kpis: {
       highestProfitRig: highestProfitRig?.name || "N/A",
       highestProfitProject: highestProfitProject?.name || "N/A",

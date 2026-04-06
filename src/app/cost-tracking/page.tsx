@@ -7,13 +7,17 @@ import { RotateCw } from "lucide-react";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import {
+  AnalyticsEmptyState,
+  getScopedKpiHelper,
+  getScopedKpiValue
+} from "@/components/layout/analytics-empty-state";
 import { BarCategoryChart } from "@/components/charts/bar-category-chart";
 import { DonutStatusChart } from "@/components/charts/donut-status-chart";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { DataTable } from "@/components/ui/table";
-import type { BudgetVsActualSummaryResponse } from "@/lib/budget-vs-actual";
 import type { CostTrackingSummaryPayload } from "@/lib/cost-tracking";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
@@ -21,18 +25,12 @@ const UNASSIGNED_RIG_ID = "__unassigned_rig__";
 const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
 const COST_TRACKING_SECTIONS = [
   { id: "overview", label: "Overview" },
-  { id: "cost-by-rig", label: "Cost by Rig" },
   { id: "cost-by-project", label: "Cost by Project" },
-  { id: "maintenance-cost", label: "Maintenance Cost" },
-  { id: "spending-breakdown", label: "Spending Breakdown / Trend" }
+  { id: "cost-by-category", label: "Cost by Category" },
+  { id: "maintenance-breakdown-cost", label: "Maintenance / Breakdown" },
+  { id: "unlinked-data-quality", label: "Unlinked / Data Quality" }
 ] as const;
 const COST_TRACKING_DONUT_PALETTE = ["#1e63f5", "#0f766e", "#0ea5e9", "#6366f1", "#14b8a6", "#64748b", "#94a3b8"];
-const emptyBudgetAlerts = {
-  overspentCount: 0,
-  criticalCount: 0,
-  watchCount: 0,
-  noBudgetCount: 0
-};
 
 const emptySummary: CostTrackingSummaryPayload = {
   filters: {
@@ -42,7 +40,7 @@ const emptySummary: CostTrackingSummaryPayload = {
     to: null
   },
   overview: {
-    totalApprovedExpenses: 0,
+    totalRecognizedSpend: 0,
     totalMaintenanceRelatedCost: 0,
     totalInventoryRelatedCost: 0,
     totalNonInventoryExpenseCost: 0,
@@ -58,12 +56,30 @@ const emptySummary: CostTrackingSummaryPayload = {
 };
 
 export default function CostTrackingPage() {
-  const { filters } = useAnalyticsFilters();
+  const { filters, resetFilters, setFilters } = useAnalyticsFilters();
   const [summary, setSummary] = useState<CostTrackingSummaryPayload>(emptySummary);
-  const [budgetAlerts, setBudgetAlerts] = useState(emptyBudgetAlerts);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const isScoped = hasActiveScopeFilters(filters);
+  const recognizedSpendTotal = summary.overview.totalRecognizedSpend;
+  const hasCostData = useMemo(
+    () =>
+      summary.costByRig.length > 0 ||
+      summary.costByProject.length > 0 ||
+      summary.costByMaintenanceRequest.length > 0 ||
+      summary.spendingCategoryBreakdown.some((entry) => entry.totalCost > 0) ||
+      summary.costTrend.length > 0 ||
+      recognizedSpendTotal > 0,
+    [
+      summary.costByMaintenanceRequest.length,
+      summary.costByProject.length,
+      summary.costByRig.length,
+      summary.costTrend.length,
+      recognizedSpendTotal,
+      summary.spendingCategoryBreakdown
+    ]
+  );
+  const isFilteredEmpty = !loading && isScoped && !hasCostData;
 
   const loadCostSummary = useCallback(
     async (silent = false) => {
@@ -98,58 +114,17 @@ export default function CostTrackingPage() {
     [filters.clientId, filters.from, filters.rigId, filters.to]
   );
 
-  const loadBudgetAlerts = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (filters.from) params.set("from", filters.from);
-      if (filters.to) params.set("to", filters.to);
-      if (filters.clientId !== "all") params.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") params.set("rigId", filters.rigId);
-
-      const query = params.toString();
-      const response = await fetch(`/api/budgets/summary${query ? `?${query}` : ""}`, {
-        cache: "no-store"
-      });
-      const payload = response.ok
-        ? ((await response.json()) as BudgetVsActualSummaryResponse)
-        : null;
-      setBudgetAlerts(resolveBudgetAlertCounts(payload));
-    } catch {
-      setBudgetAlerts(emptyBudgetAlerts);
-    }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
-
   useEffect(() => {
-    void Promise.all([loadCostSummary(), loadBudgetAlerts()]);
-  }, [loadBudgetAlerts, loadCostSummary]);
+    void loadCostSummary();
+  }, [loadCostSummary]);
 
   useEffect(() => {
     const interval = setInterval(() => {
-      void Promise.all([loadCostSummary(true), loadBudgetAlerts()]);
+      void loadCostSummary(true);
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [loadBudgetAlerts, loadCostSummary]);
-
-  const rigRows = useMemo(
-    () =>
-      summary.costByRig.map((entry) => [
-        <div key={`${entry.id}-name`} className="flex items-center gap-2">
-          <span className="font-medium text-ink-900">{entry.name}</span>
-          {entry.id === UNASSIGNED_RIG_ID ? (
-            <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-              Needs linkage
-            </span>
-          ) : null}
-        </div>,
-        formatCurrency(entry.totalApprovedCost),
-        formatCurrency(entry.maintenanceCost),
-        formatCurrency(entry.inventoryPartsCost),
-        formatCurrency(entry.otherExpenseCost),
-        formatPercent(entry.percentOfTotalSpend)
-      ]),
-    [summary.costByRig]
-  );
+  }, [loadCostSummary]);
 
   const projectRows = useMemo(
     () =>
@@ -162,16 +137,29 @@ export default function CostTrackingPage() {
             </span>
           ) : null}
         </div>,
-        formatCurrency(entry.totalApprovedCost),
+        formatCurrency(entry.totalRecognizedCost),
         formatCurrency(entry.maintenanceLinkedCost),
         formatCurrency(entry.inventoryPurchaseCost),
         formatCurrency(entry.expenseOnlyCost),
-        formatPercent(entry.percentOfTotalSpend)
+        formatPercent(entry.percentOfTotalSpend),
+        entry.id === UNASSIGNED_PROJECT_ID ? (
+          <span key={`${entry.id}-action`} className="text-xs text-slate-500">
+            Resolve linkage
+          </span>
+        ) : (
+          <Link
+            key={`${entry.id}-action`}
+            href={`/projects/${entry.id}`}
+            className="gf-btn-subtle"
+          >
+            Open project
+          </Link>
+        )
       ]),
     [summary.costByProject]
   );
 
-  const maintenanceRows = useMemo(
+  const maintenanceBreakdownRows = useMemo(
     () =>
       summary.costByMaintenanceRequest.map((entry) => [
         <span key={`${entry.id}-ref`} className="font-medium text-ink-900">
@@ -186,13 +174,13 @@ export default function CostTrackingPage() {
     [summary.costByMaintenanceRequest]
   );
 
-  const topCostShare = useMemo(() => {
-    const leader = summary.costByRig[0];
-    if (!leader || summary.overview.totalApprovedExpenses <= 0) {
+  const topProjectCostShare = useMemo(() => {
+    const leader = summary.costByProject[0];
+    if (!leader || recognizedSpendTotal <= 0) {
       return 0;
     }
-    return (leader.totalApprovedCost / summary.overview.totalApprovedExpenses) * 100;
-  }, [summary.costByRig, summary.overview.totalApprovedExpenses]);
+      return (leader.totalRecognizedCost / recognizedSpendTotal) * 100;
+  }, [summary.costByProject, recognizedSpendTotal]);
 
   const largestCostCategory = useMemo(
     () => summary.spendingCategoryBreakdown.find((entry) => entry.totalCost > 0) || null,
@@ -200,13 +188,42 @@ export default function CostTrackingPage() {
   );
 
   const unassignedRigSpend = useMemo(
-    () => summary.costByRig.find((entry) => entry.id === UNASSIGNED_RIG_ID)?.totalApprovedCost || 0,
+    () => summary.costByRig.find((entry) => entry.id === UNASSIGNED_RIG_ID)?.totalRecognizedCost || 0,
     [summary.costByRig]
   );
   const unassignedProjectSpend = useMemo(
-    () => summary.costByProject.find((entry) => entry.id === UNASSIGNED_PROJECT_ID)?.totalApprovedCost || 0,
+    () => summary.costByProject.find((entry) => entry.id === UNASSIGNED_PROJECT_ID)?.totalRecognizedCost || 0,
     [summary.costByProject]
   );
+  const legacyUnlinkedCount = summary.classificationAudit?.legacyUnlinkedCount || 0;
+  const unlinkedRows = useMemo(() => {
+    const rows = [];
+    if (unassignedProjectSpend > 0) {
+      rows.push([
+        <span key="project-linkage" className="font-medium text-ink-900">
+          Recognized spend missing project linkage
+        </span>,
+        formatCurrency(unassignedProjectSpend),
+        "Project profitability is understated until this is linked.",
+        <Link key="project-action" href="/expenses" className="gf-btn-subtle">
+          Review purchase requests
+        </Link>
+      ]);
+    }
+    if (unassignedRigSpend > 0) {
+      rows.push([
+        <span key="rig-linkage" className="font-medium text-ink-900">
+          Recognized spend missing rig context
+        </span>,
+        formatCurrency(unassignedRigSpend),
+        "Operational traceability is reduced for maintenance/breakdown follow-up.",
+        <Link key="rig-action" href="/rigs" className="gf-btn-subtle">
+          Review rig linkage
+        </Link>
+      ]);
+    }
+    return rows;
+  }, [unassignedProjectSpend, unassignedRigSpend]);
 
   const categoryLegendRows = useMemo(
     () =>
@@ -218,11 +235,47 @@ export default function CostTrackingPage() {
         })),
     [summary.spendingCategoryBreakdown]
   );
+  const applyDatePreset = useCallback(
+    (days: number) => {
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      const start = new Date(end);
+      start.setUTCDate(end.getUTCDate() - Math.max(days - 1, 0));
+      setFilters((current) => ({
+        ...current,
+        from: toDateKey(start),
+        to: toDateKey(end)
+      }));
+    },
+    [setFilters]
+  );
+  const handleClearFilters = useCallback(() => {
+    resetFilters();
+  }, [resetFilters]);
+  const handleLast30Days = useCallback(() => {
+    applyDatePreset(30);
+  }, [applyDatePreset]);
+  const handleLast90Days = useCallback(() => {
+    applyDatePreset(90);
+  }, [applyDatePreset]);
 
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} />
+        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+
+        {!loading && !hasCostData ? (
+          <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
+            <AnalyticsEmptyState
+              variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
+              moduleHint="Record recognized expenses to populate cost tracking."
+              scopeHint={`${summary.costByProject.length} projects in current scope • ${summary.costByRig.length} rigs in scope`}
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+            />
+          </Card>
+        ) : null}
 
         <nav className="rounded-xl border border-slate-200/90 bg-white/85 px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
           <div className="flex flex-wrap items-center gap-2">
@@ -242,11 +295,11 @@ export default function CostTrackingPage() {
         <section id="overview" className="gf-section scroll-mt-24">
           <SectionHeader
             title="Cost Overview Summary"
-            description="Approved operational spend visibility across rigs, projects, and maintenance work."
+            description="Project-first view of recognized spend so teams can understand what is driving project cost."
             action={
               <button
                 type="button"
-                onClick={() => void Promise.all([loadCostSummary(true), loadBudgetAlerts()])}
+                onClick={() => void loadCostSummary(true)}
                 className="gf-btn-subtle inline-flex items-center gap-1"
               >
                 <RotateCw size={13} className={refreshing ? "animate-spin" : ""} />
@@ -256,160 +309,153 @@ export default function CostTrackingPage() {
           />
           <div className="gf-kpi-grid-primary">
             <MetricCard
-              label={isScoped ? "Approved Expenses in Scope" : "Total Approved Expenses"}
-              value={formatCurrency(summary.overview.totalApprovedExpenses)}
+              label={isScoped ? "Recognized Spend (Scope)" : "Recognized Spend"}
+              value={getScopedKpiValue(formatCurrency(recognizedSpendTotal), isFilteredEmpty)}
               tone="warn"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
             <MetricCard
-              label="Maintenance-Related Cost"
-              value={formatCurrency(summary.overview.totalMaintenanceRelatedCost)}
+              label="Highest-Cost Project"
+              value={getScopedKpiValue(summary.overview.highestCostProject?.name || "N/A", isFilteredEmpty)}
+              change={
+                isFilteredEmpty
+                  ? "No data for current filters"
+                  : summary.overview.highestCostProject
+                    ? formatCurrency(
+                        summary.overview.highestCostProject.totalRecognizedCost
+                      )
+                    : "No project spend in scope"
+              }
               tone="danger"
             />
             <MetricCard
-              label="Inventory-Related Cost"
-              value={formatCurrency(summary.overview.totalInventoryRelatedCost)}
+              label="Largest Cost Category"
+              value={getScopedKpiValue(largestCostCategory?.label || "N/A", isFilteredEmpty)}
+              change={
+                isFilteredEmpty
+                  ? "No data for current filters"
+                  : largestCostCategory
+                    ? `${formatCurrency(largestCostCategory.totalCost)} (${formatPercent(largestCostCategory.percentOfTotalSpend)})`
+                    : "No categorized spend in scope"
+              }
             />
             <MetricCard
-              label="Non-Inventory Expense Cost"
-              value={formatCurrency(summary.overview.totalNonInventoryExpenseCost)}
+              label="Maintenance / Breakdown Spend"
+              value={getScopedKpiValue(formatCurrency(summary.overview.totalMaintenanceRelatedCost), isFilteredEmpty)}
+              tone="warn"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
           </div>
           <div className="gf-kpi-grid-secondary">
             <MetricCard
-              label="Highest Cost Rig"
-              value={summary.overview.highestCostRig?.name || "N/A"}
+              label="Top Project Spend Share"
+              value={getScopedKpiValue(formatPercent(topProjectCostShare), isFilteredEmpty)}
               change={
-                summary.overview.highestCostRig
-                  ? formatCurrency(summary.overview.highestCostRig.totalApprovedCost)
-                  : undefined
-              }
-              tone="danger"
-            />
-            <MetricCard
-              label="Highest Cost Project"
-              value={summary.overview.highestCostProject?.name || "N/A"}
-              change={
-                summary.overview.highestCostProject
-                  ? formatCurrency(summary.overview.highestCostProject.totalApprovedCost)
-                  : undefined
-              }
-              tone="warn"
-            />
-            <MetricCard
-              label="Top Rig Cost Share"
-              value={formatPercent(topCostShare)}
-              change={
-                summary.costByRig[0]
-                  ? `${summary.costByRig[0].name} of approved spend`
-                  : "No rig cost data in scope"
+                isFilteredEmpty
+                  ? "No data for current filters"
+                  : summary.costByProject[0]
+                    ? `${summary.costByProject[0].name} of recognized spend`
+                    : "No project spend data in scope"
               }
             />
             <MetricCard
-              label="Largest Cost Category"
-              value={largestCostCategory?.label || "N/A"}
+              label="Unlinked Project Spend"
+              value={getScopedKpiValue(formatCurrency(unassignedProjectSpend), isFilteredEmpty)}
+              tone={unassignedProjectSpend > 0 ? "warn" : "good"}
               change={
-                largestCostCategory
-                  ? `${formatCurrency(largestCostCategory.totalCost)} (${formatPercent(largestCostCategory.percentOfTotalSpend)})`
-                  : "No categorized spend in scope"
+                isFilteredEmpty
+                  ? "No data for current filters"
+                  : unassignedProjectSpend > 0
+                    ? "Needs project linkage"
+                    : "All recognized spend linked to projects"
               }
+            />
+            <MetricCard
+              label="Unlinked Rig Context Spend"
+              value={getScopedKpiValue(formatCurrency(unassignedRigSpend), isFilteredEmpty)}
+              tone={unassignedRigSpend > 0 ? "warn" : "good"}
+              change={
+                isFilteredEmpty
+                  ? "No data for current filters"
+                  : unassignedRigSpend > 0
+                    ? "Needs rig context linkage"
+                    : "Rig context linkage looks clean"
+              }
+            />
+            <MetricCard
+              label="Other Operating Spend"
+              value={getScopedKpiValue(formatCurrency(summary.overview.totalNonInventoryExpenseCost), isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
           </div>
           <div className="rounded-xl border border-slate-200/90 bg-white/85 px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Budget Alerts</p>
-                <p className="mt-1 text-sm text-slate-700">
-                  Overspent <span className="font-semibold text-red-700">{budgetAlerts.overspentCount}</span> •
-                  Critical <span className="font-semibold text-orange-700"> {budgetAlerts.criticalCount}</span> •
-                  Watch <span className="font-semibold text-amber-700"> {budgetAlerts.watchCount}</span>
-                </p>
+              <p className="text-sm text-slate-700">
+                Approval grants permission to spend; this page tracks posted/recognized spend. Use Budget vs Actual to
+                monitor budget pressure, and Profit to confirm project margin.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link href="/cost-tracking/budget-vs-actual" className="gf-btn-subtle">
+                  Open Budget vs Actual
+                </Link>
+                <Link href="/profit" className="gf-btn-subtle">
+                  Open Profit
+                </Link>
               </div>
-              <Link href="/cost-tracking/budget-vs-actual" className="gf-btn-subtle">
-                Open Budget vs Actual
-              </Link>
             </div>
-          </div>
-          {(unassignedRigSpend > 0 || unassignedProjectSpend > 0) && (
-            <div className="gf-inline-note">
-              <span className="font-medium text-slate-800">Data quality note:</span>{" "}
-              {`Unassigned rig spend ${formatCurrency(unassignedRigSpend)} • Unassigned project spend ${formatCurrency(unassignedProjectSpend)} (needs linkage).`}
-            </div>
-          )}
-        </section>
-
-        <section id="cost-by-rig" className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5">
-          <SectionHeader
-            title="Cost by Rig"
-            description="Approved cost allocation by rig, including maintenance, inventory/parts, and other expense."
-          />
-          <div className="gf-chart-grid">
-            <Card title="Approved Cost by Rig" subtitle="Compare highest spend rigs in the current scope.">
-              {loading ? (
-                <p className="text-sm text-slate-600">Loading rig cost distribution...</p>
-              ) : summary.costByRig.length === 0 ? (
-                <div className="gf-empty-state">No approved rig-linked costs found for the selected filters.</div>
-              ) : (
-                <BarCategoryChart data={summary.costByRig.slice(0, 12)} xKey="name" yKey="totalApprovedCost" color="#1e63f5" />
-              )}
-            </Card>
-
-            <Card title="Rig Cost Detail" subtitle="Operational spend detail with percentage of total approved cost.">
-              {loading ? (
-                <p className="text-sm text-slate-600">Loading rig cost detail...</p>
-              ) : rigRows.length === 0 ? (
-                <div className="gf-empty-state">No approved rig costs found for the selected filters.</div>
-              ) : (
-                <DataTable
-                  columns={[
-                    "Rig",
-                    "Total Approved Cost",
-                    "Maintenance Cost",
-                    "Inventory / Parts Cost",
-                    "Other Expense Cost",
-                    "% of Total Spend"
-                  ]}
-                  rows={rigRows}
-                />
-              )}
-            </Card>
           </div>
         </section>
 
         <section id="cost-by-project" className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5">
           <SectionHeader
             title="Cost by Project"
-            description="Approved project spend split into maintenance-linked, inventory purchase, and expense-only."
+            description="Project-first recognized spend leaderboard to identify where costs are concentrated."
           />
           <div className="gf-chart-grid">
-            <Card title="Approved Cost by Project" subtitle="Project spend leaderboard for manager prioritization.">
+            <Card title="Recognized Spend by Project" subtitle="Top projects by recognized spend in current scope.">
               {loading ? (
-                <p className="text-sm text-slate-600">Loading project cost distribution...</p>
+                <p className="text-sm text-slate-600">Loading project spend distribution...</p>
               ) : summary.costByProject.length === 0 ? (
-                <div className="gf-empty-state">No approved project costs found for the selected filters.</div>
+                <AnalyticsEmptyState
+                  variant={isScoped ? "filtered-empty" : "no-data"}
+                  moduleHint="No recognized project spend found yet."
+                  scopeHint={`${summary.costByProject.length} projects in current scope`}
+                  onClearFilters={handleClearFilters}
+                  onLast30Days={handleLast30Days}
+                  onLast90Days={handleLast90Days}
+                />
               ) : (
                 <BarCategoryChart
                   data={summary.costByProject.slice(0, 12)}
                   xKey="name"
-                  yKey="totalApprovedCost"
+                  yKey="totalRecognizedCost"
                   color="#1e63f5"
                 />
               )}
             </Card>
 
-            <Card title="Project Cost Detail" subtitle="Which projects are consuming the most approved spend.">
+            <Card title="Project Spend Detail" subtitle="Break down recognized spend drivers by project.">
               {loading ? (
-                <p className="text-sm text-slate-600">Loading project cost detail...</p>
+                <p className="text-sm text-slate-600">Loading project spend detail...</p>
               ) : projectRows.length === 0 ? (
-                <div className="gf-empty-state">No approved project costs found for the selected filters.</div>
+                <AnalyticsEmptyState
+                  variant={isScoped ? "filtered-empty" : "no-data"}
+                  moduleHint="No project spend rows found yet."
+                  scopeHint={`${projectRows.length} project rows in current scope`}
+                  onClearFilters={handleClearFilters}
+                  onLast30Days={handleLast30Days}
+                  onLast90Days={handleLast90Days}
+                />
               ) : (
                 <DataTable
                   columns={[
                     "Project",
-                    "Total Approved Cost",
-                    "Maintenance-Linked Cost",
-                    "Inventory Purchase Cost",
-                    "Expense-Only Cost",
-                    "% of Total Spend"
+                    "Recognized Spend",
+                    "Maintenance / Breakdown",
+                    "Stock / Warehouse",
+                    "Other Operating",
+                    "% of Scope Spend",
+                    "Action"
                   ]}
                   rows={projectRows}
                 />
@@ -418,46 +464,24 @@ export default function CostTrackingPage() {
           </div>
         </section>
 
-        <section id="maintenance-cost" className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5">
+        <section id="cost-by-category" className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5">
           <SectionHeader
-            title="Cost by Maintenance Request / Breakdown"
-            description="Most expensive approved maintenance-linked spend by request reference."
-          />
-          <Card
-            title="Maintenance Cost Detail"
-            subtitle="Use this to identify high-cost breakdowns and prioritize reliability actions."
-          >
-            {loading ? (
-              <p className="text-sm text-slate-600">Loading maintenance cost details...</p>
-            ) : maintenanceRows.length === 0 ? (
-              <div className="gf-empty-state">No approved maintenance-linked costs found for the selected filters.</div>
-            ) : (
-              <DataTable
-                columns={[
-                  "Request / Breakdown Ref",
-                  "Rig",
-                  "Total Linked Cost",
-                  "Linked Purchases",
-                  "Urgency",
-                  "Status"
-                ]}
-                rows={maintenanceRows}
-              />
-            )}
-          </Card>
-        </section>
-
-        <section id="spending-breakdown" className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5">
-          <SectionHeader
-            title="Spending Category Breakdown and Trend"
-            description="Understand where approved spend is concentrated and whether costs are rising or easing."
+            title="Cost by Category"
+            description="Accounting-category view of recognized spend (Fuel, Travel, Stock, etc.). Operational purpose buckets are shown in the overview and maintenance/breakdown sections."
           />
           <div className="gf-chart-grid">
-            <Card title="Spending Category Breakdown" subtitle="Approved spend grouped into operational decision categories.">
+            <Card title="Recognized Spend by Category" subtitle="Category mix in the current filter scope.">
               {loading ? (
                 <p className="text-sm text-slate-600">Loading spending categories...</p>
               ) : summary.spendingCategoryBreakdown.every((entry) => entry.totalCost === 0) ? (
-                <div className="gf-empty-state">No approved spending categories found for the selected filters.</div>
+                <AnalyticsEmptyState
+                  variant={isScoped ? "filtered-empty" : "no-data"}
+                  moduleHint="No recognized spending categories found yet."
+                  scopeHint={`${categoryLegendRows.length} categories in current scope`}
+                  onClearFilters={handleClearFilters}
+                  onLast30Days={handleLast30Days}
+                  onLast90Days={handleLast90Days}
+                />
               ) : (
                 <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
                   <DonutStatusChart
@@ -492,18 +516,25 @@ export default function CostTrackingPage() {
             </Card>
 
             <Card
-              title={`Approved Cost Trend (${summary.trendGranularity === "week" ? "Weekly" : "Monthly"})`}
-              subtitle="Trend of approved operational costs to support spend direction decisions."
+              title={`Recognized Spend Trend (${summary.trendGranularity === "week" ? "Weekly" : "Monthly"})`}
+              subtitle="Track whether recognized costs are accelerating or easing."
             >
               {loading ? (
-                <p className="text-sm text-slate-600">Loading cost trend...</p>
+                <p className="text-sm text-slate-600">Loading spend trend...</p>
               ) : summary.costTrend.length === 0 ? (
-                <div className="gf-empty-state">No approved cost trend data found for the selected filters.</div>
+                <AnalyticsEmptyState
+                  variant={isScoped ? "filtered-empty" : "no-data"}
+                  moduleHint="No recognized spend trend data found yet."
+                  scopeHint={`${summary.costTrend.length} trend points in current scope`}
+                  onClearFilters={handleClearFilters}
+                  onLast30Days={handleLast30Days}
+                  onLast90Days={handleLast90Days}
+                />
               ) : (
                 <LineTrendChart
                   data={summary.costTrend}
                   xKey="label"
-                  yKey="totalApprovedCost"
+                  yKey="totalRecognizedCost"
                   secondaryKey="maintenanceCost"
                   color="#1e63f5"
                   secondaryColor="#0f766e"
@@ -512,34 +543,86 @@ export default function CostTrackingPage() {
             </Card>
           </div>
         </section>
+
+        <section
+          id="maintenance-breakdown-cost"
+          className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5"
+        >
+          <SectionHeader
+            title="Maintenance / Breakdown Cost View"
+            description="Recognized spend linked to maintenance workflows and breakdown-related work."
+          />
+          <Card
+            title="Linked Maintenance / Breakdown Recognized Spend"
+            subtitle="Use this to identify high-cost operational cases and reliability pressure."
+          >
+            {loading ? (
+              <p className="text-sm text-slate-600">Loading maintenance/breakdown spend view...</p>
+            ) : maintenanceBreakdownRows.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No recognized maintenance/breakdown-linked spend found in this scope."
+                scopeHint={`${maintenanceBreakdownRows.length} linked rows in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
+            ) : (
+              <DataTable
+                columns={[
+                  "Maintenance / Breakdown Ref",
+                  "Rig",
+                  "Recognized Spend",
+                  "Linked Purchases",
+                  "Urgency",
+                  "Status"
+                ]}
+                rows={maintenanceBreakdownRows}
+              />
+            )}
+          </Card>
+        </section>
+
+        <section
+          id="unlinked-data-quality"
+          className="gf-section scroll-mt-24 border-t border-slate-200/70 pt-4 md:pt-5"
+        >
+          <SectionHeader
+            title="Unlinked / Data Quality"
+            description="Recognized spend that could not be confidently tied to project/rig context."
+          />
+          {unlinkedRows.length === 0 ? (
+            <Card>
+              <div className="space-y-1.5">
+                <p className="text-sm text-slate-700">
+                  No unlinked recognized spend found in this scope. Project and rig linkage look consistent.
+                </p>
+                {legacyUnlinkedCount > 0 ? (
+                  <p className="text-xs text-amber-700">
+                    {legacyUnlinkedCount} legacy rows remain in Other / Unlinked due to incomplete historical linkage.
+                  </p>
+                ) : null}
+              </div>
+            </Card>
+          ) : (
+            <Card>
+              {legacyUnlinkedCount > 0 ? (
+                <p className="mb-2 text-xs text-amber-700">
+                  {legacyUnlinkedCount} legacy rows remain in Other / Unlinked due to incomplete historical linkage.
+                </p>
+              ) : null}
+              <DataTable
+                columns={["Issue", "Amount", "Why It Matters", "Action"]}
+                rows={unlinkedRows}
+              />
+            </Card>
+          )}
+        </section>
       </div>
     </AccessGate>
   );
 }
 
-function resolveBudgetAlertCounts(payload: BudgetVsActualSummaryResponse | null) {
-  if (!payload) {
-    return emptyBudgetAlerts;
-  }
-  if (payload.alerts) {
-    return {
-      overspentCount: payload.alerts.overspentCount,
-      criticalCount: payload.alerts.criticalCount,
-      watchCount: payload.alerts.watchCount,
-      noBudgetCount: payload.alerts.noBudgetCount
-    };
-  }
-
-  const rows = [...(payload.byRig || []), ...(payload.byProject || [])];
-  const overspentCount = rows.filter((entry) => entry.alertLevel === "OVERSPENT").length;
-  const criticalCount = rows.filter((entry) => entry.alertLevel === "CRITICAL_90").length;
-  const watchCount = rows.filter((entry) => entry.alertLevel === "WATCH_80").length;
-  const noBudgetCount = rows.filter((entry) => entry.status === "NO_BUDGET").length;
-
-  return {
-    overspentCount,
-    criticalCount,
-    watchCount,
-    noBudgetCount
-  };
+function toDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
 }

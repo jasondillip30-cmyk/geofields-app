@@ -11,8 +11,13 @@ import {
   resolveExpenseCategoryFromInventoryCategory,
   roundCurrency
 } from "@/lib/inventory-server";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { parseReceiptSubmissionPayload, type ReceiptSubmissionStatus } from "@/lib/receipt-intake-submission";
+import {
+  buildApprovedReceiptSubmissionPayload,
+  buildCompletedRequisitionPayload
+} from "@/lib/receipt-intake-finalization";
 import {
   mapRequisitionToReceiptClassification,
   parsePurchaseRequisitionPayload,
@@ -71,6 +76,7 @@ interface IntakeCommitPayload {
     projectId?: string | null;
     rigId?: string | null;
     maintenanceRequestId?: string | null;
+    breakdownReportId?: string | null;
     locationFromId?: string | null;
     locationToId?: string | null;
   };
@@ -290,6 +296,11 @@ export async function POST(request: NextRequest) {
     body.linkContext.maintenanceRequestId !== "all"
       ? body.linkContext.maintenanceRequestId
       : null;
+  let breakdownReportId =
+    typeof body?.linkContext?.breakdownReportId === "string" &&
+    body.linkContext.breakdownReportId !== "all"
+      ? body.linkContext.breakdownReportId
+      : null;
   const locationFromId =
     typeof body?.linkContext?.locationFromId === "string" && body.linkContext.locationFromId !== "all"
       ? body.linkContext.locationFromId
@@ -312,12 +323,20 @@ export async function POST(request: NextRequest) {
     projectId = null;
     rigId = null;
     maintenanceRequestId = null;
+    breakdownReportId = null;
   }
   if (workflowType === "INTERNAL_TRANSFER") {
     clientId = null;
     projectId = null;
     rigId = null;
     maintenanceRequestId = null;
+    breakdownReportId = null;
+  }
+  if (workflowType === "PROJECT_PURCHASE") {
+    // Project purchases can carry rig context for reference, but must never inherit
+    // maintenance linkage unless explicitly maintenance workflow.
+    maintenanceRequestId = null;
+    breakdownReportId = null;
   }
   let allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
 
@@ -395,7 +414,7 @@ export async function POST(request: NextRequest) {
     )
   );
 
-  const [existingItems, existingSupplier, existingLocationFrom, existingLocationTo, existingMaintenanceRequest, linkedRequisition] = await Promise.all([
+  const [existingItems, existingSupplier, existingLocationFrom, existingLocationTo, existingMaintenanceRequest, existingBreakdownReport, linkedRequisition] = await Promise.all([
     selectedItemIds.length
       ? prisma.inventoryItem.findMany({
           where: { id: { in: selectedItemIds } },
@@ -432,7 +451,21 @@ export async function POST(request: NextRequest) {
     maintenanceRequestId
       ? prisma.maintenanceRequest.findUnique({
           where: { id: maintenanceRequestId },
-          select: { id: true, status: true, requestCode: true, rigId: true, projectId: true, clientId: true }
+          select: {
+            id: true,
+            status: true,
+            requestCode: true,
+            rigId: true,
+            projectId: true,
+            clientId: true,
+            breakdownReportId: true
+          }
+        })
+      : Promise.resolve(null),
+    breakdownReportId
+      ? prisma.breakdownReport.findUnique({
+          where: { id: breakdownReportId },
+          select: { id: true, rigId: true, projectId: true, clientId: true }
         })
       : Promise.resolve(null),
     requisitionId
@@ -454,6 +487,44 @@ export async function POST(request: NextRequest) {
   }
   if (maintenanceRequestId && !existingMaintenanceRequest) {
     return NextResponse.json({ message: "Selected maintenance request was not found." }, { status: 404 });
+  }
+  if (breakdownReportId && !existingBreakdownReport) {
+    return NextResponse.json({ message: "Selected breakdown report was not found." }, { status: 404 });
+  }
+  if (
+    breakdownReportId &&
+    existingMaintenanceRequest?.breakdownReportId &&
+    breakdownReportId !== existingMaintenanceRequest.breakdownReportId
+  ) {
+    return NextResponse.json(
+      {
+        message:
+          "Selected maintenance request is linked to a different breakdown report."
+      },
+      { status: 400 }
+    );
+  }
+  if (
+    breakdownReportId &&
+    existingBreakdownReport &&
+    projectId &&
+    existingBreakdownReport.projectId !== projectId
+  ) {
+    return NextResponse.json(
+      { message: "Selected breakdown report does not belong to the selected project." },
+      { status: 400 }
+    );
+  }
+  if (
+    breakdownReportId &&
+    existingBreakdownReport &&
+    rigId &&
+    existingBreakdownReport.rigId !== rigId
+  ) {
+    return NextResponse.json(
+      { message: "Selected breakdown report does not belong to the selected rig." },
+      { status: 400 }
+    );
   }
   const parsedRequisition = linkedRequisition
     ? parsePurchaseRequisitionPayload(linkedRequisition.payloadJson)
@@ -506,12 +577,27 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (
+      requisitionContext.breakdownReportId &&
+      breakdownReportId &&
+      requisitionContext.breakdownReportId !== breakdownReportId
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Linked requisition breakdown context does not match selected breakdown."
+        },
+        { status: 400 }
+      );
+    }
 
     clientId = clientId || requisitionContext.clientId || null;
     projectId = projectId || requisitionContext.projectId || null;
     rigId = rigId || requisitionContext.rigId || null;
     maintenanceRequestId =
       maintenanceRequestId || requisitionContext.maintenanceRequestId || null;
+    breakdownReportId =
+      breakdownReportId || requisitionContext.breakdownReportId || null;
 
     if (parsedRequisition.payload.type === "INVENTORY_STOCK_UP" && projectId) {
       return NextResponse.json(
@@ -546,6 +632,16 @@ export async function POST(request: NextRequest) {
     workflowType = expectedWorkflowType;
   }
 
+  if (workflowType === "PROJECT_PURCHASE") {
+    maintenanceRequestId = null;
+    breakdownReportId = null;
+  }
+  if (breakdownReportId && existingBreakdownReport) {
+    projectId = projectId || existingBreakdownReport.projectId || null;
+    rigId = rigId || existingBreakdownReport.rigId || null;
+    clientId = clientId || existingBreakdownReport.clientId || null;
+  }
+
   if (workflowType === "MAINTENANCE_PURCHASE" && !rigId && existingMaintenanceRequest?.rigId) {
     rigId = existingMaintenanceRequest.rigId;
   }
@@ -555,18 +651,26 @@ export async function POST(request: NextRequest) {
   if (workflowType === "MAINTENANCE_PURCHASE" && !clientId && existingMaintenanceRequest?.clientId) {
     clientId = existingMaintenanceRequest.clientId;
   }
+  if (
+    workflowType === "MAINTENANCE_PURCHASE" &&
+    !breakdownReportId &&
+    existingMaintenanceRequest?.breakdownReportId
+  ) {
+    breakdownReportId = existingMaintenanceRequest.breakdownReportId;
+  }
   if (workflowType === "STOCK_PURCHASE" || workflowType === "INTERNAL_TRANSFER") {
     clientId = null;
     projectId = null;
     if (workflowType === "STOCK_PURCHASE") {
       rigId = null;
       maintenanceRequestId = null;
+      breakdownReportId = null;
     }
   }
 
   if (workflowType === "PROJECT_PURCHASE" && !projectId) {
     return NextResponse.json(
-      { message: "Project Purchase (Live Work) requires linking a project before submission." },
+      { message: "Project Purchase requires linking a project before submission." },
       { status: 400 }
     );
   }
@@ -613,8 +717,9 @@ export async function POST(request: NextRequest) {
     (duplicateMatches[0] ? inferDuplicateConfidence(duplicateMatches[0].matchedFields) : "LOW");
   const duplicateRequiresManagerOverride = duplicateConfidence === "HIGH";
   if (duplicateMatches.length > 0 && !allowDuplicateSave) {
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][duplicate-detected]", {
+    debugLog(
+      "[inventory][receipt-intake][duplicate-detected]",
+      {
         fingerprint: duplicateFingerprint,
         matches: duplicateMatches.map((match) => ({
           source: match.source,
@@ -622,8 +727,9 @@ export async function POST(request: NextRequest) {
           matchedFields: match.matchedFields,
           reason: match.reason
         }))
-      });
-    }
+      },
+      { channel: "inventory-receipt" }
+    );
     return NextResponse.json(
       {
         success: false,
@@ -657,16 +763,20 @@ export async function POST(request: NextRequest) {
       { status: 403 }
     );
   }
-  if (duplicateMatches.length > 0 && allowDuplicateSave && process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][duplicate-override]", {
-      fingerprint: duplicateFingerprint,
-      matches: duplicateMatches.map((match) => ({
-        source: match.source,
-        id: match.id,
-        matchedFields: match.matchedFields,
-        reason: match.reason
-      }))
-    });
+  if (duplicateMatches.length > 0 && allowDuplicateSave) {
+    debugLog(
+      "[inventory][receipt-intake][duplicate-override]",
+      {
+        fingerprint: duplicateFingerprint,
+        matches: duplicateMatches.map((match) => ({
+          source: match.source,
+          id: match.id,
+          matchedFields: match.matchedFields,
+          reason: match.reason
+        }))
+      },
+      { channel: "inventory-receipt" }
+    );
   }
   const receiptMetadataNote = buildReceiptMetadataNote({
     tin: receiptTin,
@@ -726,6 +836,7 @@ export async function POST(request: NextRequest) {
       projectId,
       rigId,
       maintenanceRequestId,
+      breakdownReportId,
       locationFromId,
       locationToId
     },
@@ -832,236 +943,394 @@ export async function POST(request: NextRequest) {
         select: {
           id: true,
           reportType: true,
-          payloadJson: true
+          payloadJson: true,
+          updatedAt: true
         }
       })
+    : null;
+  const linkedSubmissionParsed = linkedSubmission
+    ? parseReceiptSubmissionPayload(linkedSubmission.payloadJson)
     : null;
 
   if (submissionId) {
     if (!linkedSubmission || linkedSubmission.reportType !== RECEIPT_SUBMISSION_REPORT_TYPE) {
       return NextResponse.json({ message: "Receipt submission not found." }, { status: 404 });
     }
-    const parsed = parseReceiptSubmissionPayload(linkedSubmission.payloadJson);
-    if (parsed?.status === "APPROVED") {
+    if (linkedSubmissionParsed?.status === "APPROVED") {
       return NextResponse.json({ message: "Receipt submission is already finalized." }, { status: 409 });
     }
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const supplier = await resolveSupplier({
-      tx,
-      existingSupplierId: existingSupplier?.id || null,
-      supplierName: receiptSupplierName
-    });
-
-    const categoryCandidates: InventoryCategory[] = [];
-    for (const line of inventoryActionLines) {
-      if (line.selectedItemId) {
-        const existing = existingItemById.get(line.selectedItemId);
-        if (existing) {
-          categoryCandidates.push(existing.category);
-          continue;
+  let result: {
+    createdMovements: Array<{ id: string; itemId: string; quantity: number; totalCost: number }>;
+    createdExpenseId: string | null;
+    supplierName: string;
+    itemsCreatedCount: number;
+    evidenceOnlyLinesCount: number;
+    skippedLinesCount: number;
+    lineOutcomes: Array<Record<string, unknown>>;
+    skippedReasons: string[];
+    submissionStatus: "FINALIZED" | null;
+    requisitionStatus: "PURCHASE_COMPLETED" | null;
+  };
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      if (submissionId && linkedSubmission) {
+        const finalizeLock = await tx.summaryReport.updateMany({
+          where: {
+            id: submissionId,
+            updatedAt: linkedSubmission.updatedAt
+          },
+          data: {
+            reportDate: new Date()
+          }
+        });
+        if (finalizeLock.count === 0) {
+          throw new Error("ReceiptSubmissionFinalizeConflict");
         }
       }
-      const parsed = parseInventoryCategory(line.selectedCategory || line.newItem?.category || "");
-      if (parsed) {
-        categoryCandidates.push(parsed);
-      }
-    }
-    const dominantCategory = chooseDominantCategory(categoryCandidates);
-    let createdExpenseId: string | null = null;
 
-    if (createExpense) {
-      const expenseApprovalStatus = "APPROVED" as const;
-      const submittedAt = new Date();
-      const approvedAt = new Date();
-      const approvedById = auth.session.userId;
-      const isEvidenceOnlyPurpose = receiptPurpose === "EVIDENCE_ONLY";
-      const expenseCategory = resolveExpenseCategoryForReceiptType({
-        receiptType,
-        expenseOnlyCategory,
-        dominantCategory,
-        isEvidenceOnlyPurpose
-      });
-      const expenseAmount = isEvidenceOnlyPurpose
-        ? 0
-        : receiptTotal && receiptTotal > 0
-          ? receiptTotal
-          : computedLinesTotal;
-      const expense = await tx.expense.create({
-        data: {
-          date: intakeDate,
-          amount: expenseAmount,
-          category: expenseCategory,
-          subcategory: isEvidenceOnlyPurpose ? "Receipt Evidence Only" : "Inventory Receipt Intake",
-          entrySource: "INVENTORY",
-          vendor: supplier?.name || receiptSupplierName || null,
-          receiptNumber: receiptNumber || traReceiptNumber || invoiceReference || null,
-          receiptUrl: receiptUrl || null,
-          receiptFileName: receiptFileName || null,
-          notes: `Receipt intake: ${receiptSupplierName}${receiptTin ? ` (TIN: ${receiptTin})` : ""}${receiptMetadataNote ? `\n${receiptMetadataNote}` : ""}`,
-          enteredByUserId: auth.session.userId,
-          approvalStatus: expenseApprovalStatus,
-          submittedAt,
-          approvedById,
-          approvedAt,
-          clientId,
-          projectId,
-          rigId
-        },
-        select: { id: true }
-      });
-      createdExpenseId = expense.id;
-    }
-
-    const createdMovements: Array<{ id: string; itemId: string; quantity: number; totalCost: number }> = [];
-    let itemsCreatedCount = 0;
-    const lineOutcomes: Array<Record<string, unknown>> = [];
-    const skippedReasons: string[] = [];
-
-    for (const line of evidenceOnlyLines) {
-      lineOutcomes.push({
-        lineId: line.lineId,
-        description: line.description,
-        mode: line.mode,
-        result: "SKIPPED_EVIDENCE_ONLY",
-        reason: "Line was marked as receipt/expense evidence only."
-      });
-      skippedReasons.push(`"${line.description}": evidence-only`);
-    }
-
-    for (const skipped of skippedLines) {
-      lineOutcomes.push({
-        lineId: skipped.lineId,
-        description: skipped.description,
-        mode: "SKIPPED",
-        result: "SKIPPED_VALIDATION",
-        reason: skipped.reason
-      });
-      skippedReasons.push(`"${skipped.description || skipped.lineId}": ${skipped.reason}`);
-    }
-
-    for (const line of inventoryActionLines) {
-      const resolvedItem = await resolveIntakeItem({
+      const supplier = await resolveSupplier({
         tx,
-        line,
-        existingItemById,
-        supplierId: supplier?.id || null,
-        locationToId
+        existingSupplierId: existingSupplier?.id || null,
+        supplierName: receiptSupplierName
       });
-      if (resolvedItem.resolution === "AUTO_CREATED") {
-        itemsCreatedCount += 1;
+
+      const categoryCandidates: InventoryCategory[] = [];
+      for (const line of inventoryActionLines) {
+        if (line.selectedItemId) {
+          const existing = existingItemById.get(line.selectedItemId);
+          if (existing) {
+            categoryCandidates.push(existing.category);
+            continue;
+          }
+        }
+        const parsed = parseInventoryCategory(line.selectedCategory || line.newItem?.category || "");
+        if (parsed) {
+          categoryCandidates.push(parsed);
+        }
+      }
+      const dominantCategory = chooseDominantCategory(categoryCandidates);
+      let createdExpenseId: string | null = null;
+
+      if (createExpense) {
+        const expenseApprovalStatus = "APPROVED" as const;
+        const submittedAt = new Date();
+        const approvedAt = new Date();
+        const approvedById = auth.session.userId;
+        const isEvidenceOnlyPurpose = receiptPurpose === "EVIDENCE_ONLY";
+        const expenseCategory = resolveExpenseCategoryForReceiptType({
+          receiptType,
+          expenseOnlyCategory,
+          dominantCategory,
+          isEvidenceOnlyPurpose
+        });
+        const expenseAmount = isEvidenceOnlyPurpose
+          ? 0
+          : receiptTotal && receiptTotal > 0
+            ? receiptTotal
+            : computedLinesTotal;
+        const expenseRigId = workflowType === "PROJECT_PURCHASE" ? null : rigId;
+        const expense = await tx.expense.create({
+          data: {
+            date: intakeDate,
+            amount: expenseAmount,
+            category: expenseCategory,
+            subcategory: isEvidenceOnlyPurpose ? "Receipt Evidence Only" : "Inventory Receipt Intake",
+            entrySource: "INVENTORY",
+            vendor: supplier?.name || receiptSupplierName || null,
+            receiptNumber: receiptNumber || traReceiptNumber || invoiceReference || null,
+            receiptUrl: receiptUrl || null,
+            receiptFileName: receiptFileName || null,
+            notes: `Receipt intake: ${receiptSupplierName}${receiptTin ? ` (TIN: ${receiptTin})` : ""}${receiptMetadataNote ? `\n${receiptMetadataNote}` : ""}`,
+            enteredByUserId: auth.session.userId,
+            approvalStatus: expenseApprovalStatus,
+            submittedAt,
+            approvedById,
+            approvedAt,
+            clientId,
+            projectId,
+            rigId: expenseRigId
+          },
+          select: { id: true }
+        });
+        createdExpenseId = expense.id;
       }
 
-      if (process.env.NODE_ENV !== "production") {
-        console.info("[inventory][receipt-intake][line]", {
+      const createdMovements: Array<{ id: string; itemId: string; quantity: number; totalCost: number }> =
+        [];
+      let itemsCreatedCount = 0;
+      const lineOutcomes: Array<Record<string, unknown>> = [];
+      const skippedReasons: string[] = [];
+
+      for (const line of evidenceOnlyLines) {
+        lineOutcomes.push({
           lineId: line.lineId,
           description: line.description,
           mode: line.mode,
-          resolution: resolvedItem.resolution,
-          matchedItemId: resolvedItem.resolution === "MATCHED_EXISTING" ? resolvedItem.id : null,
-          matchedItemName: resolvedItem.resolution === "MATCHED_EXISTING" ? resolvedItem.name : null,
-          createdItemId: resolvedItem.resolution === "AUTO_CREATED" ? resolvedItem.id : null,
-          createdItemName: resolvedItem.resolution === "AUTO_CREATED" ? resolvedItem.name : null
+          result: "SKIPPED_EVIDENCE_ONLY",
+          reason: "Line was marked as receipt/expense evidence only."
+        });
+        skippedReasons.push(`"${line.description}": evidence-only`);
+      }
+
+      for (const skipped of skippedLines) {
+        lineOutcomes.push({
+          lineId: skipped.lineId,
+          description: skipped.description,
+          mode: "SKIPPED",
+          result: "SKIPPED_VALIDATION",
+          reason: skipped.reason
+        });
+        skippedReasons.push(`"${skipped.description || skipped.lineId}": ${skipped.reason}`);
+      }
+
+      for (const line of inventoryActionLines) {
+        const resolvedItem = await resolveIntakeItem({
+          tx,
+          line,
+          existingItemById,
+          supplierId: supplier?.id || null,
+          locationToId
+        });
+        if (resolvedItem.resolution === "AUTO_CREATED") {
+          itemsCreatedCount += 1;
+        }
+
+        debugLog(
+          "[inventory][receipt-intake][line]",
+          {
+            lineId: line.lineId,
+            description: line.description,
+            mode: line.mode,
+            resolution: resolvedItem.resolution,
+            matchedItemId: resolvedItem.resolution === "MATCHED_EXISTING" ? resolvedItem.id : null,
+            matchedItemName: resolvedItem.resolution === "MATCHED_EXISTING" ? resolvedItem.name : null,
+            createdItemId: resolvedItem.resolution === "AUTO_CREATED" ? resolvedItem.id : null,
+            createdItemName: resolvedItem.resolution === "AUTO_CREATED" ? resolvedItem.name : null
+          },
+          { channel: "inventory-receipt" }
+        );
+
+        const movement = await tx.inventoryMovement.create({
+          data: {
+            itemId: resolvedItem.id,
+            movementType: receiptType === "INTERNAL_TRANSFER" ? "TRANSFER" : "IN",
+            quantity: line.quantity,
+            unitCost: line.unitPrice,
+            totalCost: line.lineTotal,
+            date: intakeDate,
+            performedByUserId: auth.session.userId,
+            clientId,
+            projectId,
+            rigId,
+            maintenanceRequestId,
+            breakdownReportId,
+            expenseId: createdExpenseId,
+            supplierId: supplier?.id || null,
+            locationFromId: locationFromId || null,
+            locationToId: locationToId || line.newItem?.locationId || null,
+            traReceiptNumber: traReceiptNumber || receiptNumber || null,
+            supplierInvoiceNumber: invoiceReference || receiptNumber || null,
+            receiptUrl: receiptUrl || null,
+            receiptFileName: receiptFileName || null,
+            notes: `Receipt intake line: ${line.description}${receiptMetadataNote ? `\n${receiptMetadataNote}` : ""}`
+          },
+          select: {
+            id: true,
+            itemId: true,
+            quantity: true,
+            totalCost: true
+          }
+        });
+
+        const nextStock =
+          receiptType === "INTERNAL_TRANSFER"
+            ? roundCurrency(resolvedItem.quantityInStock)
+            : roundCurrency(resolvedItem.quantityInStock + line.quantity);
+        await tx.inventoryItem.update({
+          where: { id: resolvedItem.id },
+          data: {
+            quantityInStock: nextStock,
+            unitCost:
+              receiptType !== "INTERNAL_TRANSFER" && line.unitPrice > 0 ? line.unitPrice : undefined,
+            supplierId: supplier?.id || null,
+            locationId:
+              receiptType === "INTERNAL_TRANSFER"
+                ? locationToId || line.newItem?.locationId || undefined
+                : locationToId || line.newItem?.locationId || undefined
+          }
+        });
+
+        createdMovements.push({
+          id: movement.id,
+          itemId: movement.itemId,
+          quantity: roundCurrency(movement.quantity),
+          totalCost: roundCurrency(movement.totalCost || 0)
+        });
+        lineOutcomes.push({
+          lineId: line.lineId,
+          description: line.description,
+          mode: line.mode,
+          result: "STOCK_IN_CREATED",
+          movementId: movement.id,
+          itemId: resolvedItem.id,
+          itemName: resolvedItem.name
+        });
+
+        await recordAuditLog({
+          db: tx,
+          module: "inventory",
+          entityType: "inventory_movement",
+          entityId: movement.id,
+          action: "create",
+          description: `${auth.session.name} created stock intake movement for ${line.description}.`,
+          after: {
+            movementId: movement.id,
+            itemId: movement.itemId,
+            quantity: line.quantity,
+            unitCost: line.unitPrice,
+            lineTotal: line.lineTotal,
+            receiptUrl,
+            traReceiptNumber
+          },
+          actor: auditActorFromSession(auth.session)
         });
       }
 
-      const movement = await tx.inventoryMovement.create({
-        data: {
-          itemId: resolvedItem.id,
-          movementType: receiptType === "INTERNAL_TRANSFER" ? "TRANSFER" : "IN",
-          quantity: line.quantity,
-          unitCost: line.unitPrice,
-          totalCost: line.lineTotal,
-          date: intakeDate,
-          performedByUserId: auth.session.userId,
-          clientId,
-          projectId,
-          rigId,
-          maintenanceRequestId,
+      let submissionStatus: "FINALIZED" | null = null;
+      if (submissionId && linkedSubmission) {
+        const approvedAtIso = new Date().toISOString();
+        const previousSubmittedBy =
+          linkedSubmissionParsed?.submittedBy && linkedSubmissionParsed.submittedBy.userId
+            ? linkedSubmissionParsed.submittedBy
+            : null;
+        const approvedPayload = buildApprovedReceiptSubmissionPayload({
+          approvedAtIso,
+          submittedAtIso: linkedSubmissionParsed?.submittedAt || approvedAtIso,
+          submittedBy:
+            previousSubmittedBy || {
+              userId: auth.session.userId,
+              name: auth.session.name,
+              role: auth.session.role
+            },
+          movementCount: createdMovements.length,
+          itemsCreatedCount,
+          evidenceOnlyLinesCount: evidenceOnlyLines.length,
+          skippedLinesCount: skippedLines.length,
           expenseId: createdExpenseId,
-          supplierId: supplier?.id || null,
-          locationFromId: locationFromId || null,
-          locationToId: locationToId || line.newItem?.locationId || null,
-          traReceiptNumber: traReceiptNumber || receiptNumber || null,
-          supplierInvoiceNumber: invoiceReference || receiptNumber || null,
-          receiptUrl: receiptUrl || null,
-          receiptFileName: receiptFileName || null,
-          notes: `Receipt intake line: ${line.description}${receiptMetadataNote ? `\n${receiptMetadataNote}` : ""}`
+          submissionDraft
+        });
+
+        await tx.summaryReport.update({
+          where: { id: submissionId },
+          data: {
+            payloadJson: JSON.stringify(approvedPayload),
+            reportDate: new Date()
+          }
+        });
+
+        await recordAuditLog({
+          db: tx,
+          module: "inventory",
+          entityType: "receipt_intake_submission",
+          entityId: submissionId,
+          action: "approve",
+          description: `${auth.session.name} approved and finalized receipt intake submission ${submissionId}.`,
+          before: {
+            status: linkedSubmissionParsed?.status || "SUBMITTED"
+          },
+          after: {
+            status: "APPROVED",
+            movementCount: createdMovements.length,
+            expenseId: createdExpenseId
+          },
+          actor: auditActorFromSession(auth.session)
+        });
+
+        submissionStatus = "FINALIZED";
+      }
+
+      let requisitionStatus: "PURCHASE_COMPLETED" | null = null;
+      if (requisitionId && linkedRequisition && parsedRequisition) {
+        const postedAtIso = new Date().toISOString();
+        const postedCost = roundCurrency(
+          (receiptTotal && receiptTotal > 0
+            ? receiptTotal
+            : normalizedLines.reduce((sum, line) => sum + line.lineTotal, 0)) || 0
+        );
+        const nextRequisitionPayload = buildCompletedRequisitionPayload({
+          payload: parsedRequisition.payload,
+          submissionId: submissionId || null,
+          receiptNumber: receiptNumber || traReceiptNumber || invoiceReference || null,
+          supplierName: supplier?.name || receiptSupplierName || null,
+          expenseId: createdExpenseId || null,
+          movementCount: createdMovements.length,
+          postedAtIso,
+          postedCost
+        });
+
+        await tx.summaryReport.update({
+          where: { id: requisitionId },
+          data: {
+            payloadJson: JSON.stringify(nextRequisitionPayload),
+            reportDate: new Date()
+          }
+        });
+
+        await recordAuditLog({
+          db: tx,
+          module: "expenses",
+          entityType: "purchase_requisition",
+          entityId: requisitionId,
+          action: "purchase_complete",
+          description: `${auth.session.name} completed requisition purchase posting ${nextRequisitionPayload.requisitionCode}.`,
+          before: {
+            status: parsedRequisition.payload.status
+          },
+          after: {
+            status: nextRequisitionPayload.status,
+            expenseId: nextRequisitionPayload.purchase.expenseId,
+            movementCount: nextRequisitionPayload.purchase.movementCount,
+            actualPostedCost: nextRequisitionPayload.totals.actualPostedCost
+          },
+          actor: auditActorFromSession(auth.session)
+        });
+
+        requisitionStatus = "PURCHASE_COMPLETED";
+      }
+
+      return {
+        createdMovements,
+        createdExpenseId,
+        supplierName: supplier?.name || receiptSupplierName,
+        itemsCreatedCount,
+        evidenceOnlyLinesCount: evidenceOnlyLines.length,
+        skippedLinesCount: skippedLines.length,
+        lineOutcomes,
+        skippedReasons,
+        submissionStatus,
+        requisitionStatus
+      };
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "ReceiptSubmissionFinalizeConflict") {
+      return NextResponse.json(
+        {
+          message:
+            "Receipt submission is already being finalized in another session. Refresh and retry."
         },
-        select: {
-          id: true,
-          itemId: true,
-          quantity: true,
-          totalCost: true
-        }
-      });
-
-      const nextStock =
-        receiptType === "INTERNAL_TRANSFER"
-          ? roundCurrency(resolvedItem.quantityInStock)
-          : roundCurrency(resolvedItem.quantityInStock + line.quantity);
-      await tx.inventoryItem.update({
-        where: { id: resolvedItem.id },
-        data: {
-          quantityInStock: nextStock,
-          unitCost:
-            receiptType !== "INTERNAL_TRANSFER" && line.unitPrice > 0 ? line.unitPrice : undefined,
-          supplierId: supplier?.id || null,
-          locationId:
-            receiptType === "INTERNAL_TRANSFER"
-              ? locationToId || line.newItem?.locationId || undefined
-              : locationToId || line.newItem?.locationId || undefined
-        }
-      });
-
-      createdMovements.push({
-        id: movement.id,
-        itemId: movement.itemId,
-        quantity: roundCurrency(movement.quantity),
-        totalCost: roundCurrency(movement.totalCost || 0)
-      });
-      lineOutcomes.push({
-        lineId: line.lineId,
-        description: line.description,
-        mode: line.mode,
-        result: "STOCK_IN_CREATED",
-        movementId: movement.id,
-        itemId: resolvedItem.id,
-        itemName: resolvedItem.name
-      });
-
-      await recordAuditLog({
-        db: tx,
-        module: "inventory",
-        entityType: "inventory_movement",
-        entityId: movement.id,
-        action: "create",
-        description: `${auth.session.name} created stock intake movement for ${line.description}.`,
-        after: {
-          movementId: movement.id,
-          itemId: movement.itemId,
-          quantity: line.quantity,
-          unitCost: line.unitPrice,
-          lineTotal: line.lineTotal,
-          receiptUrl,
-          traReceiptNumber
-        },
-        actor: auditActorFromSession(auth.session)
-      });
+        { status: 409 }
+      );
     }
-
-    return {
-      createdMovements,
-      createdExpenseId,
-      supplierName: supplier?.name || receiptSupplierName,
-      itemsCreatedCount,
-      evidenceOnlyLinesCount: evidenceOnlyLines.length,
-      skippedLinesCount: skippedLines.length,
-      lineOutcomes,
-      skippedReasons
-    };
-  });
+    console.error("[inventory/receipt-intake/commit]", {
+      message: error instanceof Error ? error.message : "Unknown error"
+    });
+    return NextResponse.json(
+      { message: "Failed to save receipt intake posting. Please retry." },
+      { status: 500 }
+    );
+  }
 
   const outcomeReasons: string[] = [];
   if (result.createdMovements.length === 0) {
@@ -1081,130 +1350,18 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][save-summary]", {
+  debugLog(
+    "[inventory][receipt-intake][save-summary]",
+    {
       receiptSaved: true,
       itemsCreated: result.itemsCreatedCount,
       stockMovementsCreated: result.createdMovements.length,
       evidenceOnlyLines: result.evidenceOnlyLinesCount,
       skippedLines: result.skippedLinesCount,
       outcomeReasons
-    });
-  }
-
-  if (submissionId && linkedSubmission) {
-    const previousPayload = parseReceiptSubmissionPayload(linkedSubmission.payloadJson);
-    const approvedAtIso = new Date().toISOString();
-    const previousSubmittedBy =
-      previousPayload?.submittedBy && previousPayload.submittedBy.userId
-        ? previousPayload.submittedBy
-        : null;
-    const approvedPayload = {
-      schemaVersion: 1,
-      status: "APPROVED" as ReceiptSubmissionStatus,
-      submissionStatus: "FINALIZED",
-      submittedAt: previousPayload?.submittedAt || approvedAtIso,
-      submittedBy:
-        previousSubmittedBy || {
-          userId: auth.session.userId,
-          name: auth.session.name,
-          role: auth.session.role
-        },
-      reviewer: {
-        userId: auth.session.userId,
-        name: auth.session.name,
-        role: auth.session.role,
-        decision: "APPROVED",
-        decidedAt: approvedAtIso,
-        note: ""
-      },
-      resolution: {
-        approvedAt: approvedAtIso,
-        movementCount: result.createdMovements.length,
-        itemsCreatedCount: result.itemsCreatedCount,
-        evidenceOnlyLinesCount: result.evidenceOnlyLinesCount,
-        skippedLinesCount: result.skippedLinesCount,
-        expenseId: result.createdExpenseId
-      },
-      draft: submissionDraft
-    };
-
-    await prisma.summaryReport.update({
-      where: { id: submissionId },
-      data: {
-        payloadJson: JSON.stringify(approvedPayload),
-        reportDate: new Date()
-      }
-    });
-
-    await recordAuditLog({
-      module: "inventory",
-      entityType: "receipt_intake_submission",
-      entityId: submissionId,
-      action: "approve",
-      description: `${auth.session.name} approved and finalized receipt intake submission ${submissionId}.`,
-      before: {
-        status: previousPayload?.status || "SUBMITTED"
-      },
-      after: {
-        status: "APPROVED",
-        movementCount: result.createdMovements.length,
-        expenseId: result.createdExpenseId
-      },
-      actor: auditActorFromSession(auth.session)
-    });
-  }
-
-  if (requisitionId && linkedRequisition && parsedRequisition) {
-    const postedAtIso = new Date().toISOString();
-    const postedCost = roundCurrency(
-      (receiptTotal && receiptTotal > 0
-        ? receiptTotal
-        : normalizedLines.reduce((sum, line) => sum + line.lineTotal, 0)) || 0
-    );
-    const nextRequisitionPayload = {
-      ...parsedRequisition.payload,
-      status: "PURCHASE_COMPLETED" as const,
-      totals: {
-        ...parsedRequisition.payload.totals,
-        actualPostedCost: postedCost
-      },
-      purchase: {
-        receiptSubmissionId: submissionId || null,
-        receiptNumber: receiptNumber || traReceiptNumber || invoiceReference || null,
-        supplierName: result.supplierName || receiptSupplierName || null,
-        expenseId: result.createdExpenseId || null,
-        movementCount: result.createdMovements.length,
-        postedAt: postedAtIso
-      }
-    };
-
-    await prisma.summaryReport.update({
-      where: { id: requisitionId },
-      data: {
-        payloadJson: JSON.stringify(nextRequisitionPayload),
-        reportDate: new Date()
-      }
-    });
-
-    await recordAuditLog({
-      module: "expenses",
-      entityType: "purchase_requisition",
-      entityId: requisitionId,
-      action: "purchase_complete",
-      description: `${auth.session.name} completed requisition purchase posting ${nextRequisitionPayload.requisitionCode}.`,
-      before: {
-        status: parsedRequisition.payload.status
-      },
-      after: {
-        status: nextRequisitionPayload.status,
-        expenseId: nextRequisitionPayload.purchase.expenseId,
-        movementCount: nextRequisitionPayload.purchase.movementCount,
-        actualPostedCost: nextRequisitionPayload.totals.actualPostedCost
-      },
-      actor: auditActorFromSession(auth.session)
-    });
-  }
+    },
+    { channel: "inventory-receipt" }
+  );
 
   return NextResponse.json({
     success: true,
@@ -1213,9 +1370,10 @@ export async function POST(request: NextRequest) {
         ? `Saved with ${result.createdMovements.length} stock-in movement(s).`
         : outcomeReasons[0] || "Saved as receipt evidence only.",
     data: {
-      submissionStatus: submissionId ? "FINALIZED" : null,
+      submissionStatus: result.submissionStatus,
       submissionId: submissionId || null,
       requisitionId,
+      requisitionStatus: result.requisitionStatus,
       workflowType,
       receiptType,
       supplier: result.supplierName,
@@ -1619,7 +1777,7 @@ function mapRequisitionTypeToWorkflowType(
 }
 
 function formatWorkflowTypeLabel(value: ReceiptWorkflowType) {
-  if (value === "PROJECT_PURCHASE") return "Project Purchase (Live Work)";
+  if (value === "PROJECT_PURCHASE") return "Project Purchase";
   if (value === "MAINTENANCE_PURCHASE") return "Maintenance Purchase (Rig Repair)";
   if (value === "STOCK_PURCHASE") return "Stock Purchase (Inventory)";
   return "Internal Transfer";

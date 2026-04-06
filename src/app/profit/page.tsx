@@ -9,6 +9,11 @@ import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-contex
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import {
+  AnalyticsEmptyState,
+  getScopedKpiHelper,
+  getScopedKpiValue
+} from "@/components/layout/analytics-empty-state";
 import { BarCategoryChart } from "@/components/charts/bar-category-chart";
 import { DonutStatusChart } from "@/components/charts/donut-status-chart";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
@@ -117,7 +122,7 @@ const emptySummary: ProfitSummary = {
 
 export default function ProfitPage() {
   const router = useRouter();
-  const { filters } = useAnalyticsFilters();
+  const { filters, resetFilters, setFilters } = useAnalyticsFilters();
   const [summary, setSummary] = useState<ProfitSummary>(emptySummary);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -144,7 +149,7 @@ export default function ProfitPage() {
         const response = await fetch(`/api/profit/summary${query ? `?${query}` : ""}`, { cache: "no-store" });
         const payload = response.ok ? await response.json() : emptySummary;
         setSummary(payload);
-      } catch (_error) {
+      } catch {
         setSummary(emptySummary);
       } finally {
         if (!silent) {
@@ -236,11 +241,62 @@ export default function ProfitPage() {
     [summary.costBreakdownByRig]
   );
   const isScoped = hasActiveScopeFilters(filters);
+  const hasProfitData = useMemo(
+    () =>
+      summary.profitTrend.length > 0 ||
+      summary.profitByRig.length > 0 ||
+      summary.profitByProject.length > 0 ||
+      summary.profitByClient.length > 0 ||
+      summary.marginByRig.length > 0 ||
+      summary.marginByProject.length > 0 ||
+      summary.costBreakdownByCategory.length > 0 ||
+      summary.costBreakdownByGroup.length > 0 ||
+      summary.costBreakdownByRig.length > 0 ||
+      summary.totals.totalRevenue > 0 ||
+      summary.totals.totalExpenses > 0,
+    [
+      summary.costBreakdownByCategory.length,
+      summary.costBreakdownByGroup.length,
+      summary.costBreakdownByRig.length,
+      summary.marginByProject.length,
+      summary.marginByRig.length,
+      summary.profitByClient.length,
+      summary.profitByProject.length,
+      summary.profitByRig.length,
+      summary.profitTrend.length,
+      summary.totals.totalExpenses,
+      summary.totals.totalRevenue
+    ]
+  );
+  const isFilteredEmpty = !loading && isScoped && !hasProfitData;
   const buildHref = useCallback(
     (path: string, overrides?: Record<string, string | null | undefined>) =>
       buildScopedHref(filters, path, overrides),
     [filters]
   );
+  const applyDatePreset = useCallback(
+    (days: number) => {
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      const start = new Date(end);
+      start.setUTCDate(end.getUTCDate() - Math.max(days - 1, 0));
+      setFilters((current) => ({
+        ...current,
+        from: toDateKey(start),
+        to: toDateKey(end)
+      }));
+    },
+    [setFilters]
+  );
+  const handleClearFilters = useCallback(() => {
+    resetFilters();
+  }, [resetFilters]);
+  const handleLast30Days = useCallback(() => {
+    applyDatePreset(30);
+  }, [applyDatePreset]);
+  const handleLast90Days = useCallback(() => {
+    applyDatePreset(90);
+  }, [applyDatePreset]);
 
   const copilotContext = useMemo<CopilotPageContext>(
     () => ({
@@ -407,7 +463,20 @@ export default function ProfitPage() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} />
+        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+
+        {!loading && !hasProfitData ? (
+          <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
+            <AnalyticsEmptyState
+              variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
+              moduleHint="Create drilling reports and record recognized costs to populate profitability analytics."
+              scopeHint={`${summary.profitByProject.length} projects in current scope • ${summary.profitByRig.length} rigs in scope`}
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+            />
+          </Card>
+        ) : null}
 
         <section
           id="profit-primary-kpi-section"
@@ -423,17 +492,29 @@ export default function ProfitPage() {
           />
           <div className="gf-kpi-grid-primary">
             <MetricCard
-              label={isScoped ? "Profit in Scope" : "Total Profit"}
-              value={formatCurrency(summary.totals.totalProfit)}
+              label={isScoped ? "Profit (Scope)" : "Profit"}
+              value={getScopedKpiValue(formatCurrency(summary.totals.totalProfit), isFilteredEmpty)}
               tone={totalProfitTone}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
             <MetricCard
-              label="Profit Margin"
-              value={formatPercent(overallMargin)}
+              label={isScoped ? "Margin (Scope)" : "Margin"}
+              value={getScopedKpiValue(formatPercent(overallMargin), isFilteredEmpty)}
               tone={overallMarginTone}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
-            <MetricCard label="Highest Profit Rig" value={summary.kpis.highestProfitRig} tone="good" />
-            <MetricCard label="Lowest Profit Rig" value={summary.kpis.lowestProfitRig} tone="danger" />
+            <MetricCard
+              label="Highest Profit Rig"
+              value={getScopedKpiValue(summary.kpis.highestProfitRig, isFilteredEmpty)}
+              tone="good"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="Lowest Profit Rig"
+              value={getScopedKpiValue(summary.kpis.lowestProfitRig, isFilteredEmpty)}
+              tone="danger"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
           </div>
         </section>
 
@@ -449,10 +530,27 @@ export default function ProfitPage() {
             description="Supporting context for projects and margin efficiency."
           />
           <div className="gf-kpi-grid-secondary">
-            <MetricCard label="Highest Profit Project" value={summary.kpis.highestProfitProject} />
-            <MetricCard label="Lowest Profit Project" value={summary.kpis.lowestProfitProject} tone="danger" />
-            <MetricCard label="Highest Margin Rig" value={summary.kpis.highestMarginRig} />
-            <MetricCard label="Highest Margin Project" value={summary.kpis.highestMarginProject} />
+            <MetricCard
+              label="Highest Profit Project"
+              value={getScopedKpiValue(summary.kpis.highestProfitProject, isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="Lowest Profit Project"
+              value={getScopedKpiValue(summary.kpis.lowestProfitProject, isFilteredEmpty)}
+              tone="danger"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="Highest Margin Rig"
+              value={getScopedKpiValue(summary.kpis.highestMarginRig, isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="Highest Margin Project"
+              value={getScopedKpiValue(summary.kpis.highestMarginProject, isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
           </div>
         </section>
 
@@ -522,7 +620,14 @@ export default function ProfitPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading profit trend...</p>
             ) : summary.profitTrend.length === 0 ? (
-              <p className="text-sm text-ink-600">No revenue or expense data in the selected period.</p>
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No revenue or expense data recorded yet."
+                scopeHint={`${summary.profitTrend.length} trend points in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <LineTrendChart
                 data={summary.profitTrend.map((entry) => ({
@@ -565,6 +670,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.profitByRig.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No rig profitability records found yet."
+                scopeHint={`${summary.profitByRig.length} rigs in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.profitByRig}
@@ -593,6 +707,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.profitByProject.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No project profitability records found yet."
+                scopeHint={`${summary.profitByProject.length} projects in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.profitByProject}
@@ -621,6 +744,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.profitByClient.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No client profitability records found yet."
+                scopeHint={`${summary.profitByClient.length} clients in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.profitByClient}
@@ -653,6 +785,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.marginByRig.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No rig margin records found yet."
+                scopeHint={`${summary.marginByRig.length} rigs in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.marginByRig}
@@ -685,6 +826,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.marginByProject.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No project margin records found yet."
+                scopeHint={`${summary.marginByProject.length} projects in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.marginByProject}
@@ -714,7 +864,14 @@ export default function ProfitPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
             ) : summary.costBreakdownByCategory.length === 0 ? (
-              <p className="text-sm text-ink-600">No expense data for selected filters.</p>
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No expense category records found yet."
+                scopeHint={`${summary.costBreakdownByCategory.length} cost categories in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <>
                 <BarCategoryChart
@@ -747,7 +904,14 @@ export default function ProfitPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
             ) : summary.costBreakdownByGroup.length === 0 ? (
-              <p className="text-sm text-ink-600">No grouped cost data for selected filters.</p>
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No grouped cost records found yet."
+                scopeHint={`${summary.costBreakdownByGroup.length} grouped cost buckets in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <>
                 <DonutStatusChart
@@ -782,7 +946,14 @@ export default function ProfitPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
             ) : summary.costBreakdownByRig.length === 0 ? (
-              <p className="text-sm text-ink-600">No rig-level expense data for selected filters.</p>
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No rig-level expense records found yet."
+                scopeHint={`${summary.costBreakdownByRig.length} rigs with cost data in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <>
                 <StackedBarChart
@@ -839,6 +1010,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading rig profitability...</p>
+            ) : sortedRigRows.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No rig profitability rows available yet."
+                scopeHint={`${sortedRigRows.length} rig rows in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <DataTable
                 columns={["Rig", "Revenue", "Expenses", "Profit", "Margin (%)"]}
@@ -865,6 +1045,15 @@ export default function ProfitPage() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading project profitability...</p>
+            ) : sortedProjectRows.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No project profitability rows available yet."
+                scopeHint={`${sortedProjectRows.length} project rows in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <DataTable
                 columns={["Project", "Revenue", "Expenses", "Profit", "Margin (%)"]}
@@ -890,6 +1079,15 @@ export default function ProfitPage() {
           <Card title="Cost Breakdown Table">
             {loading ? (
               <p className="text-sm text-ink-600">Loading cost breakdown...</p>
+            ) : summary.costBreakdownByCategory.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No cost breakdown rows available yet."
+                scopeHint={`${summary.costBreakdownByCategory.length} cost rows in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <DataTable
                 columns={["Category", "Total Cost", "% of Total Expenses", "Status"]}
@@ -910,6 +1108,15 @@ export default function ProfitPage() {
           <Card title="Per-Rig Cost Profile">
             {loading ? (
               <p className="text-sm text-ink-600">Loading rig cost profile...</p>
+            ) : summary.costBreakdownByRig.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No per-rig cost profiles available yet."
+                scopeHint={`${summary.costBreakdownByRig.length} rigs in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <DataTable
                 columns={["Rig", "Fuel", "Maintenance", "Salaries", "Consumables", "Other", "Total Expenses"]}
@@ -1142,3 +1349,7 @@ const badgeToneClass: Record<ProfitAlert["tone"], string> = {
   warn: "border-amber-200 bg-amber-50 text-amber-700",
   good: "border-emerald-200 bg-emerald-50 text-emerald-700"
 };
+
+function toDateKey(date: Date) {
+  return date.toISOString().slice(0, 10);
+}

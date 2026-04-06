@@ -3,6 +3,7 @@ import type { EntryApprovalStatus, Prisma } from "@prisma/client";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 
 interface AggregateBucket {
@@ -90,14 +91,14 @@ export async function GET(request: NextRequest) {
   const trendGranularity: "day" | "month" = dateRangeDays <= 31 ? "day" : "month";
 
   let totalExpenses = 0;
-  let approvedExpenses = 0;
+  let approvedIntentAmount = 0;
 
   for (const entry of expenses) {
     totalExpenses += entry.amount;
     const approvalStatus = (entry.approvalStatus as ExpenseStatus) || "DRAFT";
     statusCounts[approvalStatus] += 1;
     if (approvalStatus === "APPROVED") {
-      approvedExpenses += entry.amount;
+      approvedIntentAmount += entry.amount;
     }
 
     const bucket = trendGranularity === "day" ? entry.date.toISOString().slice(0, 10) : entry.date.toISOString().slice(0, 7);
@@ -139,20 +140,22 @@ export async function GET(request: NextRequest) {
   const expensesByRig = sortBuckets(Array.from(byRigMap.values()));
   const expensesByCategory = sortBuckets(Array.from(byCategoryMap.values()));
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[expense-visibility][expenses-analytics]", {
+  debugLog(
+    "[expense-visibility][expenses-analytics]",
+    {
       appliedFilters,
       expenseRecordCount: expenses.length,
       totalExpenses,
-      approvedExpenses,
+      approvedIntentAmount,
       statusCounts
-    });
-  }
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json({
     kpis: {
       totalExpenses,
-      approvedExpenses,
+      approvedIntentAmount,
       highestExpenseProject: expensesByProject[0]?.name || "N/A",
       highestExpenseRig: expensesByRig[0]?.name || "N/A",
       biggestCategory: expensesByCategory[0]?.name || "N/A"
@@ -169,7 +172,7 @@ export async function GET(request: NextRequest) {
       expenseRecordCount: expenses.length,
       statusCounts,
       totalExpenses,
-      approvedExpenses,
+      approvedIntentAmount,
       inclusionPolicy: includeAllStatuses ? "ALL_STATUSES" : "APPROVED_ONLY"
     }
   });

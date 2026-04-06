@@ -124,7 +124,6 @@ export function resolveExpenseApprovalStatus({
   linkedMaintenanceStatus: MaintenanceStatus | null;
 }): EntryApprovalStatus {
   if (
-    linkedMaintenanceStatus === "APPROVED" ||
     linkedMaintenanceStatus === "IN_REPAIR" ||
     linkedMaintenanceStatus === "COMPLETED"
   ) {
@@ -155,4 +154,3 @@ export function buildInventoryScopeFilters({
   };
   return where;
 }
-

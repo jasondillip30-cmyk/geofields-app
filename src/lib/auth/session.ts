@@ -1,18 +1,9 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import type { NextRequest, NextResponse } from "next/server";
 
+import { SESSION_COOKIE_NAME, SESSION_TTL_SECONDS } from "@/lib/auth/session-config";
 import { resolveAuthSecretBytes } from "@/lib/auth/secret";
-import type { UserRole } from "@/lib/types";
-
-export const SESSION_COOKIE_NAME = "gf_session";
-const SESSION_TTL_SECONDS = 60 * 60 * 12;
-
-export interface AuthSession {
-  userId: string;
-  email: string;
-  name: string;
-  role: UserRole;
-}
+import type { AuthSession } from "@/lib/auth/session-types";
 
 interface SessionJwtPayload extends JWTPayload, AuthSession {}
 

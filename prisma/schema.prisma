@@ -23,6 +23,20 @@ enum ProjectStatus {
   COMPLETED
 }
 
+enum ProjectContractType {
+  PER_METER
+  DAY_RATE
+  LUMP_SUM
+}
+
+enum ProjectInvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_COLLECTED
+  COLLECTED
+  VOID
+}
+
 enum RigStatus {
   ACTIVE
   IDLE
@@ -38,13 +52,15 @@ enum RigCondition {
   CRITICAL
 }
 
+enum RigCostAllocationBasis {
+  DAY
+  HOUR
+}
+
 enum MaintenanceStatus {
-  SUBMITTED
-  UNDER_REVIEW
-  APPROVED
-  DENIED
-  WAITING_FOR_PARTS
+  OPEN
   IN_REPAIR
+  WAITING_FOR_PARTS
   COMPLETED
 }
 
@@ -160,6 +176,7 @@ model User {
   createdBudgetPlans  BudgetPlan[]        @relation("budgetPlanCreator")
   updatedBudgetPlans  BudgetPlan[]        @relation("budgetPlanUpdater")
   copilotChatThreads  CopilotChatThread[]
+  createdProjectLaborEntries ProjectLaborEntry[] @relation("projectLaborEntryCreator")
 }
 
 model Role {
@@ -202,7 +219,12 @@ model Project {
   startDate          DateTime
   endDate            DateTime?
   status             ProjectStatus        @default(PLANNED)
-  contractRatePerM   Float
+  contractType       ProjectContractType  @default(PER_METER)
+  contractRatePerM   Float                @default(0)
+  contractDayRate    Float                @default(0)
+  contractLumpSumValue Float              @default(0)
+  estimatedMeters    Float                @default(0)
+  estimatedDays      Float                @default(0)
   assignedRigId      String?
   backupRigId        String?
   createdAt          DateTime             @default(now())
@@ -220,6 +242,56 @@ model Project {
   inventoryMovements InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
   budgetPlans        BudgetPlan[]
+  changeOrders       ProjectChangeOrder[]
+  laborEntries       ProjectLaborEntry[]
+  invoices           ProjectInvoice[]
+}
+
+model ProjectChangeOrder {
+  id          String   @id @default(cuid())
+  projectId   String
+  description String
+  addedValue  Float
+  addedMeters Float?
+  addedDays   Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+model ProjectInvoice {
+  id            String               @id @default(cuid())
+  projectId     String
+  invoiceNumber String               @unique
+  issueDate     DateTime
+  dueDate       DateTime?
+  amount        Float
+  status        ProjectInvoiceStatus @default(DRAFT)
+  notes         String?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  project       Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payments      ProjectInvoicePayment[]
+
+  @@index([projectId, issueDate])
+  @@index([projectId, status, issueDate])
+}
+
+model ProjectInvoicePayment {
+  id               String         @id @default(cuid())
+  invoiceId        String
+  paymentDate      DateTime
+  amount           Float
+  paymentReference String?
+  paymentMethod    String?
+  notes            String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  invoice          ProjectInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, paymentDate])
 }
 
 model Rig {
@@ -235,6 +307,9 @@ model Rig {
   totalHoursWorked         Float                @default(0)
   totalMetersDrilled       Float                @default(0)
   totalLifetimeDays        Int                  @default(0)
+  costAllocationBasis      RigCostAllocationBasis @default(DAY)
+  costRatePerDay           Float                @default(0)
+  costRatePerHour          Float                @default(0)
   createdAt                DateTime             @default(now())
   updatedAt                DateTime             @updatedAt
   assignedProjects         Project[]            @relation("assignedRig")
@@ -250,6 +325,29 @@ model Rig {
   compatibleInventoryItems InventoryItem[]      @relation("itemCompatibleRig")
   inventoryUsageRequests   InventoryUsageRequest[]
   budgetPlans              BudgetPlan[]
+  projectLaborEntries      ProjectLaborEntry[]
+}
+
+model ProjectLaborEntry {
+  id              String   @id @default(cuid())
+  projectId       String
+  rigId           String?
+  workDate        DateTime
+  crewRole        String?
+  personLabel     String?
+  hoursWorked     Float
+  hourlyRate      Float
+  totalCost       Float
+  notes           String?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rig             Rig?     @relation(fields: [rigId], references: [id])
+  createdBy       User?    @relation("projectLaborEntryCreator", fields: [createdByUserId], references: [id])
+
+  @@index([projectId, workDate])
+  @@index([rigId, workDate])
 }
 
 model RigUsage {
@@ -392,24 +490,29 @@ model MaintenanceRequest {
   rigId                String
   clientId             String?
   projectId            String?
+  breakdownReportId    String?
   mechanicId           String
+  maintenanceType      String?
   issueDescription     String
   materialsNeeded      String
   urgency              UrgencyLevel
   photoUrls            String
   notes                String?
   estimatedDowntimeHrs Float               @default(0)
-  status               MaintenanceStatus   @default(SUBMITTED)
+  status               MaintenanceStatus   @default(OPEN)
   createdAt            DateTime            @default(now())
   updatedAt            DateTime            @updatedAt
   rig                  Rig                 @relation(fields: [rigId], references: [id])
   client               Client?             @relation(fields: [clientId], references: [id])
   project              Project?            @relation(fields: [projectId], references: [id])
+  breakdownReport      BreakdownReport?    @relation(fields: [breakdownReportId], references: [id])
   mechanic             Mechanic            @relation(fields: [mechanicId], references: [id])
   updates              MaintenanceUpdate[]
   approvals            Approval[]
   inventoryMovements   InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
+
+  @@index([breakdownReportId, requestDate])
 }
 
 model InventorySupplier {
@@ -485,6 +588,7 @@ model InventoryMovement {
   rigId                 String?
   projectId             String?
   maintenanceRequestId  String?
+  breakdownReportId     String?
   expenseId             String?
   supplierId            String?
   locationFromId        String?
@@ -502,6 +606,7 @@ model InventoryMovement {
   rig                   Rig?                  @relation(fields: [rigId], references: [id])
   project               Project?              @relation(fields: [projectId], references: [id])
   maintenanceRequest    MaintenanceRequest?   @relation(fields: [maintenanceRequestId], references: [id])
+  breakdownReport       BreakdownReport?      @relation(fields: [breakdownReportId], references: [id])
   expense               Expense?              @relation(fields: [expenseId], references: [id])
   supplier              InventorySupplier?    @relation(fields: [supplierId], references: [id])
   locationFrom          InventoryLocation?    @relation("movementLocationFrom", fields: [locationFromId], references: [id])
@@ -511,6 +616,7 @@ model InventoryMovement {
   @@index([movementType, date])
   @@index([rigId, projectId, date])
   @@index([maintenanceRequestId, date])
+  @@index([breakdownReportId, date])
 }
 
 model InventoryUsageRequest {
@@ -521,6 +627,7 @@ model InventoryUsageRequest {
   projectId         String?
   rigId             String?
   maintenanceRequestId String?
+  breakdownReportId String?
   locationId        String?
   requestedForDate  DateTime?
   requestedById     String?
@@ -535,6 +642,7 @@ model InventoryUsageRequest {
   project           Project?                    @relation(fields: [projectId], references: [id])
   rig               Rig?                        @relation(fields: [rigId], references: [id])
   maintenanceRequest MaintenanceRequest?        @relation(fields: [maintenanceRequestId], references: [id])
+  breakdownReport   BreakdownReport?            @relation(fields: [breakdownReportId], references: [id])
   location          InventoryLocation?          @relation(fields: [locationId], references: [id])
   requestedBy       User?                       @relation("inventoryUsageRequester", fields: [requestedById], references: [id])
   decidedBy         User?                       @relation("inventoryUsageDecider", fields: [decidedById], references: [id])
@@ -543,6 +651,7 @@ model InventoryUsageRequest {
   @@index([itemId, createdAt])
   @@index([projectId, rigId, locationId])
   @@index([maintenanceRequestId, requestedForDate])
+  @@index([breakdownReportId, requestedForDate])
 }
 
 model MaintenanceUpdate {
@@ -616,6 +725,9 @@ model BreakdownReport {
   rig           Rig          @relation(fields: [rigId], references: [id])
   project       Project      @relation(fields: [projectId], references: [id])
   client        Client       @relation(fields: [clientId], references: [id])
+  maintenanceRequests MaintenanceRequest[]
+  inventoryUsageRequests InventoryUsageRequest[]
+  inventoryMovements InventoryMovement[]
 }
 
 model BudgetPlan {

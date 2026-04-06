@@ -2,9 +2,9 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { canAccess } from "@/lib/auth/permissions";
 import { getPermissionForPath } from "@/lib/auth/route-permissions";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session-config";
 import { AuthConfigurationError } from "@/lib/auth/secret";
 import { verifyEdgeSessionToken } from "@/lib/auth/session-edge";
-import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 
 const publicPaths = ["/login", "/unauthorized"];
 

@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
   const includeResolved = request.nextUrl.searchParams.get("includeResolved") === "true";
   const now = new Date();
 
-  const approvedExpenseWhere = withFinancialExpenseApproval({
+  const recognizedExpenseWhere = withFinancialExpenseApproval({
     ...(clientId ? { clientId } : {}),
     ...(rigId ? { rigId } : {}),
     ...(fromDate || toDate
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
       : undefined;
 
   const [
-    approvedExpenses,
+    recognizedExpenses,
     budgetPlans,
     pendingExpenses,
     pendingDrillingReports,
@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     assignableUsers
   ] = await Promise.all([
     prisma.expense.findMany({
-      where: approvedExpenseWhere,
+      where: recognizedExpenseWhere,
       include: {
         rig: { select: { id: true, rigCode: true } },
         project: { select: { id: true, name: true } }
@@ -150,7 +150,7 @@ export async function GET(request: NextRequest) {
     }),
     prisma.maintenanceRequest.findMany({
       where: {
-        status: "SUBMITTED",
+        status: "OPEN",
         ...(clientId ? { clientId } : {}),
         ...(rigId ? { rigId } : {}),
         ...(stalePendingWhereDate ? { requestDate: stalePendingWhereDate } : {})
@@ -242,6 +242,7 @@ export async function GET(request: NextRequest) {
       where: {
         movementType: "OUT",
         maintenanceRequestId: null,
+        breakdownReportId: null,
         expenseId: { not: null },
         ...(rigId ? { rigId } : {}),
         ...(fromDate || toDate
@@ -295,7 +296,7 @@ export async function GET(request: NextRequest) {
 
   const spendByRig = new Map<string, { id: string; name: string; spend: number; latestDate: Date | null }>();
   const spendByProject = new Map<string, { id: string; name: string; spend: number; latestDate: Date | null }>();
-  for (const expense of approvedExpenses) {
+  for (const expense of recognizedExpenses) {
     const rigKey = expense.rigId || UNASSIGNED_RIG_ID;
     const rigName = expense.rig?.rigCode || UNASSIGNED_RIG_NAME;
     const rigEntry = spendByRig.get(rigKey) || {
@@ -487,17 +488,17 @@ export async function GET(request: NextRequest) {
       continue;
     }
     derivedAlerts.push({
-      alertKey: `approval:maintenance:${requestRow.id}`,
+      alertKey: `maintenance:open:${requestRow.id}`,
       severity: (ageHours || 0) >= 72 ? "CRITICAL" : "WARNING",
       alertType: "STALE_PENDING_APPROVAL",
       entity: requestRow.requestCode || `Maintenance ${requestRow.id.slice(-8)}`,
-      source: "Approvals Queue",
+      source: "Maintenance Cases",
       amount: null,
       ageHours,
       currentContext: `${requestRow.rig?.rigCode || "Unassigned Rig"} • ${requestRow.project?.name || "Unassigned Project"}`,
-      recommendedAction: "Review and approve/reject this maintenance request.",
+      recommendedAction: "Review this open maintenance case and move it forward.",
       destinationHref: buildScopedHref({
-        path: "/approvals",
+        path: "/maintenance",
         filters: scopedFilterValues
       }),
       status: "OPEN",
@@ -937,7 +938,7 @@ function parseAlertStateMetadata(metadataJson: string | null | undefined): Alert
       assignedAt:
         typeof parsed.assignedAt === "string" && parsed.assignedAt.trim().length > 0 ? parsed.assignedAt.trim() : null
     };
-  } catch (_error) {
+  } catch {
     return {};
   }
 }

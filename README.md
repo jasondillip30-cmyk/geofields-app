@@ -4,31 +4,29 @@ Professional internal web app MVP for **GeoFields Tanzania** to replace Excel-ba
 
 This app provides a modern, visual, dashboard-first system for:
 - drilling activity management by client/project/rig
-- finance tracking (revenue, expenses, profit)
+- finance tracking (revenue, recognized spend, profit)
 - forecasting
 - rig performance and condition tracking
-- maintenance/workshop workflows with approval visibility
+- case-based maintenance and breakdown workflows
+- inventory usage and purchase approvals
 - executive summary reporting and alerts
 
-## Phase A-E Upgrade (Current Build)
+## Current Build Highlights
 
 - Real authentication (`/login`) with secure cookie sessions
 - Middleware-protected routes by role
 - Dashboard access removed for `MECHANIC` and `FIELD`
-- CRUD pages and APIs for:
-  - clients
-  - projects
-  - rigs
-  - employees
-- Office-only manual expense input with receipt upload support
-- Field operator breakdown reporting auto-linked to project/rig/client
-- Forecasting filters by company/client/project/rig with API-driven results
+- Setup vs management page split (create/configure in Setup; monitor/manage in main modules)
+- Project-first budget vs actual and profitability monitoring
+- Receipt-intake follow-up for recognized expense posting
+- Inventory movement, issues, and expenses workspaces with operational traceability
+- Breakdown and maintenance operational case management (not approval workflows)
 
 ## MVP Stack
 
 - **Frontend:** Next.js (App Router), TypeScript, Tailwind CSS, Recharts
 - **Backend API:** Next.js Route Handlers (`/api/*`)
-- **Database:** Prisma ORM (schema included), SQLite for local MVP
+- **Database:** Prisma ORM with PostgreSQL/Neon
 - **Auth/RBAC (MVP):** role-based permission matrix (Admin, Office, Mechanic, Field)
 
 ## Quick Start
@@ -45,17 +43,22 @@ npm install
 cp .env.example .env
 ```
 
-3. Generate Prisma client and push schema:
+3. Validate DB connection + sync schema:
 
 ```bash
-npm run db:generate
-npm run db:push
+npm run db:sync
 ```
 
 4. Seed sample data:
 
 ```bash
 npm run db:seed
+```
+
+If you need a fully clean local demo dataset (recommended after major workflow refactors):
+
+```bash
+npm run db:refresh:demo
 ```
 
 5. Start app:
@@ -75,36 +78,47 @@ Seed login accounts:
 ## Main Modules Included
 
 - Company Dashboard
-- Clients (including client-specific workspace pages)
-- Projects (including project-specific rig assignment view)
+- Clients
+- Projects
+- Rigs
 - Daily Drilling Reports
 - Revenue Analytics
-- Expense Analytics
+- Cost Tracking
+- Budget vs Actual (project-first)
 - Forecasting (30-day projections)
-- Rigs & Rig Profiles
-- Maintenance / Workshop (requests + approvals)
-- Mechanics Directory
-- Summary Reports + Alerts
+- Profit
+- Inventory (items, stock movements, issues, expenses, receipt intake)
+- Purchase Requests + Approvals
+- Maintenance (operational case flow)
+- Breakdowns (operational incident flow)
+- Mechanics Directory + Summary Reports + Alerts
 
 ## Role Access (MVP)
 
 - **Admin / Management:** full visibility + approvals + finance + reporting
-- **Office Staff:** projects, reports, finance view, maintenance approvals
-- **Mechanics:** rig view + maintenance submission and tracking
-- **Field Operations:** drilling submission + drilling/project/rig visibility
+- **Office Staff:** project/inventory/expense operations and approval actions by permission
+- **Mechanics:** maintenance/breakdown reporting, inventory usage requests, rig-level operations
+- **Field Operations:** drilling and breakdown reporting with project/rig visibility
 
 Role switching is available in the top bar for demo and testing.
 
-## API Endpoints (MVP)
+## API Surface (Selected)
 
 - `GET /api/drill-reports`
 - `POST /api/drill-reports`
 - `GET /api/maintenance-requests`
 - `POST /api/maintenance-requests`
 - `PATCH /api/maintenance-requests`
+- `GET /api/breakdowns`
+- `POST /api/breakdowns`
+- `PATCH /api/breakdowns/:breakdownId`
+- `GET /api/inventory/usage-requests`
+- `POST /api/inventory/usage-requests`
+- `POST /api/inventory/usage-requests/:requestId/status`
+- `POST /api/inventory/receipt-intake/commit`
 - `GET /api/summary-report`
 
-Additional phase A-E endpoints:
+Additional endpoints:
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
 - `GET /api/auth/session`
@@ -116,8 +130,6 @@ Additional phase A-E endpoints:
 - `PUT/DELETE /api/rigs/:rigId`
 - `GET/POST /api/employees`
 - `PUT/DELETE /api/employees/:employeeId`
-- `GET/POST /api/expenses/manual`
-- `GET/POST /api/breakdowns`
 - `GET /api/forecasting`
 
 Pass role header for API authorization simulation:
@@ -135,6 +147,18 @@ Prisma schema lives in:
 
 Seed data script:
 - `prisma/seed.ts`
+
+DB helper scripts:
+- `npm run db:doctor` checks `DATABASE_URL` for placeholder/invalid values.
+- `npm run db:sync` keeps Prisma client + schema aligned.
+- `npm run db:refresh:demo` syncs schema and reseeds a clean local demo workspace.
+
+Quality/smoke scripts:
+- `npm run quality:static` runs typecheck + lint + hygiene + architecture guard.
+- `npm run smoke:critical` validates critical approve/finalize workflows.
+- `npm run smoke:consistency` verifies cross-page recognized-spend reconciliation.
+- `npm run smoke:ops` validates maintenance/breakdown operational lifecycle linkage.
+- `npm run smoke:mutations` validates concurrent mutation conflict/idempotency behavior.
 
 The schema includes entities for:
 - users, roles

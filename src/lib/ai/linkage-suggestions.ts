@@ -51,11 +51,9 @@ export interface LinkageAiSuggestion {
 }
 
 const ACTIVE_MAINTENANCE_STATUSES: MaintenanceStatus[] = [
-  "SUBMITTED",
-  "UNDER_REVIEW",
-  "APPROVED",
-  "WAITING_FOR_PARTS",
+  "OPEN",
   "IN_REPAIR",
+  "WAITING_FOR_PARTS",
   "COMPLETED"
 ];
 

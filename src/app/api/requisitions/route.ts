@@ -17,6 +17,12 @@ import {
   type RequisitionStatus,
   type RequisitionType
 } from "@/lib/requisition-workflow";
+import {
+  buildDefaultRequisitionSetupPayload,
+  normalizeMasterDataKey,
+  parsePurchaseRequisitionSetupPayload,
+  PURCHASE_REQUISITION_SETUP_REPORT_TYPE
+} from "@/lib/requisition-master-data";
 
 export const runtime = "nodejs";
 
@@ -28,6 +34,9 @@ interface RequisitionRowOutput {
   liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  categoryId: string | null;
+  subcategoryId: string | null;
+  requestedVendorId: string | null;
   requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
@@ -41,12 +50,14 @@ interface RequisitionRowOutput {
     projectId: string | null;
     rigId: string | null;
     maintenanceRequestId: string | null;
+    breakdownReportId: string | null;
   };
   contextLabels: {
     clientName: string | null;
     projectName: string | null;
     rigCode: string | null;
     maintenanceRequestCode: string | null;
+    breakdownTitle: string | null;
   };
   lineItems: PurchaseRequisitionLineItem[];
   totals: {
@@ -94,6 +105,12 @@ export async function GET(request: NextRequest) {
   const projectId = normalizeNullableId(request.nextUrl.searchParams.get("projectId"));
   const clientId = normalizeNullableId(request.nextUrl.searchParams.get("clientId"));
   const rigId = normalizeNullableId(request.nextUrl.searchParams.get("rigId"));
+  const maintenanceRequestId = normalizeNullableId(
+    request.nextUrl.searchParams.get("maintenanceRequestId")
+  );
+  const breakdownReportId = normalizeNullableId(
+    request.nextUrl.searchParams.get("breakdownReportId")
+  );
   const type = parseRequisitionType(request.nextUrl.searchParams.get("type"));
   const status = parseRequisitionStatus(request.nextUrl.searchParams.get("status"));
 
@@ -101,15 +118,7 @@ export async function GET(request: NextRequest) {
     where: {
       reportType: PURCHASE_REQUISITION_REPORT_TYPE,
       ...(projectId ? { projectId } : {}),
-      ...(clientId ? { clientId } : {}),
-      ...(from || to
-        ? {
-            reportDate: {
-              ...(from ? { gte: from } : {}),
-              ...(to ? { lte: to } : {})
-            }
-          }
-        : {})
+      ...(clientId ? { clientId } : {})
     },
     orderBy: [{ reportDate: "desc" }, { createdAt: "desc" }]
   });
@@ -138,7 +147,31 @@ export async function GET(request: NextRequest) {
       if (rigId && entry.payload.context.rigId !== rigId) {
         return false;
       }
+      if (
+        maintenanceRequestId &&
+        entry.payload.context.maintenanceRequestId !== maintenanceRequestId
+      ) {
+        return false;
+      }
+      if (
+        breakdownReportId &&
+        entry.payload.context.breakdownReportId !== breakdownReportId
+      ) {
+        return false;
+      }
+      const submittedAt = parseIsoTimestamp(entry.payload.submittedAt);
+      if (from && (!submittedAt || submittedAt < from)) {
+        return false;
+      }
+      if (to && (!submittedAt || submittedAt > to)) {
+        return false;
+      }
       return true;
+    })
+    .sort((a, b) => {
+      const aTimestamp = getRequisitionSortTimestamp(a);
+      const bTimestamp = getRequisitionSortTimestamp(b);
+      return bTimestamp - aTimestamp;
     });
 
   const clientIds = Array.from(
@@ -169,8 +202,15 @@ export async function GET(request: NextRequest) {
         .filter((value): value is string => Boolean(value))
     )
   );
+  const breakdownReportIds = Array.from(
+    new Set(
+      parsedEntries
+        .map((entry) => entry.payload.context.breakdownReportId)
+        .filter((value): value is string => Boolean(value))
+    )
+  );
 
-  const [clients, projects, rigs, maintenanceRequests] = await Promise.all([
+  const [clients, projects, rigs, maintenanceRequests, breakdownReports] = await Promise.all([
     clientIds.length > 0
       ? prisma.client.findMany({
           where: { id: { in: clientIds } },
@@ -194,6 +234,12 @@ export async function GET(request: NextRequest) {
           where: { id: { in: maintenanceRequestIds } },
           select: { id: true, requestCode: true }
         })
+      : Promise.resolve([]),
+    breakdownReportIds.length > 0
+      ? prisma.breakdownReport.findMany({
+          where: { id: { in: breakdownReportIds } },
+          select: { id: true, title: true }
+        })
       : Promise.resolve([])
   ]);
 
@@ -202,6 +248,9 @@ export async function GET(request: NextRequest) {
   const rigCodeById = new Map(rigs.map((entry) => [entry.id, entry.rigCode]));
   const maintenanceCodeById = new Map(
     maintenanceRequests.map((entry) => [entry.id, entry.requestCode])
+  );
+  const breakdownTitleById = new Map(
+    breakdownReports.map((entry) => [entry.id, entry.title])
   );
 
   const parsed = parsedEntries.map((entry) =>
@@ -222,6 +271,11 @@ export async function GET(request: NextRequest) {
         entry.payload.context.maintenanceRequestId &&
         maintenanceCodeById.has(entry.payload.context.maintenanceRequestId)
           ? maintenanceCodeById.get(entry.payload.context.maintenanceRequestId) || null
+          : null,
+      breakdownTitle:
+        entry.payload.context.breakdownReportId &&
+        breakdownTitleById.has(entry.payload.context.breakdownReportId)
+          ? breakdownTitleById.get(entry.payload.context.breakdownReportId) || null
           : null
     })
   );
@@ -236,6 +290,8 @@ export async function GET(request: NextRequest) {
         clientId: clientId || "all",
         projectId: projectId || "all",
         rigId: rigId || "all",
+        maintenanceRequestId: maintenanceRequestId || "all",
+        breakdownReportId: breakdownReportId || "all",
         type: type || "all",
         status: status || "all"
       }
@@ -261,10 +317,10 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const category = normalizeText(body?.category);
-  if (!category) {
-    return NextResponse.json({ message: "Category is required." }, { status: 400 });
-  }
+  const categoryInput = normalizeText(body?.category);
+  const subcategoryInput = normalizeNullableText(body?.subcategory);
+  const categoryIdInput = normalizeNullableId(body?.categoryId);
+  const subcategoryIdInput = normalizeNullableId(body?.subcategoryId);
   const liveProjectSpendType = parseLiveProjectSpendType(body?.liveProjectSpendType);
 
   const lineItems = normalizeLineItems(body?.lineItems);
@@ -279,10 +335,30 @@ export async function POST(request: NextRequest) {
     clientId: normalizeNullableId(body?.clientId),
     projectId: normalizeNullableId(body?.projectId),
     rigId: normalizeNullableId(body?.rigId),
-    maintenanceRequestId: normalizeNullableId(body?.maintenanceRequestId)
+    maintenanceRequestId: normalizeNullableId(body?.maintenanceRequestId),
+    breakdownReportId: normalizeNullableId(body?.breakdownReportId)
   };
+  const requestedVendorIdInput = normalizeNullableId(body?.requestedVendorId);
+  const requestedVendorNameInput = normalizeNullableText(body?.requestedVendorName);
 
-  const [project, rig, maintenanceRequest] = await Promise.all([
+  if (type !== "MAINTENANCE_PURCHASE" && providedContext.maintenanceRequestId) {
+    return NextResponse.json(
+      {
+        message: "Only maintenance-linked purchases can be linked to a maintenance case."
+      },
+      { status: 400 }
+    );
+  }
+  if (type === "INVENTORY_STOCK_UP" && providedContext.breakdownReportId) {
+    return NextResponse.json(
+      {
+        message: "Inventory stock-up requisitions cannot be linked to a breakdown report."
+      },
+      { status: 400 }
+    );
+  }
+
+  const [project, rig, maintenanceRequest, breakdownReport] = await Promise.all([
     providedContext.projectId
       ? prisma.project.findUnique({
           where: { id: providedContext.projectId },
@@ -298,7 +374,20 @@ export async function POST(request: NextRequest) {
     providedContext.maintenanceRequestId
       ? prisma.maintenanceRequest.findUnique({
           where: { id: providedContext.maintenanceRequestId },
-          select: { id: true, rigId: true, projectId: true, clientId: true }
+          select: {
+            id: true,
+            requestCode: true,
+            status: true,
+            rigId: true,
+            projectId: true,
+            clientId: true
+          }
+        })
+      : Promise.resolve(null),
+    providedContext.breakdownReportId
+      ? prisma.breakdownReport.findUnique({
+          where: { id: providedContext.breakdownReportId },
+          select: { id: true, rigId: true, projectId: true, clientId: true, title: true }
         })
       : Promise.resolve(null)
   ]);
@@ -315,11 +404,18 @@ export async function POST(request: NextRequest) {
       { status: 404 }
     );
   }
+  if (providedContext.breakdownReportId && !breakdownReport) {
+    return NextResponse.json(
+      { message: "Selected breakdown report was not found." },
+      { status: 404 }
+    );
+  }
 
   let clientId = providedContext.clientId;
   let projectId = providedContext.projectId;
   let rigId = providedContext.rigId;
   let maintenanceRequestId = providedContext.maintenanceRequestId;
+  let breakdownReportId = providedContext.breakdownReportId;
 
   if (project) {
     if (clientId && clientId !== project.clientId) {
@@ -357,18 +453,73 @@ export async function POST(request: NextRequest) {
     maintenanceRequestId = maintenanceRequest.id;
   }
 
+  if (type === "MAINTENANCE_PURCHASE" && rigId && !projectId) {
+    const activeProjectForRig = await prisma.project.findFirst({
+      where: {
+        assignedRigId: rigId,
+        status: "ACTIVE"
+      },
+      select: {
+        id: true,
+        clientId: true
+      }
+    });
+    if (activeProjectForRig) {
+      projectId = activeProjectForRig.id;
+      clientId = clientId || activeProjectForRig.clientId;
+    }
+  }
+
+  if (breakdownReport) {
+    if (projectId && projectId !== breakdownReport.projectId) {
+      return NextResponse.json(
+        { message: "Selected breakdown report does not match the selected project." },
+        { status: 400 }
+      );
+    }
+    if (clientId && clientId !== breakdownReport.clientId) {
+      return NextResponse.json(
+        { message: "Selected breakdown report does not match the selected client." },
+        { status: 400 }
+      );
+    }
+    if (rigId && rigId !== breakdownReport.rigId) {
+      return NextResponse.json(
+        { message: "Selected breakdown report does not match the selected rig." },
+        { status: 400 }
+      );
+    }
+    projectId = projectId || breakdownReport.projectId;
+    rigId = rigId || breakdownReport.rigId;
+    clientId = clientId || breakdownReport.clientId;
+    breakdownReportId = breakdownReport.id;
+  }
+
+  if (maintenanceRequest && breakdownReport) {
+    if (maintenanceRequest.rigId !== breakdownReport.rigId) {
+      return NextResponse.json(
+        { message: "Selected maintenance request and breakdown report do not match the same rig." },
+        { status: 400 }
+      );
+    }
+    if (
+      maintenanceRequest.projectId &&
+      breakdownReport.projectId &&
+      maintenanceRequest.projectId !== breakdownReport.projectId
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Selected maintenance request and breakdown report do not match the same project."
+        },
+        { status: 400 }
+      );
+    }
+  }
+
   if (type === "LIVE_PROJECT_PURCHASE" && !projectId) {
     return NextResponse.json(
-      { message: "Live project purchases require a project." },
-      { status: 400 }
-    );
-  }
-  if (type === "LIVE_PROJECT_PURCHASE" && !liveProjectSpendType) {
-    return NextResponse.json(
-      {
-        message:
-          "Live project purchases require selecting whether this is a breakdown or normal expense."
-      },
+      { message: "Project purchases require a project." },
       { status: 400 }
     );
   }
@@ -387,20 +538,136 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
+  if (
+    type === "MAINTENANCE_PURCHASE" &&
+    maintenanceRequest &&
+    !isMaintenanceOperationalOpen(maintenanceRequest.status)
+  ) {
+    return NextResponse.json(
+      {
+        message:
+          "Selected maintenance case is not open. Link to an open maintenance case before submitting."
+      },
+      { status: 400 }
+    );
+  }
+  if (type === "MAINTENANCE_PURCHASE" && !maintenanceRequestId) {
+    return NextResponse.json(
+      {
+        message:
+          "Maintenance purchases must be created from a maintenance case."
+      },
+      { status: 400 }
+    );
+  }
+
+  const setupPayload = await resolveRequisitionSetupPayload();
+  const setupCategories = setupPayload.categories.filter((entry) => entry.isActive);
+  if (setupCategories.length === 0) {
+    return NextResponse.json(
+      {
+        message: "No requisition categories are configured in setup."
+      },
+      { status: 422 }
+    );
+  }
+
+  const resolvedCategory =
+    setupCategories.find((entry) => entry.id === categoryIdInput) ||
+    setupCategories.find(
+      (entry) => normalizeMasterDataKey(entry.name) === normalizeMasterDataKey(categoryInput || "")
+    ) ||
+    null;
+  if (!resolvedCategory) {
+    return NextResponse.json(
+      { message: "Category must be selected from setup." },
+      { status: 400 }
+    );
+  }
+  const category = resolvedCategory.name;
+  const categoryId = resolvedCategory.id;
+
+  let subcategory = subcategoryInput;
+  let subcategoryId = subcategoryIdInput;
+  const setupSubcategories = setupPayload.subcategories.filter(
+    (entry) => entry.isActive && entry.categoryId === categoryId
+  );
+
+  if (subcategoryIdInput) {
+    const linked = setupSubcategories.find((entry) => entry.id === subcategoryIdInput);
+    if (!linked) {
+      return NextResponse.json(
+        { message: "Selected subcategory does not belong to the selected category." },
+        { status: 400 }
+      );
+    }
+    subcategory = linked.name;
+    subcategoryId = linked.id;
+  } else if (subcategoryInput) {
+    const linked = setupSubcategories.find(
+      (entry) =>
+        normalizeMasterDataKey(entry.name) === normalizeMasterDataKey(subcategoryInput)
+    );
+    if (linked) {
+      subcategory = linked.name;
+      subcategoryId = linked.id;
+    }
+  }
+
+  let requestedVendorId = requestedVendorIdInput;
+  let requestedVendorName = requestedVendorNameInput;
+
+  if (requestedVendorIdInput) {
+    const vendor = await prisma.inventorySupplier.findUnique({
+      where: { id: requestedVendorIdInput },
+      select: { id: true, name: true }
+    });
+    if (!vendor) {
+      return NextResponse.json({ message: "Selected vendor was not found." }, { status: 404 });
+    }
+    requestedVendorId = vendor.id;
+    requestedVendorName = vendor.name;
+  } else if (requestedVendorNameInput) {
+    const vendorByName = await prisma.inventorySupplier.findFirst({
+      where: {
+        name: {
+          equals: requestedVendorNameInput,
+          mode: "insensitive"
+        }
+      },
+      select: {
+        id: true,
+        name: true
+      }
+    });
+    if (vendorByName) {
+      requestedVendorId = vendorByName.id;
+      requestedVendorName = vendorByName.name;
+    }
+  }
 
   const estimatedTotalCost = roundCurrency(
     lineItems.reduce((sum, line) => sum + line.estimatedTotalCost, 0)
   );
   const submittedAt = new Date();
+  const resolvedLiveProjectSpendType =
+    type === "LIVE_PROJECT_PURCHASE"
+      ? breakdownReportId
+        ? "BREAKDOWN"
+        : liveProjectSpendType || "NORMAL_EXPENSE"
+      : null;
   const payload = {
     schemaVersion: 1 as const,
     requisitionCode: buildRequisitionCode(submittedAt),
     type,
     status: "SUBMITTED" as const,
-    liveProjectSpendType: type === "LIVE_PROJECT_PURCHASE" ? liveProjectSpendType : null,
+    liveProjectSpendType: resolvedLiveProjectSpendType,
     category,
-    subcategory: normalizeNullableText(body?.subcategory),
-    requestedVendorName: normalizeNullableText(body?.requestedVendorName),
+    subcategory,
+    categoryId,
+    subcategoryId,
+    requestedVendorId,
+    requestedVendorName,
     notes: normalizeNullableText(body?.notes),
     submittedAt: submittedAt.toISOString(),
     submittedBy: {
@@ -420,7 +687,8 @@ export async function POST(request: NextRequest) {
       clientId,
       projectId,
       rigId,
-      maintenanceRequestId
+      maintenanceRequestId,
+      breakdownReportId
     },
     lineItems,
     totals: {
@@ -463,7 +731,8 @@ export async function POST(request: NextRequest) {
         status: payload.status,
         estimatedTotalCost: payload.totals.estimatedTotalCost,
         projectId: payload.context.projectId,
-        rigId: payload.context.rigId
+        rigId: payload.context.rigId,
+        breakdownReportId: payload.context.breakdownReportId || null
       },
       actor: auditActorFromSession(auth.session)
     });
@@ -492,6 +761,7 @@ function serializeRequisitionRow(
     projectName: string | null;
     rigCode: string | null;
     maintenanceRequestCode: string | null;
+    breakdownTitle: string | null;
   }
 ): RequisitionRowOutput {
   return {
@@ -502,16 +772,23 @@ function serializeRequisitionRow(
     liveProjectSpendType: payload.liveProjectSpendType,
     category: payload.category,
     subcategory: payload.subcategory,
+    categoryId: payload.categoryId,
+    subcategoryId: payload.subcategoryId,
+    requestedVendorId: payload.requestedVendorId,
     requestedVendorName: payload.requestedVendorName,
     notes: payload.notes,
     submittedAt: payload.submittedAt,
     submittedBy: payload.submittedBy,
-    context: payload.context,
+    context: {
+      ...payload.context,
+      breakdownReportId: payload.context.breakdownReportId || null
+    },
     contextLabels: {
       clientName: contextLabels?.clientName || null,
       projectName: contextLabels?.projectName || null,
       rigCode: contextLabels?.rigCode || null,
-      maintenanceRequestCode: contextLabels?.maintenanceRequestCode || null
+      maintenanceRequestCode: contextLabels?.maintenanceRequestCode || null,
+      breakdownTitle: contextLabels?.breakdownTitle || null
     },
     lineItems: payload.lineItems,
     totals: payload.totals,
@@ -573,6 +850,49 @@ function parseDateOrNull(value: string | null, endOfDay: boolean) {
   return parsed;
 }
 
+function parseIsoTimestamp(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed;
+}
+
+function getRequisitionSortTimestamp(entry: {
+  row: {
+    createdAt: Date;
+  };
+  payload: Pick<PurchaseRequisitionPayload, "submittedAt">;
+}) {
+  const submittedAt = parseIsoTimestamp(entry.payload.submittedAt);
+  if (submittedAt) {
+    return submittedAt.getTime();
+  }
+  return entry.row.createdAt.getTime();
+}
+
+async function resolveRequisitionSetupPayload() {
+  const latestSetup = await prisma.summaryReport.findFirst({
+    where: {
+      reportType: PURCHASE_REQUISITION_SETUP_REPORT_TYPE
+    },
+    orderBy: [{ reportDate: "desc" }, { updatedAt: "desc" }],
+    select: {
+      payloadJson: true
+    }
+  });
+
+  const parsed = parsePurchaseRequisitionSetupPayload(latestSetup?.payloadJson || null);
+  if (parsed && parsed.categories.length > 0) {
+    return parsed;
+  }
+
+  return buildDefaultRequisitionSetupPayload();
+}
+
 function normalizeNullableId(value: unknown) {
   if (typeof value !== "string") {
     return null;
@@ -582,6 +902,15 @@ function normalizeNullableId(value: unknown) {
     return null;
   }
   return normalized;
+}
+
+function isMaintenanceOperationalOpen(status: string | null | undefined) {
+  const normalized = (status || "").trim().toUpperCase();
+  return (
+    normalized === "OPEN" ||
+    normalized === "IN_REPAIR" ||
+    normalized === "WAITING_FOR_PARTS"
+  );
 }
 
 function normalizeText(value: unknown) {

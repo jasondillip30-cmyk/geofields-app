@@ -1,4 +1,4 @@
-import { Prisma, ProjectStatus } from "@prisma/client";
+import { Prisma, ProjectContractType, ProjectStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
@@ -27,6 +27,17 @@ function parseProjectStatus(value: unknown): ProjectStatus {
   return ProjectStatus.PLANNED;
 }
 
+function parseProjectContractType(value: unknown): ProjectContractType {
+  if (typeof value !== "string") {
+    return ProjectContractType.PER_METER;
+  }
+  const upper = value.toUpperCase();
+  if (upper in ProjectContractType) {
+    return ProjectContractType[upper as keyof typeof ProjectContractType];
+  }
+  return ProjectContractType.PER_METER;
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ projectId: string }> }
@@ -42,15 +53,29 @@ export async function PUT(
   const clientId = typeof body?.clientId === "string" ? body.clientId : "";
   const location = typeof body?.location === "string" ? body.location.trim() : "";
   const startDate = typeof body?.startDate === "string" ? body.startDate : "";
-  const rate = Number(body?.contractRatePerM ?? 0);
   const budgetAmount = parsePositiveNumberOrNull(body?.budgetAmount);
   const setupProfile = parseProjectSetupProfileInput(body?.setupProfile);
+  const contractType = parseProjectContractType(body?.contractType);
+  const meterRate = parseNonNegativeNumber(body?.contractRatePerM);
+  const dayRate = parseNonNegativeNumber(body?.contractDayRate);
+  const lumpSumValue = parseNonNegativeNumber(body?.contractLumpSumValue);
+  const estimatedMeters = parseNonNegativeNumber(body?.estimatedMeters ?? setupProfile.expectedMeters);
+  const estimatedDays = parseNonNegativeNumber(body?.estimatedDays);
+  const commercialValidationError = validateCommercialTerms({
+    contractType,
+    meterRate,
+    dayRate,
+    lumpSumValue
+  });
 
-  if (!name || !clientId || !location || !startDate || Number.isNaN(rate)) {
+  if (!name || !clientId || !location || !startDate) {
     return NextResponse.json(
-      { message: "name, clientId, location, startDate, and contractRatePerM are required." },
+      { message: "name, clientId, location, and startDate are required." },
       { status: 400 }
     );
+  }
+  if (commercialValidationError) {
+    return NextResponse.json({ message: commercialValidationError }, { status: 400 });
   }
 
   const existing = await prisma.project.findUnique({ where: { id: projectId } });
@@ -70,7 +95,12 @@ export async function PUT(
         startDate: new Date(startDate),
         endDate: typeof body?.endDate === "string" && body.endDate ? new Date(body.endDate) : null,
         status: parseProjectStatus(body?.status),
-        contractRatePerM: rate,
+        contractType,
+        contractRatePerM: meterRate,
+        contractDayRate: dayRate,
+        contractLumpSumValue: lumpSumValue,
+        estimatedMeters,
+        estimatedDays,
         assignedRigId: typeof body?.assignedRigId === "string" && body.assignedRigId ? body.assignedRigId : null,
         backupRigId: typeof body?.backupRigId === "string" && body.backupRigId ? body.backupRigId : null
       }
@@ -145,6 +175,11 @@ function projectAuditSnapshot(project: {
   assignedRigId: string | null;
   backupRigId: string | null;
   contractRatePerM: number;
+  contractType: string;
+  contractDayRate: number;
+  contractLumpSumValue: number;
+  estimatedMeters: number;
+  estimatedDays: number;
 }) {
   return {
     id: project.id,
@@ -152,9 +187,14 @@ function projectAuditSnapshot(project: {
     clientId: project.clientId,
     location: project.location,
     status: project.status,
+    contractType: project.contractType,
     assignedRigId: project.assignedRigId,
     backupRigId: project.backupRigId,
-    contractRatePerM: project.contractRatePerM
+    contractRatePerM: project.contractRatePerM,
+    contractDayRate: project.contractDayRate,
+    contractLumpSumValue: project.contractLumpSumValue,
+    estimatedMeters: project.estimatedMeters,
+    estimatedDays: project.estimatedDays
   };
 }
 
@@ -209,6 +249,32 @@ function parsePositiveNumberOrNull(value: unknown) {
     return null;
   }
   return parsed;
+}
+
+function parseNonNegativeNumber(value: unknown) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
+}
+
+function validateCommercialTerms(options: {
+  contractType: ProjectContractType;
+  meterRate: number;
+  dayRate: number;
+  lumpSumValue: number;
+}) {
+  if (options.contractType === ProjectContractType.PER_METER && options.meterRate <= 0) {
+    return "Meter rate must be greater than zero for per-meter contracts.";
+  }
+  if (options.contractType === ProjectContractType.DAY_RATE && options.dayRate <= 0) {
+    return "Day rate must be greater than zero for per-day contracts.";
+  }
+  if (options.contractType === ProjectContractType.LUMP_SUM && options.lumpSumValue <= 0) {
+    return "Lump-sum value must be greater than zero for lump-sum contracts.";
+  }
+  return null;
 }
 
 async function upsertProjectSetupArtifacts(

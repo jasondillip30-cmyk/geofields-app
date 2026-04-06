@@ -11,6 +11,7 @@ interface DataTableProps {
   rowClassNames?: string[];
   rowIds?: string[];
   stickyHeader?: boolean;
+  compact?: boolean;
 }
 
 export function DataTable({
@@ -21,12 +22,20 @@ export function DataTable({
   rowClassName,
   rowClassNames,
   rowIds,
-  stickyHeader = true
+  stickyHeader = true,
+  compact = false
 }: DataTableProps) {
+  const headerCellClassName = compact
+    ? "px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500"
+    : "px-3 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500";
+  const bodyCellClassName = compact
+    ? "px-3 py-2 align-top text-xs text-ink-800"
+    : "px-3 py-2.5 align-top text-xs text-ink-800";
+
   return (
     <div
       className={cn(
-        "max-w-full overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03),0_10px_22px_rgba(15,23,42,0.05)]",
+        "max-w-full overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.03),0_6px_14px_rgba(15,23,42,0.04)]",
         className
       )}
     >
@@ -35,7 +44,7 @@ export function DataTable({
           <thead className={cn("border-b border-slate-200/85 bg-slate-50/90", stickyHeader && "sticky top-0 z-10")}>
             <tr>
               {columns.map((column, columnIndex) => (
-                <th key={`column-${columnIndex}`} className="px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                <th key={`column-${columnIndex}`} className={headerCellClassName}>
                   {column}
                 </th>
               ))}
@@ -59,7 +68,7 @@ export function DataTable({
                 {row.map((cell, cellIndex) => (
                   <td
                     key={`cell-${rowIndex}-${cellIndex}`}
-                    className="px-4 py-3 align-top text-[13px] text-ink-800"
+                    className={bodyCellClassName}
                   >
                     {cell}
                   </td>

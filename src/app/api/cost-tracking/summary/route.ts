@@ -1,29 +1,24 @@
-import type { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import {
   calculatePercent,
   COST_SPENDING_CATEGORY_LABELS,
-  deriveCostSpendType,
-  deriveSpendingCategory,
   type CostByMaintenanceRequestRow,
   type CostByProjectRow,
   type CostByRigRow,
   type CostTrackingSummaryPayload,
-  formatTrendBucketLabel,
   buildTrendBucketKey,
+  formatTrendBucketLabel,
   nullableFilter,
   parseDateOrNull,
   resolveTrendGranularity,
   roundCurrency
 } from "@/lib/cost-tracking";
-import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
-import { parseReceiptSubmissionPayload } from "@/lib/receipt-intake-submission";
-import type { ReceiptSpendTag } from "@/lib/receipt-approval-classification";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
-const RECEIPT_SUBMISSION_REPORT_TYPE = "INVENTORY_RECEIPT_SUBMISSION";
 const UNASSIGNED_RIG_ID = "__unassigned_rig__";
 const UNASSIGNED_RIG_NAME = "Unassigned Rig";
 const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
@@ -32,7 +27,7 @@ const UNASSIGNED_PROJECT_NAME = "Unassigned Project";
 interface RigAccumulator {
   id: string;
   name: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceCost: number;
   inventoryPartsCost: number;
   otherExpenseCost: number;
@@ -41,33 +36,27 @@ interface RigAccumulator {
 interface ProjectAccumulator {
   id: string;
   name: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceLinkedCost: number;
   inventoryPurchaseCost: number;
   expenseOnlyCost: number;
 }
 
-interface MaintenanceAccumulator {
+interface MaintenanceBreakdownAccumulator {
+  key: string;
+  type: "MAINTENANCE" | "BREAKDOWN";
   id: string;
   totalLinkedCost: number;
   linkedPurchaseCount: number;
+  rigId: string | null;
 }
 
 interface TrendAccumulator {
   bucketStart: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceCost: number;
   inventoryCost: number;
   nonInventoryCost: number;
-}
-
-interface MovementExpenseContext {
-  maintenanceRequestIds: Set<string>;
-}
-
-interface ReceiptExpenseContext {
-  tag: ReceiptSpendTag | null;
-  maintenanceRequestId: string | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -81,295 +70,262 @@ export async function GET(request: NextRequest) {
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
 
-  const where: Prisma.ExpenseWhereInput = withFinancialExpenseApproval({
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(fromDate || toDate
-      ? {
-          date: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {})
-          }
-        }
-      : {})
+  const spendContext = await buildRecognizedSpendContext({
+    clientId,
+    rigId,
+    fromDate,
+    toDate
   });
 
-  const expenses = await prisma.expense.findMany({
-    where,
-    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-    include: {
-      rig: { select: { id: true, rigCode: true } },
-      project: { select: { id: true, name: true } }
-    }
-  });
+  const rawExpenses = spendContext.rawExpenses;
+  const expenses = spendContext.recognizedExpenses;
+  const maintenanceRequests = spendContext.maintenanceRequests;
+  const classifiedRows = spendContext.classifiedRows;
+  const purposeTotals = spendContext.purposeTotals;
+  const categoryTotals = spendContext.categoryTotals;
+  const classificationAudit = spendContext.classificationAudit;
 
-  const expenseIds = expenses.map((entry) => entry.id);
-  const expenseIdSet = new Set(expenseIds);
-  const [movements, receiptSubmissionRows] = await Promise.all([
-    expenseIds.length
-      ? prisma.inventoryMovement.findMany({
-          where: { expenseId: { in: expenseIds } },
-          select: {
-            expenseId: true,
-            maintenanceRequestId: true
-          }
-        })
-      : Promise.resolve([]),
-    prisma.summaryReport.findMany({
-      where: {
-        reportType: RECEIPT_SUBMISSION_REPORT_TYPE,
-        ...(clientId ? { clientId } : {})
-      },
-      select: {
-        payloadJson: true
-      }
-    })
-  ]);
-
-  const movementContextByExpenseId = new Map<string, MovementExpenseContext>();
-  for (const movement of movements) {
-    if (!movement.expenseId) {
-      continue;
-    }
-    const context = movementContextByExpenseId.get(movement.expenseId) || {
-      maintenanceRequestIds: new Set<string>()
-    };
-    if (movement.maintenanceRequestId) {
-      context.maintenanceRequestIds.add(movement.maintenanceRequestId);
-    }
-    movementContextByExpenseId.set(movement.expenseId, context);
-  }
-
-  const receiptContextByExpenseId = new Map<string, ReceiptExpenseContext>();
-  for (const row of receiptSubmissionRows) {
-    const parsed = parseReceiptSubmissionPayload(row.payloadJson);
-    const mappedExpenseId = parsed?.resolution?.expenseId || "";
-    if (!parsed || parsed.status !== "APPROVED" || !mappedExpenseId || !expenseIdSet.has(mappedExpenseId)) {
-      continue;
-    }
-    receiptContextByExpenseId.set(mappedExpenseId, {
-      tag: parsed.classification?.tag || null,
-      maintenanceRequestId: parsed.normalizedDraft?.linkContext.maintenanceRequestId || null
-    });
-  }
-
-  const maintenanceRequestIds = new Set<string>();
-  for (const context of movementContextByExpenseId.values()) {
-    for (const maintenanceRequestId of context.maintenanceRequestIds) {
-      maintenanceRequestIds.add(maintenanceRequestId);
+  const maintenanceRequestMap = new Map(maintenanceRequests.map((entry) => [entry.id, entry]));
+  const breakdownIds = new Set<string>();
+  for (const row of classifiedRows) {
+    if (row.breakdownReportId) {
+      breakdownIds.add(row.breakdownReportId);
     }
   }
-  for (const context of receiptContextByExpenseId.values()) {
-    if (context.maintenanceRequestId) {
-      maintenanceRequestIds.add(context.maintenanceRequestId);
+  for (const maintenanceRequest of maintenanceRequests) {
+    if (maintenanceRequest.breakdownReportId) {
+      breakdownIds.add(maintenanceRequest.breakdownReportId);
     }
   }
 
-  const maintenanceRequests = maintenanceRequestIds.size
-    ? await prisma.maintenanceRequest.findMany({
-        where: { id: { in: Array.from(maintenanceRequestIds) } },
+  const breakdownRows = breakdownIds.size
+    ? await prisma.breakdownReport.findMany({
+        where: { id: { in: Array.from(breakdownIds) } },
         select: {
           id: true,
-          requestCode: true,
-          urgency: true,
+          title: true,
+          severity: true,
           status: true,
-          rig: {
-            select: {
-              rigCode: true
-            }
-          }
+          rig: { select: { rigCode: true } }
         }
       })
     : [];
-  const maintenanceRequestMap = new Map(maintenanceRequests.map((entry) => [entry.id, entry]));
+  const breakdownById = new Map(breakdownRows.map((entry) => [entry.id, entry]));
+
+  const linkedProjectIds = Array.from(
+    new Set(classifiedRows.map((entry) => entry.linkedProjectId).filter((value): value is string => Boolean(value)))
+  );
+  const linkedRigIds = Array.from(
+    new Set(classifiedRows.map((entry) => entry.linkedRigId).filter((value): value is string => Boolean(value)))
+  );
+  const [linkedProjects, linkedRigs] = await Promise.all([
+    linkedProjectIds.length
+      ? prisma.project.findMany({
+          where: { id: { in: linkedProjectIds } },
+          select: { id: true, name: true }
+        })
+      : Promise.resolve([]),
+    linkedRigIds.length
+      ? prisma.rig.findMany({
+          where: { id: { in: linkedRigIds } },
+          select: { id: true, rigCode: true }
+        })
+      : Promise.resolve([])
+  ]);
+  const projectNameById = new Map(linkedProjects.map((entry) => [entry.id, entry.name]));
+  const rigCodeById = new Map(linkedRigs.map((entry) => [entry.id, entry.rigCode]));
+
+  const rigMap = new Map<string, RigAccumulator>();
+  const projectMap = new Map<string, ProjectAccumulator>();
+  const maintenanceBreakdownMap = new Map<string, MaintenanceBreakdownAccumulator>();
+  const trendMap = new Map<string, TrendAccumulator>();
 
   const trendGranularity = resolveTrendGranularity({
     fromDate,
     toDate,
-    dates: expenses.map((entry) => entry.date)
+    dates: classifiedRows
+      .map((entry) => new Date(entry.date))
+      .filter((entry) => !Number.isNaN(entry.getTime()))
   });
 
-  const rigMap = new Map<string, RigAccumulator>();
-  const projectMap = new Map<string, ProjectAccumulator>();
-  const maintenanceMap = new Map<string, MaintenanceAccumulator>();
-  const trendMap = new Map<string, TrendAccumulator>();
-  const spendingCategoryTotals = new Map<keyof typeof COST_SPENDING_CATEGORY_LABELS, number>();
-  (Object.keys(COST_SPENDING_CATEGORY_LABELS) as Array<keyof typeof COST_SPENDING_CATEGORY_LABELS>).forEach((key) =>
-    spendingCategoryTotals.set(key, 0)
-  );
-
-  let totalApprovedExpenses = 0;
-  let totalMaintenanceRelatedCost = 0;
-  let totalInventoryRelatedCost = 0;
-  let totalNonInventoryExpenseCost = 0;
-
-  for (const expense of expenses) {
-    totalApprovedExpenses += expense.amount;
-    const movementContext = movementContextByExpenseId.get(expense.id);
-    const receiptContext = receiptContextByExpenseId.get(expense.id);
-
-    const linkedMaintenanceRequestIds = new Set<string>();
-    if (receiptContext?.maintenanceRequestId) {
-      linkedMaintenanceRequestIds.add(receiptContext.maintenanceRequestId);
-    }
-    for (const maintenanceRequestId of movementContext?.maintenanceRequestIds || []) {
-      linkedMaintenanceRequestIds.add(maintenanceRequestId);
-    }
-
-    const validLinkedMaintenanceRequestIds = Array.from(linkedMaintenanceRequestIds).filter((maintenanceRequestId) => {
-      const linkedRequest = maintenanceRequestMap.get(maintenanceRequestId);
-      return linkedRequest ? linkedRequest.status !== "DENIED" : true;
-    });
-
-    const spendType = deriveCostSpendType({
-      receiptTag: receiptContext?.tag || null,
-      hasInventoryMovement: Boolean(movementContext),
-      hasMaintenanceLink: validLinkedMaintenanceRequestIds.length > 0,
-      entrySource: expense.entrySource,
-      category: expense.category,
-      subcategory: expense.subcategory,
-      notes: expense.notes
-    });
-
-    if (spendType === "MAINTENANCE") {
-      totalMaintenanceRelatedCost += expense.amount;
-    } else if (spendType === "INVENTORY") {
-      totalInventoryRelatedCost += expense.amount;
-    } else {
-      totalNonInventoryExpenseCost += expense.amount;
-    }
-
-    const spendingCategory = deriveSpendingCategory({
-      spendType,
-      category: expense.category,
-      subcategory: expense.subcategory,
-      notes: expense.notes
-    });
-    spendingCategoryTotals.set(
-      spendingCategory,
-      (spendingCategoryTotals.get(spendingCategory) || 0) + expense.amount
-    );
-
-    const rigKey = expense.rigId || UNASSIGNED_RIG_ID;
-    const rigName = expense.rig?.rigCode || UNASSIGNED_RIG_NAME;
+  for (const row of classifiedRows) {
+    const rigKey = row.linkedRigId || UNASSIGNED_RIG_ID;
+    const rigName = row.linkedRigId ? rigCodeById.get(row.linkedRigId) || row.linkedRigId : UNASSIGNED_RIG_NAME;
     const rigEntry = rigMap.get(rigKey) || {
       id: rigKey,
       name: rigName,
-      totalApprovedCost: 0,
+      totalRecognizedCost: 0,
       maintenanceCost: 0,
       inventoryPartsCost: 0,
       otherExpenseCost: 0
     };
-    rigEntry.totalApprovedCost += expense.amount;
-    if (spendType === "MAINTENANCE") {
-      rigEntry.maintenanceCost += expense.amount;
-    } else if (spendType === "INVENTORY") {
-      rigEntry.inventoryPartsCost += expense.amount;
+    rigEntry.totalRecognizedCost += row.amount;
+    if (row.purposeBucket === "MAINTENANCE_COST" || row.purposeBucket === "BREAKDOWN_COST") {
+      rigEntry.maintenanceCost += row.amount;
+    } else if (row.purposeBucket === "STOCK_REPLENISHMENT") {
+      rigEntry.inventoryPartsCost += row.amount;
     } else {
-      rigEntry.otherExpenseCost += expense.amount;
+      rigEntry.otherExpenseCost += row.amount;
     }
     rigMap.set(rigKey, rigEntry);
 
-    const projectKey = expense.projectId || UNASSIGNED_PROJECT_ID;
-    const projectName = expense.project?.name || UNASSIGNED_PROJECT_NAME;
+    const projectKey = row.linkedProjectId || UNASSIGNED_PROJECT_ID;
+    const projectName = row.linkedProjectId
+      ? projectNameById.get(row.linkedProjectId) || row.linkedProjectId
+      : UNASSIGNED_PROJECT_NAME;
     const projectEntry = projectMap.get(projectKey) || {
       id: projectKey,
       name: projectName,
-      totalApprovedCost: 0,
+      totalRecognizedCost: 0,
       maintenanceLinkedCost: 0,
       inventoryPurchaseCost: 0,
       expenseOnlyCost: 0
     };
-    projectEntry.totalApprovedCost += expense.amount;
-    if (spendType === "MAINTENANCE") {
-      projectEntry.maintenanceLinkedCost += expense.amount;
-    } else if (spendType === "INVENTORY") {
-      projectEntry.inventoryPurchaseCost += expense.amount;
+    projectEntry.totalRecognizedCost += row.amount;
+    if (row.purposeBucket === "MAINTENANCE_COST" || row.purposeBucket === "BREAKDOWN_COST") {
+      projectEntry.maintenanceLinkedCost += row.amount;
+    } else if (row.purposeBucket === "STOCK_REPLENISHMENT") {
+      projectEntry.inventoryPurchaseCost += row.amount;
     } else {
-      projectEntry.expenseOnlyCost += expense.amount;
+      projectEntry.expenseOnlyCost += row.amount;
     }
     projectMap.set(projectKey, projectEntry);
 
-    if (validLinkedMaintenanceRequestIds.length > 0) {
-      const apportionedAmount = expense.amount / validLinkedMaintenanceRequestIds.length;
-      for (const maintenanceRequestId of validLinkedMaintenanceRequestIds) {
-        const maintenanceEntry = maintenanceMap.get(maintenanceRequestId) || {
-          id: maintenanceRequestId,
-          totalLinkedCost: 0,
-          linkedPurchaseCount: 0
-        };
-        maintenanceEntry.totalLinkedCost += apportionedAmount;
-        maintenanceEntry.linkedPurchaseCount += 1;
-        maintenanceMap.set(maintenanceRequestId, maintenanceEntry);
+    if (row.breakdownReportId) {
+      const key = `breakdown:${row.breakdownReportId}`;
+      const existing = maintenanceBreakdownMap.get(key) || {
+        key,
+        type: "BREAKDOWN" as const,
+        id: row.breakdownReportId,
+        totalLinkedCost: 0,
+        linkedPurchaseCount: 0,
+        rigId: row.linkedRigId || null
+      };
+      existing.totalLinkedCost += row.amount;
+      existing.linkedPurchaseCount += 1;
+      if (!existing.rigId && row.linkedRigId) {
+        existing.rigId = row.linkedRigId;
       }
+      maintenanceBreakdownMap.set(key, existing);
+    } else if (row.maintenanceRequestId) {
+      const key = `maintenance:${row.maintenanceRequestId}`;
+      const existing = maintenanceBreakdownMap.get(key) || {
+        key,
+        type: "MAINTENANCE" as const,
+        id: row.maintenanceRequestId,
+        totalLinkedCost: 0,
+        linkedPurchaseCount: 0,
+        rigId: row.linkedRigId || null
+      };
+      existing.totalLinkedCost += row.amount;
+      existing.linkedPurchaseCount += 1;
+      if (!existing.rigId && row.linkedRigId) {
+        existing.rigId = row.linkedRigId;
+      }
+      maintenanceBreakdownMap.set(key, existing);
     }
 
-    const trendKey = buildTrendBucketKey(expense.date, trendGranularity);
-    const trendEntry = trendMap.get(trendKey) || {
-      bucketStart: trendKey,
-      totalApprovedCost: 0,
-      maintenanceCost: 0,
-      inventoryCost: 0,
-      nonInventoryCost: 0
-    };
-    trendEntry.totalApprovedCost += expense.amount;
-    if (spendType === "MAINTENANCE") {
-      trendEntry.maintenanceCost += expense.amount;
-    } else if (spendType === "INVENTORY") {
-      trendEntry.inventoryCost += expense.amount;
-    } else {
-      trendEntry.nonInventoryCost += expense.amount;
+    const parsedDate = new Date(row.date);
+    if (!Number.isNaN(parsedDate.getTime())) {
+      const trendKey = buildTrendBucketKey(parsedDate, trendGranularity);
+      const trendEntry = trendMap.get(trendKey) || {
+        bucketStart: trendKey,
+        totalRecognizedCost: 0,
+        maintenanceCost: 0,
+        inventoryCost: 0,
+        nonInventoryCost: 0
+      };
+      trendEntry.totalRecognizedCost += row.amount;
+      if (row.purposeBucket === "MAINTENANCE_COST" || row.purposeBucket === "BREAKDOWN_COST") {
+        trendEntry.maintenanceCost += row.amount;
+      } else if (row.purposeBucket === "STOCK_REPLENISHMENT") {
+        trendEntry.inventoryCost += row.amount;
+      } else {
+        trendEntry.nonInventoryCost += row.amount;
+      }
+      trendMap.set(trendKey, trendEntry);
     }
-    trendMap.set(trendKey, trendEntry);
   }
+
+  const totalRecognizedSpend = purposeTotals.recognizedSpendTotal;
+  const totalMaintenanceRelatedCost = roundCurrency(
+    purposeTotals.breakdownCost + purposeTotals.maintenanceCost
+  );
+  const totalInventoryRelatedCost = purposeTotals.stockReplenishmentCost;
+  const totalNonInventoryExpenseCost = roundCurrency(
+    purposeTotals.operatingCost + purposeTotals.otherUnlinkedCost
+  );
 
   const costByRig: CostByRigRow[] = Array.from(rigMap.values())
     .map((entry) => ({
       id: entry.id,
       name: entry.name,
-      totalApprovedCost: roundCurrency(entry.totalApprovedCost),
+      totalRecognizedCost: roundCurrency(entry.totalRecognizedCost),
       maintenanceCost: roundCurrency(entry.maintenanceCost),
       inventoryPartsCost: roundCurrency(entry.inventoryPartsCost),
       otherExpenseCost: roundCurrency(entry.otherExpenseCost),
-      percentOfTotalSpend: calculatePercent(entry.totalApprovedCost, totalApprovedExpenses)
+      percentOfTotalSpend: calculatePercent(entry.totalRecognizedCost, totalRecognizedSpend)
     }))
-    .sort((a, b) => b.totalApprovedCost - a.totalApprovedCost);
+    .sort((a, b) => b.totalRecognizedCost - a.totalRecognizedCost);
 
   const costByProject: CostByProjectRow[] = Array.from(projectMap.values())
     .map((entry) => ({
       id: entry.id,
       name: entry.name,
-      totalApprovedCost: roundCurrency(entry.totalApprovedCost),
+      totalRecognizedCost: roundCurrency(entry.totalRecognizedCost),
       maintenanceLinkedCost: roundCurrency(entry.maintenanceLinkedCost),
       inventoryPurchaseCost: roundCurrency(entry.inventoryPurchaseCost),
       expenseOnlyCost: roundCurrency(entry.expenseOnlyCost),
-      percentOfTotalSpend: calculatePercent(entry.totalApprovedCost, totalApprovedExpenses)
+      percentOfTotalSpend: calculatePercent(entry.totalRecognizedCost, totalRecognizedSpend)
     }))
-    .sort((a, b) => b.totalApprovedCost - a.totalApprovedCost);
+    .sort((a, b) => b.totalRecognizedCost - a.totalRecognizedCost);
 
-  const costByMaintenanceRequest: CostByMaintenanceRequestRow[] = Array.from(maintenanceMap.values())
+  const costByMaintenanceRequest: CostByMaintenanceRequestRow[] = Array.from(
+    maintenanceBreakdownMap.values()
+  )
     .map((entry) => {
-      const request = maintenanceRequestMap.get(entry.id);
+      if (entry.type === "BREAKDOWN") {
+        const breakdown = breakdownById.get(entry.id);
+        return {
+          id: entry.id,
+          reference: breakdown?.title ? `Breakdown: ${breakdown.title}` : `Breakdown ${entry.id.slice(-6).toUpperCase()}`,
+          rigName:
+            (entry.rigId ? rigCodeById.get(entry.rigId) : null) ||
+            breakdown?.rig?.rigCode ||
+            UNASSIGNED_RIG_NAME,
+          totalLinkedCost: roundCurrency(entry.totalLinkedCost),
+          linkedPurchaseCount: entry.linkedPurchaseCount,
+          urgency: breakdown?.severity || null,
+          status: breakdown?.status || "OPEN"
+        };
+      }
+
+      const maintenance = maintenanceRequestMap.get(entry.id);
       return {
         id: entry.id,
-        reference: request?.requestCode || entry.id,
-        rigName: request?.rig?.rigCode || UNASSIGNED_RIG_NAME,
+        reference: maintenance?.requestCode || `Maintenance ${entry.id.slice(-6).toUpperCase()}`,
+        rigName:
+          (entry.rigId ? rigCodeById.get(entry.rigId) : null) ||
+          maintenance?.rig?.rigCode ||
+          UNASSIGNED_RIG_NAME,
         totalLinkedCost: roundCurrency(entry.totalLinkedCost),
         linkedPurchaseCount: entry.linkedPurchaseCount,
-        urgency: request?.urgency || null,
-        status: request?.status || null
+        urgency: maintenance?.urgency || null,
+        status: maintenance?.status || null
       };
     })
     .sort((a, b) => b.totalLinkedCost - a.totalLinkedCost);
 
-  const spendingCategoryBreakdown = (Object.keys(COST_SPENDING_CATEGORY_LABELS) as Array<keyof typeof COST_SPENDING_CATEGORY_LABELS>)
+  const spendingCategoryBreakdown = (
+    Object.keys(COST_SPENDING_CATEGORY_LABELS) as Array<keyof typeof COST_SPENDING_CATEGORY_LABELS>
+  )
     .map((key) => {
-      const totalCost = spendingCategoryTotals.get(key) || 0;
+      const totalCost = categoryTotals[key] || 0;
       return {
         key,
         label: COST_SPENDING_CATEGORY_LABELS[key],
         totalCost: roundCurrency(totalCost),
-        percentOfTotalSpend: calculatePercent(totalCost, totalApprovedExpenses)
+        percentOfTotalSpend: calculatePercent(totalCost, totalRecognizedSpend)
       };
     })
     .sort((a, b) => b.totalCost - a.totalCost);
@@ -379,7 +335,7 @@ export async function GET(request: NextRequest) {
     .map((entry) => ({
       bucketStart: entry.bucketStart,
       label: formatTrendBucketLabel(entry.bucketStart, trendGranularity),
-      totalApprovedCost: roundCurrency(entry.totalApprovedCost),
+      totalRecognizedCost: roundCurrency(entry.totalRecognizedCost),
       maintenanceCost: roundCurrency(entry.maintenanceCost),
       inventoryCost: roundCurrency(entry.inventoryCost),
       nonInventoryCost: roundCurrency(entry.nonInventoryCost)
@@ -397,7 +353,7 @@ export async function GET(request: NextRequest) {
       to: request.nextUrl.searchParams.get("to")
     },
     overview: {
-      totalApprovedExpenses: roundCurrency(totalApprovedExpenses),
+      totalRecognizedSpend: roundCurrency(totalRecognizedSpend),
       totalMaintenanceRelatedCost: roundCurrency(totalMaintenanceRelatedCost),
       totalInventoryRelatedCost: roundCurrency(totalInventoryRelatedCost),
       totalNonInventoryExpenseCost: roundCurrency(totalNonInventoryExpenseCost),
@@ -405,14 +361,14 @@ export async function GET(request: NextRequest) {
         ? {
             id: highestCostRig.id,
             name: highestCostRig.name,
-            totalApprovedCost: highestCostRig.totalApprovedCost
+            totalRecognizedCost: highestCostRig.totalRecognizedCost
           }
         : null,
       highestCostProject: highestCostProject
         ? {
             id: highestCostProject.id,
             name: highestCostProject.name,
-            totalApprovedCost: highestCostProject.totalApprovedCost
+            totalRecognizedCost: highestCostProject.totalRecognizedCost
           }
         : null
     },
@@ -421,16 +377,24 @@ export async function GET(request: NextRequest) {
     costByProject,
     costByMaintenanceRequest,
     spendingCategoryBreakdown,
-    costTrend
+    costTrend,
+    classificationAudit
   };
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[cost-tracking][summary]", {
+  debugLog(
+    "[cost-tracking][summary]",
+    {
       filters: response.filters,
-      approvedExpenseCount: expenses.length,
-      totalApprovedExpenses: response.overview.totalApprovedExpenses
-    });
-  }
+      approvedExpenseCount: rawExpenses.length,
+      recognizedExpenseCount: expenses.length,
+      recognition: spendContext.recognitionStats,
+      totalRecognizedSpend: response.overview.totalRecognizedSpend,
+      purposeTotals: classificationAudit.purposeTotals,
+      legacyUnlinkedCount: classificationAudit.legacyUnlinkedCount,
+      reconciliationDelta: classificationAudit.reconciliationDelta
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json(response);
 }

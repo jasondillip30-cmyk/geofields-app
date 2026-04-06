@@ -18,18 +18,26 @@ export interface CostTrackingFilters {
 }
 
 export interface CostOverviewSummary {
-  totalApprovedExpenses: number;
+  totalRecognizedSpend: number;
   totalMaintenanceRelatedCost: number;
   totalInventoryRelatedCost: number;
   totalNonInventoryExpenseCost: number;
-  highestCostRig: { id: string; name: string; totalApprovedCost: number } | null;
-  highestCostProject: { id: string; name: string; totalApprovedCost: number } | null;
+  highestCostRig: {
+    id: string;
+    name: string;
+    totalRecognizedCost: number;
+  } | null;
+  highestCostProject: {
+    id: string;
+    name: string;
+    totalRecognizedCost: number;
+  } | null;
 }
 
 export interface CostByRigRow {
   id: string;
   name: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceCost: number;
   inventoryPartsCost: number;
   otherExpenseCost: number;
@@ -39,7 +47,7 @@ export interface CostByRigRow {
 export interface CostByProjectRow {
   id: string;
   name: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceLinkedCost: number;
   inventoryPurchaseCost: number;
   expenseOnlyCost: number;
@@ -66,7 +74,7 @@ export interface SpendingCategoryBreakdownRow {
 export interface CostTrendRow {
   bucketStart: string;
   label: string;
-  totalApprovedCost: number;
+  totalRecognizedCost: number;
   maintenanceCost: number;
   inventoryCost: number;
   nonInventoryCost: number;
@@ -81,6 +89,21 @@ export interface CostTrackingSummaryPayload {
   costByMaintenanceRequest: CostByMaintenanceRequestRow[];
   spendingCategoryBreakdown: SpendingCategoryBreakdownRow[];
   costTrend: CostTrendRow[];
+  classificationAudit?: {
+    recognizedSpendTotal: number;
+    purposeTotals: {
+      recognizedSpendTotal: number;
+      breakdownCost: number;
+      maintenanceCost: number;
+      stockReplenishmentCost: number;
+      operatingCost: number;
+      otherUnlinkedCost: number;
+    };
+    categoryTotals: Record<string, number>;
+    purposeCounts: Record<string, number>;
+    legacyUnlinkedCount: number;
+    reconciliationDelta: number;
+  };
 }
 
 export const COST_SPENDING_CATEGORY_LABELS: Record<CostSpendCategoryKey, string> = {

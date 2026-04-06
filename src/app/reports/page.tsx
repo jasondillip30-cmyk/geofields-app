@@ -262,7 +262,7 @@ export default function ReportsPage() {
     if (unassignedTotal > 0) {
       liveAlerts.push({
         type: "Data Linkage Gaps",
-        message: `${unassignedTotal} approved expense linkage gap(s) detected across client/project/rig mapping.`
+        message: `${unassignedTotal} recognized-cost linkage gap(s) detected across client/project/rig mapping.`
       });
     }
 
@@ -301,7 +301,7 @@ export default function ReportsPage() {
         <section className="gf-section">
           <SectionHeader
             title="Core Financial Summary"
-            description="Live approved/finalized reporting across revenue, expense, and profitability."
+            description="Live recognized reporting across revenue, cost, and profitability."
             action={
               <button type="button" onClick={() => void loadSummary(true)} className="gf-btn-subtle inline-flex items-center gap-1">
                 <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
@@ -338,8 +338,8 @@ export default function ReportsPage() {
                   ["Projects worked today", String(summary.summaries.daily.projectsWorked)],
                   ["Rigs used today", String(summary.summaries.daily.rigsUsed)],
                   ["Meters drilled", formatNumber(summary.summaries.daily.metersDrilled)],
-                  ["Revenue (approved)", formatCurrency(summary.summaries.daily.revenue)],
-                  ["Expenses (approved)", formatCurrency(summary.summaries.daily.expenses)],
+                  ["Revenue (recognized)", formatCurrency(summary.summaries.daily.revenue)],
+                  ["Expenses (recognized)", formatCurrency(summary.summaries.daily.expenses)],
                   ["Issues reported", String(summary.summaries.daily.issuesReported)]
                 ]}
               />
@@ -358,8 +358,8 @@ export default function ReportsPage() {
                     formatNumber(summary.summaries.weekly.metersDrilled),
                     formatNumber(summary.summaries.monthly.metersDrilled)
                   ],
-                  ["Revenue (approved)", formatCurrency(summary.summaries.weekly.revenue), formatCurrency(summary.summaries.monthly.revenue)],
-                  ["Expenses (approved)", formatCurrency(summary.summaries.weekly.expenses), formatCurrency(summary.summaries.monthly.expenses)],
+                  ["Revenue (recognized)", formatCurrency(summary.summaries.weekly.revenue), formatCurrency(summary.summaries.monthly.revenue)],
+                  ["Expenses (recognized)", formatCurrency(summary.summaries.weekly.expenses), formatCurrency(summary.summaries.monthly.expenses)],
                   ["Profit", formatCurrency(summary.summaries.weekly.profit), formatCurrency(summary.summaries.monthly.profit)],
                   ["Most used rig", summary.summaries.weekly.mostUsedRig, "-"],
                   ["Highest revenue rig", summary.summaries.weekly.highestRevenueRig, "-"],
@@ -401,7 +401,7 @@ export default function ReportsPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading revenue by client...</p>
             ) : summary.reports.revenueByClient.length === 0 ? (
-              <p className="gf-empty-state">No approved revenue-by-client data in current scope.</p>
+              <p className="gf-empty-state">No recognized revenue-by-client data in current scope.</p>
             ) : (
               <DataTable columns={["Client", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByClient)} />
             )}
@@ -411,7 +411,7 @@ export default function ReportsPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading revenue by project...</p>
             ) : summary.reports.revenueByProject.length === 0 ? (
-              <p className="gf-empty-state">No approved revenue-by-project data in current scope.</p>
+              <p className="gf-empty-state">No recognized revenue-by-project data in current scope.</p>
             ) : (
               <DataTable columns={["Project", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByProject)} />
             )}
@@ -423,7 +423,7 @@ export default function ReportsPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading revenue by rig...</p>
             ) : summary.reports.revenueByRig.length === 0 ? (
-              <p className="gf-empty-state">No approved revenue-by-rig data in current scope.</p>
+              <p className="gf-empty-state">No recognized revenue-by-rig data in current scope.</p>
             ) : (
               <DataTable columns={["Rig", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByRig)} />
             )}
@@ -433,7 +433,7 @@ export default function ReportsPage() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading expense categories...</p>
             ) : summary.reports.expensesByCategory.length === 0 ? (
-              <p className="gf-empty-state">No approved expense-category data in current scope.</p>
+              <p className="gf-empty-state">No recognized cost-category data in current scope.</p>
             ) : (
               <DataTable columns={["Category", "Amount"]} rows={renderExpenseRows(summary.reports.expensesByCategory)} />
             )}

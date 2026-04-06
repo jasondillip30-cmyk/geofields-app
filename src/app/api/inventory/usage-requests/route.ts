@@ -1,10 +1,18 @@
-import type { InventoryUsageRequestStatus, Prisma } from "@prisma/client";
+import { Prisma, type InventoryUsageRequestStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { canAccess } from "@/lib/auth/permissions";
-import { buildDateFilter, nullableFilter, parseDateOrNull, parseNumeric, roundCurrency } from "@/lib/inventory-server";
+import { isBreakdownOpenStatus } from "@/lib/breakdown-lifecycle";
+import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
+import {
+  buildDateFilter,
+  nullableFilter,
+  parseDateOrNull,
+  parseNumeric,
+  roundCurrency
+} from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 
 const requestInclude = {
@@ -18,11 +26,30 @@ const requestInclude = {
   },
   project: { select: { id: true, name: true, clientId: true } },
   rig: { select: { id: true, rigCode: true } },
-  maintenanceRequest: { select: { id: true, requestCode: true, status: true } },
+  maintenanceRequest: {
+    select: {
+      id: true,
+      requestCode: true,
+      status: true,
+      breakdownReportId: true
+    }
+  },
+  breakdownReport: {
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      severity: true
+    }
+  },
   location: { select: { id: true, name: true } },
   requestedBy: { select: { id: true, fullName: true, role: true } },
   decidedBy: { select: { id: true, fullName: true, role: true } }
 } as const;
+
+type UsageRequestWithRelations = Prisma.InventoryUsageRequestGetPayload<{
+  include: typeof requestInclude;
+}>;
 
 export async function GET(request: NextRequest) {
   const auth = await requireAnyApiPermission(request, ["inventory:view", "reports:view"]);
@@ -40,37 +67,55 @@ export async function GET(request: NextRequest) {
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const itemId = nullableFilter(request.nextUrl.searchParams.get("itemId"));
-  const statusParam = (request.nextUrl.searchParams.get("status") || "").toUpperCase();
+  const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
+  const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
+  const statusFilter = parseUsageRequestStatusFilter(request.nextUrl.searchParams.get("status"));
   const date = buildDateFilter(fromDate, toDate);
 
-  let statusWhere: Prisma.InventoryUsageRequestWhereInput = {};
-  if (
-    statusParam === "APPROVED" ||
-    statusParam === "REJECTED" ||
-    statusParam === "SUBMITTED" ||
-    statusParam === "PENDING"
-  ) {
-    statusWhere = { status: statusParam as InventoryUsageRequestStatus };
-  } else if (statusParam !== "ALL" && !mineOnly) {
-    statusWhere = { status: { in: ["SUBMITTED", "PENDING"] as const } };
+  const statusWhere = buildUsageStatusWhere(statusFilter, mineOnly);
+
+  const whereClauses: Prisma.InventoryUsageRequestWhereInput[] = [
+    statusWhere,
+    ...(mineOnly ? [{ requestedById: auth.session.userId }] : []),
+    ...(rigId ? [{ rigId }] : []),
+    ...(clientId ? [{ project: { clientId } }] : []),
+    ...(itemId ? [{ itemId }] : []),
+    ...(maintenanceRequestId ? [{ maintenanceRequestId }] : []),
+    ...(breakdownReportId
+      ? [
+          {
+            OR: [{ breakdownReportId }, { maintenanceRequest: { breakdownReportId } }]
+          }
+        ]
+      : []),
+    ...(date ? [{ createdAt: date }] : [])
+  ];
+  const where: Prisma.InventoryUsageRequestWhereInput =
+    whereClauses.length === 1 ? whereClauses[0] : { AND: whereClauses };
+
+  let rows: UsageRequestWithRelations[] = [];
+  try {
+    rows = await prisma.inventoryUsageRequest.findMany({
+      where,
+      include: requestInclude,
+      orderBy: [{ createdAt: "desc" }]
+    });
+  } catch (error) {
+    return handleUsageRequestApiError(error, {
+      operation: "list",
+      context: {
+        mineOnly,
+        statusFilter,
+        rigId,
+        clientId,
+        itemId,
+        maintenanceRequestId,
+        breakdownReportId
+      }
+    });
   }
 
-  const where: Prisma.InventoryUsageRequestWhereInput = {
-    ...statusWhere,
-    ...(mineOnly ? { requestedById: auth.session.userId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(clientId ? { project: { clientId } } : {}),
-    ...(itemId ? { itemId } : {}),
-    ...(date ? { createdAt: date } : {})
-  };
-
-  const rows = await prisma.inventoryUsageRequest.findMany({
-    where,
-    include: requestInclude,
-    orderBy: [{ createdAt: "desc" }]
-  });
-
-  return NextResponse.json({ data: rows });
+  return NextResponse.json({ data: rows.map(serializeUsageRequestForClient) });
 }
 
 export async function POST(request: NextRequest) {
@@ -84,108 +129,520 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: "Invalid request payload." }, { status: 400 });
   }
 
-  const itemId = typeof payload.itemId === "string" ? payload.itemId : "";
+  const itemId = typeof payload.itemId === "string" ? payload.itemId.trim() : "";
   const quantity = parseNumeric(payload.quantity);
-  const reason = typeof payload.reason === "string" ? payload.reason.trim() : "";
-  const projectId = typeof payload.projectId === "string" && payload.projectId.trim() ? payload.projectId : null;
-  const rigId = typeof payload.rigId === "string" && payload.rigId.trim() ? payload.rigId : null;
-  const maintenanceRequestId =
+  const reasonDetailsRaw =
+    typeof payload.reasonDetails === "string" ? payload.reasonDetails.trim() : "";
+  const legacyReasonRaw =
+    typeof payload.reason === "string" ? payload.reason.trim() : "";
+  let maintenanceRequestId =
     typeof payload.maintenanceRequestId === "string" && payload.maintenanceRequestId.trim()
       ? payload.maintenanceRequestId
       : null;
-  const locationId = typeof payload.locationId === "string" && payload.locationId.trim() ? payload.locationId : null;
-  const requestedForDateRaw =
-    typeof payload.requestedForDate === "string" && payload.requestedForDate.trim() ? payload.requestedForDate : null;
-  const requestedForDate = parseDateOrNull(requestedForDateRaw);
+  const breakdownReportId =
+    typeof payload.breakdownReportId === "string" && payload.breakdownReportId.trim()
+      ? payload.breakdownReportId
+      : null;
+  const projectIdInput =
+    typeof payload.projectId === "string" && payload.projectId.trim()
+      ? payload.projectId
+      : null;
+  const rigIdInput =
+    typeof payload.rigId === "string" && payload.rigId.trim() ? payload.rigId : null;
+  const locationIdInput =
+    typeof payload.locationId === "string" && payload.locationId.trim()
+      ? payload.locationId
+      : typeof payload.sourceLocationId === "string" && payload.sourceLocationId.trim()
+        ? payload.sourceLocationId
+      : null;
+  const reasonType = deriveInventoryUsageReasonType({
+    explicitReasonType:
+      typeof payload.reasonType === "string"
+        ? payload.reasonType
+        : typeof payload.usageReason === "string"
+          ? payload.usageReason
+          : null,
+    maintenanceRequestId,
+    breakdownReportId
+  });
 
   if (!itemId) {
     return NextResponse.json({ message: "Item is required." }, { status: 400 });
   }
   if (quantity === null || quantity <= 0) {
-    return NextResponse.json({ message: "Quantity must be greater than zero." }, { status: 400 });
+    return NextResponse.json(
+      { message: "Quantity must be greater than zero." },
+      { status: 400 }
+    );
   }
-  if (!reason) {
-    return NextResponse.json({ message: "Reason is required." }, { status: 400 });
+  if (maintenanceRequestId && breakdownReportId) {
+    return NextResponse.json(
+      {
+        message:
+          "Link usage request to either maintenance or breakdown, not both."
+      },
+      { status: 400 }
+    );
   }
-  if (!projectId) {
-    return NextResponse.json({ message: "Project is required." }, { status: 400 });
+  if (reasonType === "MAINTENANCE" && breakdownReportId) {
+    return NextResponse.json(
+      {
+        message:
+          "Maintenance usage requests must link only to maintenance. Breakdown linkage is inherited through the maintenance record when applicable."
+      },
+      { status: 400 }
+    );
   }
-  if (!rigId) {
-    return NextResponse.json({ message: "Rig is required." }, { status: 400 });
+  if (reasonType === "BREAKDOWN" && maintenanceRequestId) {
+    return NextResponse.json(
+      {
+        message:
+          "Breakdown usage requests must link only to breakdown. Do not attach maintenanceRequestId for breakdown reason."
+      },
+      { status: 400 }
+    );
   }
-  if (requestedForDateRaw && !requestedForDate) {
-    return NextResponse.json({ message: "Requested date is invalid." }, { status: 400 });
+  if (reasonType === "MAINTENANCE" && !maintenanceRequestId && !rigIdInput) {
+    return NextResponse.json(
+      {
+        message:
+          "Select a rig under maintenance. The system auto-links when there is one open maintenance case."
+      },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "BREAKDOWN" && !breakdownReportId) {
+    return NextResponse.json(
+      { message: "breakdownReportId is required for breakdown usage requests." },
+      { status: 400 }
+    );
+  }
+  if (reasonType !== "MAINTENANCE" && reasonType !== "BREAKDOWN") {
+    return NextResponse.json(
+      {
+        message:
+          "Inventory usage must be linked to either an open maintenance record or an open breakdown record."
+      },
+      { status: 400 }
+    );
   }
 
-  const [item, project, rig, maintenance, location] = await Promise.all([
-    prisma.inventoryItem.findUnique({
-      where: { id: itemId },
-      select: { id: true, name: true, quantityInStock: true, status: true }
-    }),
-    projectId ? prisma.project.findUnique({ where: { id: projectId }, select: { id: true } }) : Promise.resolve(null),
-    rigId ? prisma.rig.findUnique({ where: { id: rigId }, select: { id: true } }) : Promise.resolve(null),
-    maintenanceRequestId
-      ? prisma.maintenanceRequest.findUnique({ where: { id: maintenanceRequestId }, select: { id: true } })
-      : Promise.resolve(null),
-    locationId
-      ? prisma.inventoryLocation.findUnique({ where: { id: locationId }, select: { id: true } })
-      : Promise.resolve(null)
-  ]);
+  try {
+    const [item, maintenanceContextById, maintenanceCandidates, breakdownContext, project, rig, location] =
+      await Promise.all([
+        prisma.inventoryItem.findUnique({
+          where: { id: itemId },
+          select: { id: true, name: true, quantityInStock: true, status: true }
+        }),
+        maintenanceRequestId
+          ? prisma.maintenanceRequest.findUnique({
+              where: { id: maintenanceRequestId },
+              select: {
+                id: true,
+                requestCode: true,
+                status: true,
+                projectId: true,
+                rigId: true,
+                breakdownReportId: true
+              }
+            })
+          : Promise.resolve(null),
+        reasonType === "MAINTENANCE" && !maintenanceRequestId && rigIdInput
+          ? prisma.maintenanceRequest.findMany({
+              where: { rigId: rigIdInput },
+              select: {
+                id: true,
+                requestCode: true,
+                status: true,
+                projectId: true,
+                rigId: true,
+                breakdownReportId: true
+              },
+              orderBy: [{ requestDate: "desc" }, { createdAt: "desc" }]
+            })
+          : Promise.resolve([]),
+        breakdownReportId
+          ? prisma.breakdownReport.findUnique({
+              where: { id: breakdownReportId },
+              select: { id: true, status: true, projectId: true, rigId: true }
+            })
+          : Promise.resolve(null),
+        projectIdInput
+          ? prisma.project.findUnique({ where: { id: projectIdInput }, select: { id: true } })
+          : Promise.resolve(null),
+        rigIdInput
+          ? prisma.rig.findUnique({ where: { id: rigIdInput }, select: { id: true } })
+          : Promise.resolve(null),
+        locationIdInput
+          ? prisma.inventoryLocation.findUnique({
+              where: { id: locationIdInput },
+              select: { id: true }
+            })
+          : Promise.resolve(null)
+      ]);
 
-  if (!item) {
-    return NextResponse.json({ message: "Inventory item not found." }, { status: 404 });
-  }
-  if (item.status !== "ACTIVE") {
-    return NextResponse.json({ message: "Only active inventory items can be requested." }, { status: 400 });
-  }
-  if (projectId && !project) {
-    return NextResponse.json({ message: "Project not found." }, { status: 404 });
-  }
-  if (rigId && !rig) {
-    return NextResponse.json({ message: "Rig not found." }, { status: 404 });
-  }
-  if (maintenanceRequestId && !maintenance) {
-    return NextResponse.json({ message: "Maintenance request not found." }, { status: 404 });
-  }
-  if (locationId && !location) {
-    return NextResponse.json({ message: "Location not found." }, { status: 404 });
-  }
+    let maintenanceContext = maintenanceContextById;
 
-  const created = await prisma.inventoryUsageRequest.create({
-    data: {
-      itemId: item.id,
-      quantity: roundCurrency(quantity),
-      reason,
-      projectId,
-      rigId,
-      maintenanceRequestId,
-      locationId,
-      requestedForDate,
-      requestedById: auth.session.userId,
-      status: "SUBMITTED"
-    },
-    include: requestInclude
+    if (!item) {
+      return NextResponse.json({ message: "Inventory item not found." }, { status: 404 });
+    }
+    if (item.status !== "ACTIVE") {
+      return NextResponse.json(
+        { message: "Only active inventory items can be requested." },
+        { status: 400 }
+      );
+    }
+    if (projectIdInput && !project) {
+      return NextResponse.json({ message: "Project not found." }, { status: 404 });
+    }
+    if (rigIdInput && !rig) {
+      return NextResponse.json({ message: "Rig not found." }, { status: 404 });
+    }
+    if (maintenanceRequestId && !maintenanceContext) {
+      return NextResponse.json(
+        { message: "Maintenance request not found." },
+        { status: 404 }
+      );
+    }
+    if (breakdownReportId && !breakdownContext) {
+      return NextResponse.json(
+        { message: "Breakdown report not found." },
+        { status: 404 }
+      );
+    }
+    if (locationIdInput && !location) {
+      return NextResponse.json({ message: "Location not found." }, { status: 404 });
+    }
+
+    if (
+      reasonType === "MAINTENANCE" &&
+      !maintenanceContext &&
+      !maintenanceRequestId &&
+      rigIdInput
+    ) {
+      const openCandidates = maintenanceCandidates.filter((row) =>
+        isMaintenanceUsageContextOpen(row.status)
+      );
+      if (openCandidates.length === 0) {
+        return NextResponse.json(
+          {
+            message:
+              "No open maintenance case exists for this rig. Open a maintenance case before requesting item usage."
+          },
+          { status: 409 }
+        );
+      }
+      if (openCandidates.length > 1) {
+        return NextResponse.json(
+          {
+            message:
+              "Multiple open maintenance cases exist for this rig. Select a maintenance case before submitting item usage.",
+            options: openCandidates.map((row) => ({
+              id: row.id,
+              requestCode: row.requestCode,
+              status: row.status
+            }))
+          },
+          { status: 409 }
+        );
+      }
+      maintenanceContext = openCandidates[0];
+      maintenanceRequestId = maintenanceContext.id;
+    }
+
+    if (
+      reasonType === "MAINTENANCE" &&
+      maintenanceContext &&
+      rigIdInput &&
+      maintenanceContext.rigId !== rigIdInput
+    ) {
+      return NextResponse.json(
+        {
+          message:
+            "Selected maintenance case does not match the selected rig."
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      reasonType === "MAINTENANCE" &&
+      maintenanceContext &&
+      !isMaintenanceUsageContextOpen(maintenanceContext.status)
+    ) {
+      return NextResponse.json(
+        { message: "Selected maintenance record is not open for item usage." },
+        { status: 409 }
+      );
+    }
+    if (
+      reasonType === "BREAKDOWN" &&
+      breakdownContext &&
+      !isBreakdownOpenStatus(breakdownContext.status)
+    ) {
+      return NextResponse.json(
+        { message: "Selected breakdown is not open for item usage." },
+        { status: 409 }
+      );
+    }
+
+    const resolvedProjectId =
+      reasonType === "MAINTENANCE"
+        ? maintenanceContext?.projectId || null
+        : reasonType === "BREAKDOWN"
+          ? breakdownContext?.projectId || null
+          : null;
+    const resolvedRigId =
+      reasonType === "MAINTENANCE"
+        ? maintenanceContext?.rigId || null
+        : reasonType === "BREAKDOWN"
+          ? breakdownContext?.rigId || null
+          : null;
+    const resolvedMaintenanceRequestId =
+      reasonType === "MAINTENANCE" ? maintenanceContext?.id || null : null;
+    const resolvedBreakdownReportId =
+      reasonType === "BREAKDOWN" ? breakdownContext?.id || null : null;
+    const reason =
+      reasonDetailsRaw ||
+      legacyReasonRaw ||
+      (reasonType === "MAINTENANCE"
+        ? "Maintenance item usage"
+        : reasonType === "BREAKDOWN"
+          ? "Breakdown item usage"
+          : "Operational item usage");
+
+    const created = await prisma.inventoryUsageRequest.create({
+      data: {
+        itemId: item.id,
+        quantity: roundCurrency(quantity),
+        reason,
+        projectId: resolvedProjectId,
+        rigId: resolvedRigId,
+        maintenanceRequestId: resolvedMaintenanceRequestId,
+        breakdownReportId: resolvedBreakdownReportId,
+        locationId: locationIdInput,
+        requestedForDate: new Date(),
+        requestedById: auth.session.userId,
+        status: "SUBMITTED"
+      },
+      include: requestInclude
+    });
+
+    await recordAuditLog({
+      module: "inventory_usage_requests",
+      entityType: "inventory_usage_request",
+      entityId: created.id,
+      action: "create",
+      description: `${auth.session.name} requested ${created.quantity} of ${created.item.name}.`,
+      after: {
+        itemId: created.itemId,
+        quantity: created.quantity,
+        reason: created.reason,
+        reasonType,
+        projectId: created.projectId,
+        rigId: created.rigId,
+        maintenanceRequestId: created.maintenanceRequestId,
+        breakdownReportId: created.breakdownReportId,
+        locationId: created.locationId,
+        requestedForDate: created.requestedForDate,
+        status: created.status
+      },
+      actor: auditActorFromSession(auth.session)
+    });
+
+    return NextResponse.json({ data: serializeUsageRequestForClient(created) }, { status: 201 });
+  } catch (error) {
+    return handleUsageRequestApiError(error, {
+      operation: "create",
+      context: {
+        itemId,
+        quantity,
+        reasonType,
+        maintenanceRequestId,
+        breakdownReportId,
+        locationId: locationIdInput,
+        projectIdInput,
+        rigIdInput
+      }
+    });
+  }
+}
+
+function serializeUsageRequestForClient(row: UsageRequestWithRelations) {
+  const fallbackBreakdownId =
+    row.breakdownReportId || row.maintenanceRequest?.breakdownReportId || null;
+  const normalizedStatus: InventoryUsageRequestStatus =
+    row.status === "APPROVED" || row.approvedMovementId ? "APPROVED" : row.status;
+  const reasonType = deriveInventoryUsageReasonType({
+    explicitReasonType: null,
+    maintenanceRequestId: row.maintenanceRequestId,
+    breakdownReportId: fallbackBreakdownId
   });
 
-  await recordAuditLog({
-    module: "inventory_usage_requests",
-    entityType: "inventory_usage_request",
-    entityId: created.id,
-    action: "create",
-    description: `${auth.session.name} requested ${created.quantity} of ${created.item.name}.`,
-    after: {
-      itemId: created.itemId,
-      quantity: created.quantity,
-      reason: created.reason,
-      projectId: created.projectId,
-      rigId: created.rigId,
-      maintenanceRequestId: created.maintenanceRequestId,
-      locationId: created.locationId,
-      requestedForDate: created.requestedForDate,
-      status: created.status
-    },
-    actor: auditActorFromSession(auth.session)
+  return {
+    ...row,
+    status: normalizedStatus,
+    reason: row.reason,
+    reasonType,
+    breakdownReportId: fallbackBreakdownId,
+    legacyStatusNormalized: normalizedStatus !== row.status
+  };
+}
+
+type UsageRequestStatusFilter =
+  | "ALL"
+  | "SUBMITTED"
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "DEFAULT";
+
+function parseUsageRequestStatusFilter(rawStatus: string | null): UsageRequestStatusFilter {
+  const normalized = (rawStatus || "").trim().toUpperCase();
+  if (!normalized) {
+    return "DEFAULT";
+  }
+  if (
+    normalized === "ALL" ||
+    normalized === "SUBMITTED" ||
+    normalized === "PENDING" ||
+    normalized === "APPROVED" ||
+    normalized === "REJECTED"
+  ) {
+    return normalized;
+  }
+  return "DEFAULT";
+}
+
+function buildUsageStatusWhere(
+  statusFilter: UsageRequestStatusFilter,
+  mineOnly: boolean
+): Prisma.InventoryUsageRequestWhereInput {
+  if (statusFilter === "APPROVED") {
+    return {
+      OR: [{ status: "APPROVED" }, { approvedMovementId: { not: null } }]
+    };
+  }
+  if (statusFilter === "SUBMITTED") {
+    return { status: "SUBMITTED" };
+  }
+  if (statusFilter === "PENDING") {
+    return { status: "PENDING" };
+  }
+  if (statusFilter === "REJECTED") {
+    return { status: "REJECTED" };
+  }
+  if (statusFilter === "ALL") {
+    return {};
+  }
+  if (!mineOnly) {
+    return { status: { in: ["SUBMITTED", "PENDING"] as const } };
+  }
+  return {};
+}
+
+function isMaintenanceUsageContextOpen(status: string | null | undefined) {
+  const normalized = (status || "").trim().toUpperCase();
+  return normalized !== "COMPLETED" && normalized !== "DENIED";
+}
+
+function handleUsageRequestApiError(
+  error: unknown,
+  options: {
+    operation: "list" | "create";
+    context?: Record<string, unknown>;
+  }
+) {
+  const operationLabel = `inventory/usage-requests:${options.operation}`;
+  console.error(`[${operationLabel}]`, {
+    errorName: error instanceof Error ? error.name : "UnknownError",
+    message: getErrorMessage(error),
+    ...(error instanceof Prisma.PrismaClientKnownRequestError
+      ? {
+          prismaCode: error.code,
+          prismaMeta: error.meta || null
+        }
+      : {}),
+    ...(options.context ? { context: options.context } : {})
   });
 
-  return NextResponse.json({ data: created }, { status: 201 });
+  if (isLinkageSchemaMismatch(error)) {
+    return NextResponse.json(
+      {
+        message:
+          "Database schema is out of sync for inventory usage linkage fields. Missing breakdown linkage column(s) in the current database.",
+        code: "SCHEMA_OUT_OF_SYNC",
+        nextStep:
+          "Fix DATABASE_URL, then run: npx prisma migrate dev --name add_breakdown_usage_linkage. If migrate reports local drift, run npx prisma db push for local schema alignment."
+      },
+      { status: 500 }
+    );
+  }
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2003") {
+      return NextResponse.json(
+        {
+          message:
+            "Linked record is invalid or missing. Confirm selected breakdown/maintenance/location still exists."
+        },
+        { status: 409 }
+      );
+    }
+  }
+
+  if (error instanceof Prisma.PrismaClientInitializationError) {
+    return NextResponse.json(
+      {
+        message:
+          "Database connection/configuration error. Verify DATABASE_URL is valid for the configured Prisma provider."
+      },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      message:
+        options.operation === "create"
+          ? "Failed to submit inventory usage request."
+          : "Failed to load inventory usage requests."
+    },
+    { status: 500 }
+  );
+}
+
+function isLinkageSchemaMismatch(error: unknown) {
+  const message = getErrorMessage(error).toLowerCase();
+
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    if (error.code === "P2022") {
+      const column = `${(error.meta as { column?: unknown } | undefined)?.column || ""}`.toLowerCase();
+      if (column.includes("breakdownreportid")) {
+        return true;
+      }
+      if (column.includes("maintenancerequest.breakdownreportid")) {
+        return true;
+      }
+      if (message.includes("breakdownreportid")) {
+        return true;
+      }
+      if (message.includes("maintenancerequest.breakdownreportid")) {
+        return true;
+      }
+    }
+  }
+
+  return (
+    message.includes("column") &&
+    message.includes("breakdownreportid") &&
+    (message.includes("does not exist") || message.includes("unknown"))
+  );
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return String(error);
 }

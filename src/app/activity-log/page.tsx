@@ -74,7 +74,7 @@ export default function ActivityLogPage() {
       const payload = response.ok ? await response.json() : { data: [], filterOptions: { users: [] } };
       setLogs((payload.data || []) as AuditLogRow[]);
       setUsers((payload.filterOptions?.users || []) as UserOption[]);
-    } catch (_error) {
+    } catch {
       setLogs([]);
       setUsers([]);
     } finally {

@@ -1,4 +1,4 @@
-import { RigCondition, RigStatus } from "@prisma/client";
+import { RigCondition, RigCostAllocationBasis, RigStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
@@ -25,6 +25,17 @@ function parseRigCondition(value: unknown): RigCondition {
     return RigCondition[upper as keyof typeof RigCondition];
   }
   return RigCondition.GOOD;
+}
+
+function parseRigCostAllocationBasis(value: unknown): RigCostAllocationBasis {
+  if (typeof value !== "string") {
+    return RigCostAllocationBasis.DAY;
+  }
+  const upper = value.toUpperCase();
+  if (upper in RigCostAllocationBasis) {
+    return RigCostAllocationBasis[upper as keyof typeof RigCostAllocationBasis];
+  }
+  return RigCostAllocationBasis.DAY;
 }
 
 export async function PUT(
@@ -65,7 +76,10 @@ export async function PUT(
         conditionScore: Number(body?.conditionScore ?? 80),
         totalHoursWorked: Number(body?.totalHoursWorked ?? 0),
         totalMetersDrilled: Number(body?.totalMetersDrilled ?? 0),
-        totalLifetimeDays: Number(body?.totalLifetimeDays ?? 0)
+        totalLifetimeDays: Number(body?.totalLifetimeDays ?? 0),
+        costAllocationBasis: parseRigCostAllocationBasis(body?.costAllocationBasis),
+        costRatePerDay: parseNonNegativeNumber(body?.costRatePerDay),
+        costRatePerHour: parseNonNegativeNumber(body?.costRatePerHour)
       }
     });
 
@@ -129,6 +143,9 @@ function rigAuditSnapshot(rig: {
   totalHoursWorked: number;
   totalMetersDrilled: number;
   totalLifetimeDays: number;
+  costAllocationBasis: string;
+  costRatePerDay: number;
+  costRatePerHour: number;
 }) {
   return {
     id: rig.id,
@@ -140,6 +157,17 @@ function rigAuditSnapshot(rig: {
     conditionScore: rig.conditionScore,
     totalHoursWorked: rig.totalHoursWorked,
     totalMetersDrilled: rig.totalMetersDrilled,
-    totalLifetimeDays: rig.totalLifetimeDays
+    totalLifetimeDays: rig.totalLifetimeDays,
+    costAllocationBasis: rig.costAllocationBasis,
+    costRatePerDay: rig.costRatePerDay,
+    costRatePerHour: rig.costRatePerHour
   };
+}
+
+function parseNonNegativeNumber(value: unknown) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return parsed;
 }

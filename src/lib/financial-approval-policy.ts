@@ -9,7 +9,9 @@ export const FINANCIAL_INCLUSION_POLICY = {
   },
   expenses: {
     source: "EXPENSES",
-    approvalStatuses: [...FINANCIAL_EXPENSE_APPROVAL_STATUSES]
+    approvalStatuses: [...FINANCIAL_EXPENSE_APPROVAL_STATUSES],
+    recognitionRule:
+      "Approved purchase requisitions are intent only. Purchase expense is recognized after receipt/manual posting (PURCHASE_COMPLETED with postedAt). Inventory usage expense is recognized at approved stock-out issuance."
   }
 } as const;
 

@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 import { ReceiptIntakePanel } from "@/components/inventory/receipt-intake-panel";
 import { AccessGate } from "@/components/layout/access-gate";
@@ -11,6 +11,7 @@ import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout
 import { useRole } from "@/components/layout/role-provider";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { canAccess } from "@/lib/auth/permissions";
+import { REQUISITION_RECEIPT_ELIGIBLE_STATUS } from "@/lib/requisition-lifecycle";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { cn, formatCurrency } from "@/lib/utils";
@@ -200,7 +201,6 @@ interface RequisitionPrefill {
 
 type ReceiptEntryMode = "REQUISITION" | "MANUAL" | "";
 type ReceiptInputMethod = "SCAN" | "MANUAL" | "";
-type ReceiptFlowWizardStep = 1 | 2 | 3;
 
 interface ApprovedRequisitionRow {
   id: string;
@@ -243,14 +243,16 @@ export default function InventoryReceiptIntakePage() {
 
 function InventoryReceiptIntakePageContent() {
   const renderTimestamp = new Date().toISOString();
-  console.info("RECEIPT FOLLOW-UP PAGE RENDERED", {
-    component: "InventoryReceiptIntakePageContent",
-    pagePath: "/purchasing/receipt-follow-up",
-    timestamp: renderTimestamp,
-    version: "receipt-follow-up-debug-v1"
-  });
+  const showDeveloperDebugUi = process.env.NEXT_PUBLIC_RECEIPT_INTAKE_DEBUG_UI === "1";
+  if (showDeveloperDebugUi && process.env.NODE_ENV !== "production") {
+    console.info("RECEIPT FOLLOW-UP PAGE RENDERED", {
+      component: "InventoryReceiptIntakePageContent",
+      pagePath: "/purchasing/receipt-follow-up",
+      timestamp: renderTimestamp,
+      version: "receipt-follow-up-debug-v1"
+    });
+  }
 
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useRole();
   const canManage = Boolean(user?.role && canAccess(user.role, "inventory:manage"));
@@ -291,13 +293,13 @@ function InventoryReceiptIntakePageContent() {
   const [entryMode, setEntryMode] = useState<ReceiptEntryMode>(
     () => (isApprovedContinuationEntry ? "REQUISITION" : "")
   );
-  const [receiptInputMethod, setReceiptInputMethod] =
+  const [receiptInputMethod] =
     useState<ReceiptInputMethod>("");
   const [selectedRequisitionId, setSelectedRequisitionId] = useState<string>(
     () => urlRequisitionPrefill?.id || ""
   );
   const [approvedRequisitions, setApprovedRequisitions] = useState<ApprovedRequisitionRow[]>([]);
-  const [requisitionLookupError, setRequisitionLookupError] = useState<string | null>(null);
+  const [_requisitionLookupError, setRequisitionLookupError] = useState<string | null>(null);
 
   const [clients, setClients] = useState<ReferenceClient[]>([]);
   const [projects, setProjects] = useState<ReferenceProject[]>([]);
@@ -348,53 +350,16 @@ function InventoryReceiptIntakePageContent() {
     () => (entryMode === "REQUISITION" ? selectedRequisitionPrefill : null),
     [entryMode, selectedRequisitionPrefill]
   );
-  const selectedRequisitionSummary = useMemo(() => {
-    if (!selectedRequisitionPrefill) {
-      return null;
-    }
-    const clientName = clients.find((entry) => entry.id === selectedRequisitionPrefill.clientId)?.name || "-";
-    const projectName = projects.find((entry) => entry.id === selectedRequisitionPrefill.projectId)?.name || "-";
-    const rigCode = rigs.find((entry) => entry.id === selectedRequisitionPrefill.rigId)?.rigCode || "-";
-    return {
-      type: formatRequisitionType(selectedRequisitionPrefill.type),
-      clientName,
-      projectName,
-      rigCode
-    };
-  }, [clients, projects, rigs, selectedRequisitionPrefill]);
-  const [wizardStep, setWizardStep] = useState<ReceiptFlowWizardStep>(
-    () => (isApprovedContinuationEntry ? 2 : 1)
-  );
+  const [panelGuidedStep, setPanelGuidedStep] = useState<1 | 2 | 3 | 4>(1);
   const canRenderReceiptPanel =
     entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
-  const stepOneBlockedReason =
-    wizardStep === 1 && !entryMode
-      ? "Choose a follow-up path to continue."
-      : "";
-  const stepTwoBlockedReason =
-    wizardStep !== 2
-      ? ""
-      : entryMode === "REQUISITION" && !activeRequisitionPrefill && !activeSubmission
-        ? "Select an approved requisition to continue."
-        : !receiptInputMethod
-          ? "Choose scan or manual receipt input to continue."
-          : "";
-  const isLockedApprovedContinuation =
-    isApprovedContinuationEntry && entryMode === "REQUISITION";
-  const workflowStepLabels = isLockedApprovedContinuation
-    ? [
-        "1. Receipt method",
-        "2. Upload / enter receipt",
-        "3. Review receipt data",
-        "4. Finalize posting"
-      ]
-    : [
-        "1. Choose intake path",
-        "2. Setup requisition/manual context",
-        "3. Upload / scan receipt",
-        "4. Review parsed data",
-        "5. Finalize posting"
-      ];
+  const workflowStepLabels = [
+    "1. Receipt",
+    "2. Items",
+    "3. Inventory",
+    "4. Finalize"
+  ];
+  const activeWorkflowStepIndex = panelGuidedStep - 1;
 
   useEffect(() => {
     if (!urlRequisitionPrefill) {
@@ -402,27 +367,7 @@ function InventoryReceiptIntakePageContent() {
     }
     setEntryMode("REQUISITION");
     setSelectedRequisitionId(urlRequisitionPrefill.id);
-    setWizardStep((current) => (current < 2 ? 2 : current));
   }, [urlRequisitionPrefill]);
-
-  useEffect(() => {
-    if (!activeSubmissionId) {
-      return;
-    }
-    setWizardStep(3);
-  }, [activeSubmissionId]);
-
-  function handleReceiptMethodSelection(method: ReceiptInputMethod) {
-    setReceiptInputMethod(method);
-    if (
-      entryMode === "REQUISITION" &&
-      !activeRequisitionPrefill &&
-      !activeSubmission
-    ) {
-      return;
-    }
-    setWizardStep(3);
-  }
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -431,7 +376,7 @@ function InventoryReceiptIntakePageContent() {
       const movementQuery = new URLSearchParams();
       const submissionsQuery = new URLSearchParams(movementQuery);
       const requisitionsQuery = new URLSearchParams(movementQuery);
-      requisitionsQuery.set("status", "APPROVED");
+      requisitionsQuery.set("status", REQUISITION_RECEIPT_ELIGIBLE_STATUS);
 
       const [
         clientsRes,
@@ -528,7 +473,7 @@ function InventoryReceiptIntakePageContent() {
       );
       setApprovedRequisitions(
         ((requisitionsPayload.data || []) as ApprovedRequisitionRow[])
-          .filter((entry) => entry.status === "APPROVED")
+          .filter((entry) => entry.status === REQUISITION_RECEIPT_ELIGIBLE_STATUS)
           .map((entry) => ({
             id: entry.id,
             requisitionCode: entry.requisitionCode,
@@ -808,250 +753,60 @@ function InventoryReceiptIntakePageContent() {
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
         )}
 
-        <section className="gf-page-header">
+        <section className="rounded-2xl border border-slate-200/70 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_8px_20px_rgba(15,23,42,0.04)] md:px-5 md:py-3.5">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
+            <h1 className="text-xl font-semibold tracking-tight text-ink-900 md:text-[1.6rem]">
               Complete Approved Purchase
             </h1>
-            <p className="mt-1 text-sm text-slate-600">
-              Continue approved requisitions through receipt capture, review, and final posting.
-            </p>
-            <div className="mt-3 rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-3 text-sm text-rose-950 shadow-sm">
-              <p className="text-base font-extrabold uppercase tracking-wide">
-                RENDER PATH TEST — RECEIPT FOLLOW-UP DEBUG ACTIVE
-              </p>
-              <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                <p>
-                  component name: <span className="font-semibold">InventoryReceiptIntakePageContent</span>
+            {showDeveloperDebugUi && (
+              <div className="mt-2 rounded-xl border-2 border-rose-500 bg-rose-50 px-3 py-2.5 text-sm text-rose-950 shadow-sm">
+                <p className="text-base font-extrabold uppercase tracking-wide">
+                  RENDER PATH TEST — RECEIPT FOLLOW-UP DEBUG ACTIVE
                 </p>
-                <p>
-                  page path: <span className="font-semibold">/purchasing/receipt-follow-up</span>
-                </p>
-                <p>
-                  current timestamp at render: <span className="font-semibold">{renderTimestamp}</span>
-                </p>
-                <p>
-                  version: <span className="font-semibold">receipt-follow-up-debug-v1</span>
-                </p>
+                <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                  <p>
+                    component name: <span className="font-semibold">InventoryReceiptIntakePageContent</span>
+                  </p>
+                  <p>
+                    page path: <span className="font-semibold">/purchasing/receipt-follow-up</span>
+                  </p>
+                  <p>
+                    current timestamp at render: <span className="font-semibold">{renderTimestamp}</span>
+                  </p>
+                  <p>
+                    version: <span className="font-semibold">receipt-follow-up-debug-v1</span>
+                  </p>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-          <div className="mt-3 border-t border-slate-200/80" />
         </section>
 
         {currentView === "scan" && (
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 md:p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Guided Workflow</p>
-            <div className="mt-2 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+          <section className="space-y-2 rounded-2xl border border-slate-200/70 bg-white px-4 py-3 md:px-5">
+            {activeRequisitionPrefill && (
+              <p className="text-xs font-medium text-slate-500">
+                Requisition: <span className="text-slate-700">{activeRequisitionPrefill.requisitionCode}</span>
+              </p>
+            )}
+            <div className="grid gap-1 text-[11px] sm:grid-cols-2 xl:grid-cols-4">
               {workflowStepLabels.map((label, index) => (
                 <div
                   key={label}
-                  className={`rounded-lg border px-2 py-1.5 ${
-                    isLockedApprovedContinuation
-                      ? wizardStep === 2 && index === 0
-                        ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : wizardStep === 3 && index >= 1
-                          ? "border-brand-300 bg-brand-50 text-brand-900"
-                          : "border-slate-200 bg-slate-50 text-slate-700"
-                      : wizardStep === 1 && index === 0
-                        ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : wizardStep === 2 && index === 1
-                          ? "border-brand-300 bg-brand-50 text-brand-900"
-                          : wizardStep === 3 && index >= 2
-                            ? "border-brand-300 bg-brand-50 text-brand-900"
-                            : "border-slate-200 bg-slate-50 text-slate-700"
+                  className={`rounded-full px-2.5 py-1 ${
+                    index === activeWorkflowStepIndex
+                      ? "bg-slate-100 text-slate-800"
+                      : "bg-slate-50 text-slate-500"
                   }`}
                 >
                   {label}
                 </div>
               ))}
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {wizardStep > 1 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isLockedApprovedContinuation && wizardStep === 2) {
-                      router.push("/expenses");
-                      return;
-                    }
-                    setWizardStep((current) => Math.max(1, current - 1) as ReceiptFlowWizardStep);
-                  }}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                >
-                  {isLockedApprovedContinuation && wizardStep === 2
-                    ? "Back to Purchase Requests"
-                    : "Back"}
-                </button>
-              )}
-              {wizardStep < 3 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (wizardStep === 1 && stepOneBlockedReason) {
-                      return;
-                    }
-                    if (wizardStep === 2 && stepTwoBlockedReason) {
-                      return;
-                    }
-                    setWizardStep((current) => Math.min(3, current + 1) as ReceiptFlowWizardStep);
-                  }}
-                  disabled={
-                    (wizardStep === 1 && Boolean(stepOneBlockedReason)) ||
-                    (wizardStep === 2 && Boolean(stepTwoBlockedReason))
-                  }
-                  className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                >
-                  Continue
-                </button>
-              )}
-              {wizardStep === 1 && stepOneBlockedReason && (
-                <p className="text-xs text-amber-800">{stepOneBlockedReason}</p>
-              )}
-              {wizardStep === 2 && stepTwoBlockedReason && (
-                <p className="text-xs text-amber-800">{stepTwoBlockedReason}</p>
-              )}
-            </div>
           </section>
         )}
 
-        {currentView === "scan" && wizardStep === 1 && !isLockedApprovedContinuation && (
-          <section id="inventory-receipt-entry-section" className="rounded-2xl border border-brand-200 bg-brand-50/70 p-4 shadow-sm md:p-5">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Step 1 — Choose Intake Path</p>
-            <p className="mt-1 text-sm text-brand-900">
-              Start from an approved requisition by default. Use manual intake only as an exception path.
-            </p>
-            <div className="mt-3 grid gap-2 md:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setEntryMode("REQUISITION");
-                  setReceiptInputMethod("");
-                }}
-                className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
-                  entryMode === "REQUISITION"
-                    ? "border-brand-500 bg-white text-brand-900 shadow-sm"
-                    : "border-brand-200 bg-white/80 text-slate-700 hover:bg-white"
-                }`}
-              >
-                Start from Approved Requisition
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setEntryMode("MANUAL");
-                  setReceiptInputMethod("");
-                }}
-                className={`rounded-lg border px-3 py-2.5 text-sm font-semibold ${
-                  entryMode === "MANUAL"
-                    ? "border-brand-500 bg-white text-brand-900 shadow-sm"
-                    : "border-brand-200 bg-white/80 text-slate-700 hover:bg-white"
-                }`}
-              >
-                Manual Entry (No Requisition)
-              </button>
-            </div>
-          </section>
-        )}
-
-        {currentView === "scan" && wizardStep === 2 && (
-          <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {isLockedApprovedContinuation
-                ? "Step 1 — Choose Receipt Method"
-                : "Step 2 — Configure Approved Purchase Follow-up"}
-            </p>
-            {entryMode === "REQUISITION" && !isLockedApprovedContinuation ? (
-              <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-                <label className="text-xs text-ink-700">
-                  <span className="mb-1 block uppercase tracking-wide text-indigo-800">Approved Requisition</span>
-                  <select
-                    value={selectedRequisitionId}
-                    onChange={(event) => setSelectedRequisitionId(event.target.value)}
-                    className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm text-slate-800"
-                  >
-                    <option value="">Select approved requisition</option>
-                    {urlRequisitionPrefill &&
-                      !approvedRequisitions.some((entry) => entry.id === urlRequisitionPrefill.id) && (
-                        <option value={urlRequisitionPrefill.id}>
-                          {urlRequisitionPrefill.requisitionCode} • {formatRequisitionType(urlRequisitionPrefill.type)}
-                        </option>
-                      )}
-                    {approvedRequisitions.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.requisitionCode} • {formatRequisitionType(entry.type)} • {formatCurrency(entry.totals.approvedTotalCost)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {requisitionLookupError && (
-                  <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                    {requisitionLookupError}
-                  </p>
-                )}
-                {selectedRequisitionSummary ? (
-                  <p className="mt-2 text-xs text-indigo-900">
-                    Prefilled from{" "}
-                    <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>
-                    {" • "}
-                    {selectedRequisitionSummary.type} • Project:{" "}
-                    <span className="font-semibold">{selectedRequisitionSummary.projectName}</span> • Rig:{" "}
-                    <span className="font-semibold">{selectedRequisitionSummary.rigCode}</span> • Client:{" "}
-                    <span className="font-semibold">{selectedRequisitionSummary.clientName}</span>
-                  </p>
-                ) : (
-                  <p className="mt-2 text-xs text-indigo-900">
-                    Select an approved requisition to continue with prefilled intake.
-                  </p>
-                )}
-              </div>
-            ) : entryMode === "REQUISITION" && isLockedApprovedContinuation ? (
-              <div className="mt-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
-                Continuing approved requisition{" "}
-                <span className="font-semibold">{selectedRequisitionPrefill?.requisitionCode}</span>.
-                Receipt context is already locked to this requisition.
-              </div>
-            ) : (
-              <p className="mt-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
-                Manual path selected. Continue to scanning and then complete required context during review.
-              </p>
-            )}
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Receipt Input Method
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                Choose how you want to complete receipt details for this approved purchase.
-              </p>
-              <div className="mt-2 grid gap-2 md:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => handleReceiptMethodSelection("SCAN")}
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    receiptInputMethod === "SCAN"
-                      ? "border-brand-300 bg-brand-50 text-brand-800"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Scan receipt
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleReceiptMethodSelection("MANUAL")}
-                  className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                    receiptInputMethod === "MANUAL"
-                      ? "border-brand-300 bg-brand-50 text-brand-800"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                  }`}
-                >
-                  Manual receipt entry
-                </button>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {currentView === "scan" && wizardStep >= 3 && (
+        {currentView === "scan" && (
           <section
             id="inventory-receipt-scan-section"
             className={cn(
@@ -1061,22 +816,17 @@ function InventoryReceiptIntakePageContent() {
           >
           <Card
             className="min-w-0"
-            title={receiptInputMethod === "MANUAL" ? "Complete Receipt Details" : "Scan Receipt"}
-            subtitle={
-              receiptInputMethod === "MANUAL"
-                ? "Enter receipt details directly, then review and finalize posting."
-                : "Upload receipt files, confirm extracted fields, and create linked records."
-            }
+            title={undefined}
+            subtitle={undefined}
           >
             {!canManage && (
               <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Submissions from your role are saved as <span className="font-semibold">Pending review</span>. A manager/admin must review and finalize posting.
+                Saved as <span className="font-semibold">Pending review</span> until manager/admin finalization.
               </p>
             )}
             {activeRequisitionPrefill && (
-              <p className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
-                Purchase stage linked to requisition{" "}
-                <span className="font-semibold">{activeRequisitionPrefill.requisitionCode}</span>. Receipt type and context are prefilled for posting consistency.
+              <p className="mb-2 text-[11px] text-slate-500">
+                Requisition <span className="font-medium text-slate-700">{activeRequisitionPrefill.requisitionCode}</span>
               </p>
             )}
             {submissionLoading && (
@@ -1101,13 +851,14 @@ function InventoryReceiptIntakePageContent() {
                 initialRequisition={activeRequisitionPrefill}
                 preferredInputMethod={receiptInputMethod || "SCAN"}
                 activeSubmission={activeSubmission}
+                onGuidedStepChange={(step) => setPanelGuidedStep(step)}
                 onCompleted={async () => {
                   await loadData();
                 }}
               />
             ) : (
               <div className="rounded-lg border border-dashed border-indigo-300 bg-indigo-50 px-3 py-3 text-sm text-indigo-900">
-                Select an approved requisition above to continue with receipt posting.
+                Select an approved requisition to continue with receipt posting.
               </div>
             )}
           </Card>
@@ -1322,14 +1073,4 @@ function normalizeLiveProjectSpendType(value: unknown): "BREAKDOWN" | "NORMAL_EX
     return value;
   }
   return null;
-}
-
-function formatRequisitionType(value: RequisitionPrefill["type"]) {
-  if (value === "LIVE_PROJECT_PURCHASE") {
-    return "Project Purchase";
-  }
-  if (value === "MAINTENANCE_PURCHASE") {
-    return "Maintenance Purchase";
-  }
-  return "Stock Purchase";
 }

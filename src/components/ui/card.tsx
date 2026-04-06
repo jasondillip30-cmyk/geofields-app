@@ -15,6 +15,7 @@ interface CardProps {
 
 export function Card({ title, subtitle, children, className, action, onClick, clickLabel }: CardProps) {
   const interactive = Boolean(onClick);
+  const compactSubtitle = subtitle ? compactHelperText(subtitle) : null;
 
   const handleClick = (event: MouseEvent<HTMLElement>) => {
     if (!onClick) {
@@ -41,7 +42,7 @@ export function Card({ title, subtitle, children, className, action, onClick, cl
   return (
     <section
       className={cn(
-        "min-w-0 rounded-2xl border border-slate-200/90 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_10px_24px_rgba(15,23,42,0.05)] md:p-5 lg:p-6",
+        "min-w-0 rounded-2xl border border-slate-200/90 bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_8px_18px_rgba(15,23,42,0.05)] md:p-4 lg:p-5",
         interactive &&
           "group cursor-pointer transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-brand-200/80 hover:shadow-[0_4px_14px_rgba(15,23,42,0.08),0_18px_30px_rgba(15,23,42,0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-300",
         className
@@ -52,11 +53,23 @@ export function Card({ title, subtitle, children, className, action, onClick, cl
       tabIndex={interactive ? 0 : undefined}
       aria-label={interactive ? clickLabel || (title ? `${title} details` : "View details") : undefined}
     >
-      {(title || subtitle || action) && (
-        <div className="mb-4 flex items-start justify-between gap-4 border-b border-slate-100 pb-3.5">
+      {(title || compactSubtitle || action) && (
+        <div className="mb-3 flex items-start justify-between gap-3 border-b border-slate-100 pb-2.5">
           <div className="min-w-0">
-            {title && <h3 className="text-[15px] font-semibold tracking-tight text-ink-900 sm:text-base">{title}</h3>}
-            {subtitle && <p className="mt-1 text-sm leading-5 text-slate-600">{subtitle}</p>}
+            {title && <h3 className="text-[14px] font-semibold tracking-tight text-ink-900 sm:text-[15px]">{title}</h3>}
+            {compactSubtitle ? (
+              <p
+                className="mt-0.5 text-xs leading-4 text-slate-600"
+                style={{
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden"
+                }}
+              >
+                {compactSubtitle}
+              </p>
+            ) : null}
           </div>
           {action}
         </div>
@@ -64,6 +77,14 @@ export function Card({ title, subtitle, children, className, action, onClick, cl
       {children}
     </section>
   );
+}
+
+function compactHelperText(value: string) {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= 120) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 117).trimEnd()}...`;
 }
 
 interface MetricCardProps {

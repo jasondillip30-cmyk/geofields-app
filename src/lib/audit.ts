@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient, UserRole } from "@prisma/client";
 
-import type { AuthSession } from "@/lib/auth/session";
+import type { AuthSession } from "@/lib/auth/session-types";
 import { prisma } from "@/lib/prisma";
 
 type AuditDbClient = PrismaClient | Prisma.TransactionClient;
@@ -57,7 +57,7 @@ export function parseAuditJson(value: string | null) {
 
   try {
     return JSON.parse(value) as unknown;
-  } catch (_error) {
+  } catch {
     return null;
   }
 }
@@ -68,7 +68,7 @@ function serializeJson(value: unknown) {
   }
   try {
     return JSON.stringify(value);
-  } catch (_error) {
+  } catch {
     return JSON.stringify({ error: "SERIALIZATION_FAILED" });
   }
 }

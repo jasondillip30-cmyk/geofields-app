@@ -31,7 +31,7 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/executive-overview"),
     meta: {
       title: "Executive Overview",
-      subtitle: "High-level management snapshot across approved finance, operations, and approval risk."
+      subtitle: "High-level management snapshot across recognized finance, operations, and approval risk."
     }
   },
   {
@@ -45,7 +45,7 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/data-quality/linkage-center"),
     meta: {
       title: "Data Quality / Linkage Center",
-      subtitle: "Manager workspace for correcting approved spend records missing rig, project, or maintenance linkage."
+      subtitle: "Manager workspace for correcting recognized spend records missing rig, project, or maintenance linkage."
     }
   },
   {
@@ -94,7 +94,7 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/cost-tracking"),
     meta: {
       title: "Cost Tracking",
-      subtitle: "Manager cost workspace for approved spend across rigs, projects, and maintenance."
+      subtitle: "Manager cost workspace for recognized spend across rigs, projects, and maintenance."
     }
   },
   {
@@ -116,6 +116,13 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     meta: {
       title: "Purchase Receipt Follow-up",
       subtitle: "Legacy route: continue approved requisitions into guided receipt capture and posting."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/inventory/expenses"),
+    meta: {
+      title: "Inventory Expenses",
+      subtitle: "Cost recognition workspace for inventory and operational activity."
     }
   },
   {

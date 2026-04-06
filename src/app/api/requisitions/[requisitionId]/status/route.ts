@@ -78,35 +78,71 @@ export async function POST(
     return NextResponse.json({ message: transition.message }, { status: 409 });
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const next = await tx.summaryReport.update({
-      where: { id: row.id },
-      data: {
-        payloadJson: JSON.stringify(transition.payload),
-        reportDate: new Date()
+  let updated: NonNullable<Awaited<ReturnType<typeof prisma.summaryReport.findUnique>>> | null =
+    null;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const transitionLock = await tx.summaryReport.updateMany({
+        where: {
+          id: row.id,
+          updatedAt: row.updatedAt
+        },
+        data: {
+          payloadJson: JSON.stringify(transition.payload),
+          reportDate: new Date()
+        }
+      });
+
+      if (transitionLock.count === 0) {
+        throw new Error("RequisitionStatusTransitionConflict");
       }
-    });
 
-    await recordAuditLog({
-      db: tx,
-      module: "expenses",
-      entityType: "purchase_requisition",
-      entityId: row.id,
-      action,
-      description: buildAuditDescription(action, auth.session.name, transition.payload.requisitionCode),
-      before: {
-        status: parsed.payload.status,
-        rejectionReason: parsed.payload.approval.rejectionReason
-      },
-      after: {
-        status: transition.payload.status,
-        rejectionReason: transition.payload.approval.rejectionReason
-      },
-      actor: auditActorFromSession(auth.session)
-    });
+      const next = await tx.summaryReport.findUnique({
+        where: { id: row.id }
+      });
+      if (!next) {
+        throw new Error("RequisitionMissingAfterTransition");
+      }
 
-    return next;
-  });
+      await recordAuditLog({
+        db: tx,
+        module: "expenses",
+        entityType: "purchase_requisition",
+        entityId: row.id,
+        action,
+        description: buildAuditDescription(action, auth.session.name, transition.payload.requisitionCode),
+        before: {
+          status: parsed.payload.status,
+          rejectionReason: parsed.payload.approval.rejectionReason
+        },
+        after: {
+          status: transition.payload.status,
+          rejectionReason: transition.payload.approval.rejectionReason
+        },
+        actor: auditActorFromSession(auth.session)
+      });
+
+      return next;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "RequisitionStatusTransitionConflict") {
+      return NextResponse.json(
+        {
+          message:
+            "Requisition status changed by another action. Refresh and retry with the latest record state."
+        },
+        { status: 409 }
+      );
+    }
+    throw error;
+  }
+
+  if (!updated) {
+    return NextResponse.json(
+      { message: "Requisition status update could not be confirmed." },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json({
     data: {

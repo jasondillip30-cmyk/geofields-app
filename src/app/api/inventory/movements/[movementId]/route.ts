@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
 import { prisma } from "@/lib/prisma";
 
 const movementInclude = {
@@ -19,15 +20,23 @@ const movementInclude = {
   client: { select: { id: true, name: true } },
   rig: { select: { id: true, rigCode: true } },
   project: { select: { id: true, name: true } },
-  maintenanceRequest: { select: { id: true, requestCode: true, status: true } },
+  maintenanceRequest: {
+    select: { id: true, requestCode: true, status: true, breakdownReportId: true }
+  },
+  breakdownReport: {
+    select: { id: true, title: true, status: true, severity: true, reportDate: true }
+  },
   expense: {
     select: {
       id: true,
       amount: true,
       category: true,
       subcategory: true,
+      entrySource: true,
       approvalStatus: true,
       date: true,
+      submittedAt: true,
+      approvedAt: true,
       client: { select: { id: true, name: true } },
       project: { select: { id: true, name: true } },
       rig: { select: { id: true, rigCode: true } },
@@ -57,6 +66,48 @@ export async function GET(
   if (!movement) {
     return NextResponse.json({ message: "Stock movement not found." }, { status: 404 });
   }
+
+  const linkedUsageRequestRaw = await prisma.inventoryUsageRequest.findFirst({
+    where: { approvedMovementId: movement.id },
+    orderBy: [{ decidedAt: "desc" }, { updatedAt: "desc" }],
+    select: {
+      id: true,
+      status: true,
+      reason: true,
+      breakdownReportId: true,
+      maintenanceRequestId: true,
+      requestedForDate: true,
+      decidedAt: true,
+      createdAt: true,
+      requestedBy: { select: { id: true, fullName: true, role: true } },
+      decidedBy: { select: { id: true, fullName: true, role: true } },
+      maintenanceRequest: {
+        select: { id: true, requestCode: true, status: true, breakdownReportId: true }
+      },
+      breakdownReport: {
+        select: { id: true, title: true, status: true, severity: true }
+      }
+    }
+  });
+  const linkedUsageRequest = linkedUsageRequestRaw
+    ? serializeLinkedUsageRequest(linkedUsageRequestRaw)
+    : null;
+
+  const fallbackBreakdownId =
+    movement.breakdownReport?.id ||
+    movement.breakdownReportId ||
+    linkedUsageRequest?.breakdownReport?.id ||
+    linkedUsageRequest?.breakdownReportId ||
+    movement.maintenanceRequest?.breakdownReportId ||
+    null;
+  const linkedBreakdown = movement.breakdownReport
+    ? movement.breakdownReport
+    : fallbackBreakdownId
+      ? await prisma.breakdownReport.findUnique({
+          where: { id: fallbackBreakdownId },
+          select: { id: true, title: true, status: true, severity: true, reportDate: true }
+        })
+      : null;
 
   const relatedFilters: Array<{ receiptUrl?: string; traReceiptNumber?: string; supplierInvoiceNumber?: string }> = [];
   if (movement.receiptUrl) {
@@ -88,7 +139,71 @@ export async function GET(
         });
 
   return NextResponse.json({
-    data: movement,
+    data: {
+      ...movement,
+      linkedUsageRequest,
+      linkedBreakdown
+    },
     relatedMovements
   });
+}
+
+function serializeLinkedUsageRequest(
+  requestRow: {
+    id: string;
+    status: string;
+    reason: string;
+    breakdownReportId: string | null;
+    maintenanceRequestId: string | null;
+    requestedForDate: Date | null;
+    decidedAt: Date | null;
+    createdAt: Date;
+    requestedBy: { id: string; fullName: string | null; role: string } | null;
+    decidedBy: { id: string; fullName: string | null; role: string } | null;
+    maintenanceRequest: {
+      id: string;
+      requestCode: string;
+      status: string;
+      breakdownReportId: string | null;
+    } | null;
+    breakdownReport: { id: string; title: string; status: string; severity: string } | null;
+  }
+) {
+  const fallbackBreakdownId =
+    requestRow.breakdownReportId ||
+    requestRow.maintenanceRequest?.breakdownReportId ||
+    null;
+  const reasonType = deriveInventoryUsageReasonType({
+    explicitReasonType: null,
+    maintenanceRequestId: requestRow.maintenanceRequestId,
+    breakdownReportId: fallbackBreakdownId
+  });
+
+  return {
+    id: requestRow.id,
+    status: requestRow.status,
+    reason: requestRow.reason,
+    reasonType,
+    breakdownReportId: fallbackBreakdownId,
+    maintenanceRequestId: requestRow.maintenanceRequestId,
+    requestedForDate: requestRow.requestedForDate,
+    decidedAt: requestRow.decidedAt,
+    createdAt: requestRow.createdAt,
+    requestedBy: requestRow.requestedBy
+      ? {
+          id: requestRow.requestedBy.id,
+          fullName: requestRow.requestedBy.fullName || "Unknown user",
+          role: requestRow.requestedBy.role
+        }
+      : null,
+    decidedBy: requestRow.decidedBy
+      ? {
+          id: requestRow.decidedBy.id,
+          fullName: requestRow.decidedBy.fullName || "Unknown user",
+          role: requestRow.decidedBy.role
+        }
+      : null,
+    maintenanceRequest: requestRow.maintenanceRequest,
+    breakdownReport: requestRow.breakdownReport
+  };
 }

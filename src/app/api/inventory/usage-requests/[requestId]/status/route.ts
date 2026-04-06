@@ -1,7 +1,9 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
 import { roundCurrency } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 
@@ -11,6 +13,7 @@ const includeRequest = {
       id: true,
       name: true,
       sku: true,
+      category: true,
       quantityInStock: true,
       unitCost: true,
       locationId: true
@@ -26,7 +29,8 @@ const includeRequest = {
     select: {
       id: true,
       requestCode: true,
-      status: true
+      status: true,
+      breakdownReportId: true
     }
   },
   requestedBy: {
@@ -101,8 +105,34 @@ export async function POST(
 
   const now = new Date();
   const movementDate = existing.requestedForDate || now;
+  const resolvedBreakdownReportId =
+    existing.breakdownReportId ||
+    existing.maintenanceRequest?.breakdownReportId ||
+    null;
+  const movementBreakdownReportId =
+    resolvedBreakdownReportId || existing.maintenanceRequest?.breakdownReportId || null;
+  const noteReason = existing.reason;
   try {
     const result = await prisma.$transaction(async (tx) => {
+      const approvalLock = await tx.inventoryUsageRequest.updateMany({
+        where: {
+          id: existing.id,
+          status: { in: ["SUBMITTED", "PENDING"] },
+          approvedMovementId: null
+        },
+        data: {
+          status: "APPROVED",
+          decisionNote: note || null,
+          decidedById: auth.session.userId,
+          decidedAt: now,
+          breakdownReportId: existing.maintenanceRequestId ? null : resolvedBreakdownReportId
+        }
+      });
+
+      if (approvalLock.count === 0) {
+        throw new Error("UsageRequestAlreadyProcessed");
+      }
+
       const currentItem = await tx.inventoryItem.findUnique({
         where: { id: existing.itemId },
         select: { id: true, quantityInStock: true, unitCost: true, locationId: true }
@@ -119,6 +149,40 @@ export async function POST(
       const nextStock = roundCurrency(currentItem.quantityInStock - existing.quantity);
       const unitCost = currentItem.unitCost || 0;
       const totalCost = roundCurrency(existing.quantity * unitCost);
+      const reasonType = deriveInventoryUsageReasonType({
+        explicitReasonType: null,
+        maintenanceRequestId: existing.maintenanceRequestId,
+        breakdownReportId: resolvedBreakdownReportId
+      });
+      const expenseCategory =
+        reasonType === "BREAKDOWN"
+          ? "Breakdown"
+          : reasonType === "MAINTENANCE"
+            ? "Maintenance"
+            : "Inventory Usage";
+      const expense = await tx.expense.create({
+        data: {
+          date: movementDate,
+          amount: totalCost,
+          category: expenseCategory,
+          subcategory: existing.item.name,
+          entrySource: "INVENTORY_USAGE",
+          vendor: null,
+          notes: `Recognized from approved inventory usage request ${existing.id}${
+            noteReason ? `: ${noteReason}` : ""
+          }`,
+          enteredByUserId: existing.requestedById || auth.session.userId,
+          submittedAt: existing.createdAt,
+          approvedById: auth.session.userId,
+          approvalStatus: "APPROVED",
+          approvedAt: now,
+          clientId: existing.project?.clientId || null,
+          projectId: existing.projectId,
+          rigId: existing.rigId,
+          quantity: roundCurrency(existing.quantity),
+          unitCost
+        }
+      });
 
       const movement = await tx.inventoryMovement.create({
         data: {
@@ -133,8 +197,10 @@ export async function POST(
           projectId: existing.projectId,
           rigId: existing.rigId,
           maintenanceRequestId: existing.maintenanceRequestId,
+          breakdownReportId: movementBreakdownReportId,
+          expenseId: expense.id,
           locationFromId: existing.locationId || currentItem.locationId || null,
-          notes: `Approved usage request ${existing.id}${existing.reason ? `: ${existing.reason}` : ""}`
+          notes: `Approved usage request ${existing.id}${noteReason ? `: ${noteReason}` : ""}`
         }
       });
 
@@ -148,10 +214,6 @@ export async function POST(
       const approved = await tx.inventoryUsageRequest.update({
         where: { id: existing.id },
         data: {
-          status: "APPROVED",
-          decisionNote: note || null,
-          decidedById: auth.session.userId,
-          decidedAt: now,
           approvedMovementId: movement.id
         }
       });
@@ -166,18 +228,31 @@ export async function POST(
         before: { status: existing.status, stock: currentItem.quantityInStock },
         after: {
           status: approved.status,
+          breakdownReportId: approved.breakdownReportId,
           approvedMovementId: approved.approvedMovementId,
+          movementBreakdownReportId,
+          recognizedExpenseId: expense.id,
           stock: nextStock
         },
         actor: auditActorFromSession(auth.session)
       });
 
-      return { approved, movementId: movement.id };
+      return { approved, movementId: movement.id, expenseId: expense.id };
     });
 
-    return NextResponse.json({ data: result.approved, movementId: result.movementId });
+    return NextResponse.json({
+      data: result.approved,
+      movementId: result.movementId,
+      expenseId: result.expenseId
+    });
   } catch (error) {
     if (error instanceof Error) {
+      if (error.message === "UsageRequestAlreadyProcessed") {
+        return NextResponse.json(
+          { message: "Usage request has already been processed." },
+          { status: 409 }
+        );
+      }
       if (error.message === "Not enough stock") {
         return NextResponse.json({ message: "Not enough stock" }, { status: 409 });
       }
@@ -185,6 +260,46 @@ export async function POST(
         return NextResponse.json({ message: "Inventory item not found." }, { status: 404 });
       }
     }
-    throw error;
+    if (isBreakdownLinkageSchemaMismatch(error)) {
+      return NextResponse.json(
+        {
+          message:
+            "Database schema is out of sync for inventory movement linkage. Missing breakdown linkage column(s) in the current database.",
+          code: "SCHEMA_OUT_OF_SYNC",
+          nextStep:
+            "Fix DATABASE_URL, then run: npx prisma migrate dev --name inventory_breakdown_linkage_hardening. If local migration state is intentionally reset, run npx prisma db push."
+        },
+        { status: 500 }
+      );
+    }
+    console.error("[inventory/usage-requests:status]", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof Prisma.PrismaClientKnownRequestError
+        ? {
+            prismaCode: error.code,
+            prismaMeta: error.meta || null
+          }
+        : {})
+    });
+    return NextResponse.json(
+      { message: "Failed to update usage request status." },
+      { status: 500 }
+    );
   }
+}
+
+function isBreakdownLinkageSchemaMismatch(error: unknown) {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2022") {
+    const column = `${(error.meta as { column?: unknown } | undefined)?.column || ""}`.toLowerCase();
+    if (column.includes("breakdownreportid") || message.includes("breakdownreportid")) {
+      return true;
+    }
+  }
+  return (
+    message.includes("column") &&
+    message.includes("breakdownreportid") &&
+    (message.includes("does not exist") || message.includes("unknown"))
+  );
 }

@@ -20,11 +20,11 @@ export function MaintenanceStatusBadge({ status }: { status: MaintenanceStatus }
   const tone =
     status === "COMPLETED"
       ? "green"
-      : status === "DENIED"
-        ? "red"
-        : status === "SUBMITTED" || status === "UNDER_REVIEW" || status === "WAITING_FOR_PARTS"
-          ? "amber"
-          : "blue";
+      : status === "WAITING_FOR_PARTS"
+        ? "amber"
+        : status === "IN_REPAIR"
+          ? "blue"
+          : "slate";
   return <Badge tone={tone}>{status.replaceAll("_", " ")}</Badge>;
 }
 

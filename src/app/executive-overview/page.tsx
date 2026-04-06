@@ -31,7 +31,7 @@ import { cn, formatCurrency, formatNumber, formatPercent } from "@/lib/utils";
 interface ProfitSummaryPayload {
   totals: {
     totalRevenue: number;
-    approvedExpenses: number;
+    recognizedSpend: number;
     totalProfit: number;
   };
   kpis?: {
@@ -131,7 +131,7 @@ interface PendingApprovalAttentionRow {
 const emptyProfitSummary: ProfitSummaryPayload = {
   totals: {
     totalRevenue: 0,
-    approvedExpenses: 0,
+    recognizedSpend: 0,
     totalProfit: 0
   },
   trendGranularity: "day",
@@ -156,7 +156,7 @@ const emptyCostSummary: CostTrackingSummaryPayload = {
     to: null
   },
   overview: {
-    totalApprovedExpenses: 0,
+    totalRecognizedSpend: 0,
     totalMaintenanceRelatedCost: 0,
     totalInventoryRelatedCost: 0,
     totalNonInventoryExpenseCost: 0,
@@ -180,7 +180,7 @@ const emptyBudgetSummary: BudgetVsActualSummaryResponse = {
   },
   totals: {
     totalBudget: 0,
-    approvedSpend: 0,
+    recognizedSpend: 0,
     remainingBudget: 0,
     overspentCount: 0
   },
@@ -197,6 +197,10 @@ const emptyBudgetSummary: BudgetVsActualSummaryResponse = {
 
 const UNASSIGNED_RIG_ID = "__unassigned_rig__";
 const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
+
+function getRecognizedCostValue(entry: { totalRecognizedCost?: number | null }) {
+  return entry.totalRecognizedCost ?? 0;
+}
 
 export default function ExecutiveOverviewPage() {
   const { filters } = useAnalyticsFilters();
@@ -236,6 +240,7 @@ export default function ExecutiveOverviewPage() {
   const [queueFetchWarning, setQueueFetchWarning] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
+  const recognizedSpendTotal = profitSummary.totals.recognizedSpend;
 
   const loadExecutiveOverview = useCallback(
     async (silent = false) => {
@@ -259,7 +264,7 @@ export default function ExecutiveOverviewPage() {
             fetchJsonSafe<CostTrackingSummaryPayload>(`/api/cost-tracking/summary${qs}`),
             fetchJsonSafe<BudgetVsActualSummaryResponse>(`/api/budgets/summary${qs}`),
             fetchJsonSafe<{ data: DrillingPendingRow[] }>(`/api/drilling-reports?${withStatus(params, "approvalStatus", "SUBMITTED")}`),
-            fetchJsonSafe<{ data: MaintenancePendingRow[] }>(`/api/maintenance-requests?${withStatus(params, "status", "SUBMITTED")}`),
+            fetchJsonSafe<{ data: MaintenancePendingRow[] }>(`/api/maintenance-requests?${withStatus(params, "status", "OPEN")}`),
             fetchJsonSafe<{ data: InventoryPendingRow[] }>(`/api/inventory/usage-requests${qs}`),
             fetchJsonSafe<{ data: ReceiptPendingRow[] }>(`/api/inventory/receipt-intake/submissions?${withStatus(params, "status", "SUBMITTED")}`)
           ]);
@@ -389,20 +394,20 @@ export default function ExecutiveOverviewPage() {
     const unassignedRig = costSummary.costByRig.find((entry) => entry.id === UNASSIGNED_RIG_ID);
     const unassignedProject = costSummary.costByProject.find((entry) => entry.id === UNASSIGNED_PROJECT_ID);
 
-    if (unassignedRig && unassignedRig.totalApprovedCost > 0) {
+    if (unassignedRig && getRecognizedCostValue(unassignedRig) > 0) {
       rows.push([
         "Rig",
         unassignedRig.name,
-        formatCurrency(unassignedRig.totalApprovedCost),
+        formatCurrency(getRecognizedCostValue(unassignedRig)),
         "Needs rig linkage"
       ]);
     }
 
-    if (unassignedProject && unassignedProject.totalApprovedCost > 0) {
+    if (unassignedProject && getRecognizedCostValue(unassignedProject) > 0) {
       rows.push([
         "Project",
         unassignedProject.name,
-        formatCurrency(unassignedProject.totalApprovedCost),
+        formatCurrency(getRecognizedCostValue(unassignedProject)),
         "Needs project linkage"
       ]);
     }
@@ -434,7 +439,7 @@ export default function ExecutiveOverviewPage() {
         entry.scope,
         entry.name,
         formatCurrency(entry.budgetAmount),
-        formatCurrency(entry.approvedSpend),
+        formatCurrency(entry.recognizedSpend),
         formatCurrency(entry.remainingBudget),
         formatPercentUsed(entry.percentUsed),
         <BudgetStatusBadge key={`${entry.scope}-${entry.id}`} row={entry} />
@@ -559,7 +564,7 @@ export default function ExecutiveOverviewPage() {
       },
       summaryMetrics: [
         { key: "revenue", label: "Total Revenue", value: profitSummary.totals.totalRevenue },
-        { key: "approvedExpenses", label: "Approved Expenses", value: profitSummary.totals.approvedExpenses },
+        { key: "recognizedSpend", label: "Recognized Spend", value: recognizedSpendTotal },
         { key: "profit", label: "Profit", value: profitSummary.totals.totalProfit },
         { key: "pendingApprovals", label: "Pending Approvals", value: pendingApprovals },
         { key: "overspentBuckets", label: "Overspent Buckets", value: alertCounts.overspentCount },
@@ -643,7 +648,7 @@ export default function ExecutiveOverviewPage() {
               id: entry.id,
               scope: entry.scope,
               entity: entry.name,
-              approvedSpend: entry.approvedSpend,
+              recognizedSpend: entry.recognizedSpend,
               percentUsed: entry.percentUsed,
               status: entry.statusLabel,
               href: budgetVsActualHref,
@@ -732,7 +737,7 @@ export default function ExecutiveOverviewPage() {
                 label: "Revenue records missing rig attribution",
                 reason: `${formatCurrency(
                   missingRevenueRigAttributionAmount
-                )} approved revenue is unassigned to a rig.`,
+                )} recognized revenue is unassigned to a rig.`,
                 severity: "HIGH" as const,
                 amount: missingRevenueRigAttributionAmount,
                 href: "/revenue",
@@ -758,7 +763,7 @@ export default function ExecutiveOverviewPage() {
             if (percentB !== percentA) {
               return percentB - percentA;
             }
-            return b.approvedSpend - a.approvedSpend;
+            return b.recognizedSpend - a.recognizedSpend;
           })
           .slice(0, 4)
           .map((entry) => ({
@@ -769,7 +774,7 @@ export default function ExecutiveOverviewPage() {
                 ? "Overspent budget bucket with immediate cost containment need."
                 : "Critical budget pressure nearing or above safe utilization threshold.",
             severity: entry.alertLevel === "OVERSPENT" ? ("CRITICAL" as const) : ("HIGH" as const),
-            amount: entry.approvedSpend,
+            amount: entry.recognizedSpend,
             href: budgetVsActualHref,
             issueType: entry.alertLevel,
             targetId: entry.id,
@@ -825,10 +830,6 @@ export default function ExecutiveOverviewPage() {
       costSummary.overview.highestCostRig?.name,
       executiveOverviewHref,
       filters,
-      filters.clientId,
-      filters.from,
-      filters.rigId,
-      filters.to,
       linkageCenterHref,
       missingLinkageRows.length,
       incompleteDrillingReports,
@@ -836,7 +837,7 @@ export default function ExecutiveOverviewPage() {
       decliningProfitClient,
       profitabilityConcern,
       pendingApprovals,
-      profitSummary.totals.approvedExpenses,
+      recognizedSpendTotal,
       profitSummary.totals.totalProfit,
       profitSummary.totals.totalRevenue,
       topRevenueClient?.name,
@@ -845,9 +846,6 @@ export default function ExecutiveOverviewPage() {
       topRevenueProject?.revenue,
       topRevenueRig?.name,
       topRevenueRig?.revenue,
-      revenueSummary.revenueByClient,
-      revenueSummary.revenueByProject,
-      revenueSummary.revenueByRig,
       queueSummary,
       oldestPendingRows
     ]
@@ -895,7 +893,7 @@ export default function ExecutiveOverviewPage() {
         >
           <SectionHeader
             title="Executive Overview"
-            description="Manager snapshot across approved finance performance, approvals pressure, and operational risk."
+            description="Manager snapshot across recognized finance performance, approvals pressure, and operational risk."
             action={
               <button
                 type="button"
@@ -912,7 +910,7 @@ export default function ExecutiveOverviewPage() {
               label={isScoped ? "Revenue in Scope" : "Total Revenue"}
               value={formatCurrency(profitSummary.totals.totalRevenue)}
             />
-            <MetricCard label="Approved Expenses" value={formatCurrency(profitSummary.totals.approvedExpenses)} tone="warn" />
+            <MetricCard label="Recognized Spend" value={formatCurrency(recognizedSpendTotal)} tone="warn" />
             <MetricCard
               label="Profit"
               value={formatCurrency(profitSummary.totals.totalProfit)}
@@ -947,16 +945,20 @@ export default function ExecutiveOverviewPage() {
               <p className="text-xl font-semibold text-ink-900">{costSummary.overview.highestCostRig?.name || "N/A"}</p>
               <p className="mt-1 text-sm text-slate-600">
                 {costSummary.overview.highestCostRig
-                  ? formatCurrency(costSummary.overview.highestCostRig.totalApprovedCost)
-                  : "No approved cost data"}
+                  ? formatCurrency(
+                      costSummary.overview.highestCostRig.totalRecognizedCost
+                    )
+                  : "No recognized cost data"}
               </p>
             </Card>
             <Card title="Highest Cost Project">
               <p className="text-xl font-semibold text-ink-900">{costSummary.overview.highestCostProject?.name || "N/A"}</p>
               <p className="mt-1 text-sm text-slate-600">
                 {costSummary.overview.highestCostProject
-                  ? formatCurrency(costSummary.overview.highestCostProject.totalApprovedCost)
-                  : "No approved cost data"}
+                  ? formatCurrency(
+                      costSummary.overview.highestCostProject.totalRecognizedCost
+                    )
+                  : "No recognized cost data"}
               </p>
             </Card>
             <Card title="Most Urgent Approval Queue">
@@ -988,7 +990,7 @@ export default function ExecutiveOverviewPage() {
         >
           <SectionHeader
             title="Trend"
-            description="Revenue, approved expense, and profit movement plus current approvals pressure aging."
+            description="Revenue, recognized spend, and profit movement plus current approvals pressure aging."
           />
           <div className="gf-chart-grid">
             <Card
@@ -998,7 +1000,7 @@ export default function ExecutiveOverviewPage() {
               {loading ? (
                 <p className="text-sm text-slate-600">Loading finance trend...</p>
               ) : profitSummary.profitTrend.length === 0 ? (
-                <div className="gf-empty-state">No approved finance trend data found for the selected filters.</div>
+                <div className="gf-empty-state">No recognized finance trend data found for the selected filters.</div>
               ) : (
                 <ExecutiveTrendChart data={profitSummary.profitTrend} />
               )}
@@ -1065,7 +1067,7 @@ export default function ExecutiveOverviewPage() {
                 <div className="gf-empty-state">No overspent or critical budget buckets in scope.</div>
               ) : (
                 <DataTable
-                  columns={["Scope", "Entity", "Budget", "Approved Spend", "Remaining", "% Used", "Status"]}
+                  columns={["Scope", "Entity", "Budget", "Recognized Spend", "Remaining", "% Used", "Status"]}
                   rows={budgetRiskTableRows}
                   rowIds={budgetRiskRowIds}
                   rowClassNames={budgetRiskRowClassNames}
@@ -1101,7 +1103,7 @@ export default function ExecutiveOverviewPage() {
           <div className="mt-4">
             <Card
               title="Missing Linkage Attention"
-              subtitle="Approved spend that remains unassigned to rig/project entities."
+              subtitle="Recognized spend that remains unassigned to rig/project entities."
               action={
                 <Link href={linkageCenterHref} className="gf-btn-subtle text-xs">
                   Open Linkage Center
@@ -1113,7 +1115,7 @@ export default function ExecutiveOverviewPage() {
               ) : missingLinkageRows.length === 0 ? (
                 <div className="gf-empty-state">No missing linkage spend detected for the selected filters.</div>
               ) : (
-                <DataTable columns={["Scope", "Entity", "Approved Cost", "Action"]} rows={missingLinkageRows} />
+                <DataTable columns={["Scope", "Entity", "Recognized Cost", "Action"]} rows={missingLinkageRows} />
               )}
             </Card>
           </div>
@@ -1241,7 +1243,8 @@ function deriveProfitabilityConcern({
       continue;
     }
     const revenue = revenueRigMap.get(row.id) || 0;
-    const gap = row.totalApprovedCost - revenue;
+    const rowCost = getRecognizedCostValue(row);
+    const gap = rowCost - revenue;
     if (gap <= 0) {
       continue;
     }
@@ -1250,7 +1253,7 @@ function deriveProfitabilityConcern({
       scope: "Rig",
       label: row.name,
       revenue,
-      cost: row.totalApprovedCost,
+      cost: rowCost,
       gapAmount: gap,
       href: "/cost-tracking",
       sectionId: "cost-by-rig-section",
@@ -1264,7 +1267,8 @@ function deriveProfitabilityConcern({
       continue;
     }
     const revenue = revenueProjectMap.get(row.id) || 0;
-    const gap = row.totalApprovedCost - revenue;
+    const rowCost = getRecognizedCostValue(row);
+    const gap = rowCost - revenue;
     if (gap <= 0) {
       continue;
     }
@@ -1273,7 +1277,7 @@ function deriveProfitabilityConcern({
       scope: "Project",
       label: row.name,
       revenue,
-      cost: row.totalApprovedCost,
+      cost: rowCost,
       gapAmount: gap,
       href: "/cost-tracking",
       sectionId: "cost-by-project-section",

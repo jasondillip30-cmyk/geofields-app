@@ -1,20 +1,33 @@
 import type { InventoryCategory } from "@prisma/client";
 import { existsSync } from "node:fs";
-import {
-  BarcodeFormat,
-  BinaryBitmap,
-  DecodeHintType,
-  GlobalHistogramBinarizer,
-  HybridBinarizer,
-  MultiFormatReader,
-  RGBLuminanceSource
-} from "@zxing/library";
+import { BarcodeFormat, BinaryBitmap, DecodeHintType, GlobalHistogramBinarizer, HybridBinarizer, MultiFormatReader, RGBLuminanceSource } from "@zxing/library";
 import sharp from "sharp";
 import { createWorker } from "tesseract.js";
 
 import { inferCategorySuggestion } from "@/lib/inventory-intelligence";
 import { roundCurrency } from "@/lib/inventory-server";
+import { suggestInventoryMatch } from "@/lib/inventory-receipt-intake-match";
+import { buildReceiptScanDiagnostics } from "@/lib/inventory-receipt-intake-payload";
+import { detectReceiptType, resolveScanStatus } from "@/lib/inventory-receipt-intake-reconcile";
+import {
+  cleanupDescription,
+  containsAny,
+  findCurrency,
+  findDate,
+  findItemCount,
+  findLabeledAmount,
+  findPattern,
+  findPaymentMethod,
+  findTime,
+  findTotalAmount,
+  lineSkipKeywords,
+  normalizeName,
+  normalizeWhitespace,
+  parseNumberSafe,
+  toStringValue
+} from "@/lib/inventory-receipt-intake-parse-utils";
 import { resolveNextDistDir, resolveNextDistPath } from "@/lib/next-dist-dir";
+import { debugLog } from "@/lib/observability";
 
 export type ReceiptFieldConfidence = "HIGH" | "MEDIUM" | "LOW" | "NONE";
 export type ReceiptLineConfidence = "HIGH" | "MEDIUM" | "LOW";
@@ -284,26 +297,6 @@ interface HeaderExtractionResult {
   fieldConfidence: ReceiptFieldConfidenceMap;
 }
 
-const lineSkipKeywords = [
-  "subtotal",
-  "total",
-  "grand total",
-  "vat",
-  "tax",
-  "receipt",
-  "invoice",
-  "amount due",
-  "balance",
-  "cash",
-  "change",
-  "payment",
-  "operator",
-  "tra",
-  "tin",
-  "tel",
-  "phone"
-];
-
 type QrDecoderFn = (
   data: Uint8ClampedArray,
   width: number,
@@ -372,7 +365,7 @@ export async function extractReceiptData({
       verificationLookup.parsedLineItemsCount > 0);
   const missingFieldsBeforeOCR = listMissingHeaderFields(qrResult.parsedFields, qrOcrCompletionFields);
   if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][merge]", {
+    debugLog("[inventory][receipt-intake][merge]", {
       missingFieldsBeforeOCR
     });
   }
@@ -390,7 +383,7 @@ export async function extractReceiptData({
   if (shouldRunOcr) {
     ocrAttempted = true;
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][postprocess]", {
+      debugLog("[inventory][receipt-intake][postprocess]", {
         stage: "optional_postprocess_started",
         mode: "ocr"
       });
@@ -404,7 +397,7 @@ export async function extractReceiptData({
       if (extraction.warning) {
         ocrError = extraction.warning;
         if (process.env.NODE_ENV !== "production") {
-          console.info("[inventory][receipt-intake][postprocess]", {
+          debugLog("[inventory][receipt-intake][postprocess]", {
             stage: "enrichment_warning",
             mode: "ocr",
             reason: extraction.warning
@@ -417,7 +410,7 @@ export async function extractReceiptData({
       const reason = normalizeOcrEnrichmentError(error);
       ocrError = reason;
       if (process.env.NODE_ENV !== "production") {
-        console.info("[inventory][receipt-intake][postprocess]", {
+        debugLog("[inventory][receipt-intake][postprocess]", {
           stage: "enrichment_warning",
           mode: "ocr",
           reason
@@ -455,7 +448,7 @@ export async function extractReceiptData({
     (field) => mergedHeaderResult.fieldSource[field] === "OCR" && hasHeaderFieldValue(mergedHeaderResult.header[field])
   );
   if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][merge]", {
+    debugLog("[inventory][receipt-intake][merge]", {
       ocrExtractedFields,
       mergedFinalFields
     });
@@ -598,70 +591,6 @@ export async function extractReceiptData({
           }
         : undefined
   };
-}
-
-function buildReceiptScanDiagnostics({
-  qrResult,
-  intakeDebug,
-  scanStatus,
-  extractionMethod
-}: {
-  qrResult: ReceiptQrResult;
-  intakeDebug: ReceiptExtractionResult["intakeDebug"];
-  scanStatus: ReceiptScanStatus;
-  extractionMethod: ReceiptExtractionResult["extractionMethod"];
-}): ReceiptScanDiagnostics {
-  const lookup = qrResult.stages.verificationLookup;
-  const rawValue = qrResult.rawValue;
-  return {
-    qrDetected: qrResult.detected,
-    qrDecodeStatus: qrResult.decodeStatus,
-    qrDecodePass: qrResult.decodePass,
-    qrParseStatus: qrResult.parseStatus,
-    qrFailureReason: qrResult.failureReason,
-    qrContentType: qrResult.contentType,
-    qrRawValue: rawValue,
-    qrNormalizedRawValue: qrResult.normalizedRawValue || qrResult.rawValue,
-    qrRawLength: rawValue.length,
-    qrRawPreview: truncateQrLogValue(rawValue, 200),
-    qrRawPayloadFormat: detectRawQrPayloadFormat(rawValue),
-    qrVerificationUrl: qrResult.verificationUrl,
-    qrIsTraVerification: qrResult.isTraVerification,
-    qrParsedFieldCount: countParsedFields(qrResult.parsedFields),
-    qrParsedLineItemsCount: qrResult.parsedLineCandidates.length,
-    qrLookupStatus: lookup.status,
-    qrLookupReason: lookup.reason,
-    qrLookupHttpStatus: lookup.httpStatus,
-    qrLookupParsed: lookup.parsed,
-    ocrAttempted: intakeDebug.ocrAttempted,
-    ocrSucceeded: intakeDebug.ocrSucceeded,
-    ocrError: intakeDebug.ocrError,
-    scanStatus,
-    extractionMethod,
-    returnedFrom: intakeDebug.returnedFrom,
-    failureStage: resolveScanFailureStage(qrResult)
-  };
-}
-
-function resolveScanFailureStage(qrResult: ReceiptQrResult): ReceiptScanFailureStage {
-  if (qrResult.decodeStatus === "NOT_DETECTED") {
-    return "QR_NOT_DETECTED";
-  }
-  if (qrResult.decodeStatus === "DECODE_FAILED") {
-    return "QR_DECODE_FAILED";
-  }
-  if (qrResult.decodeStatus === "DECODED" && qrResult.parseStatus === "UNPARSED") {
-    return "QR_PARSE_UNPARSED";
-  }
-  if (
-    qrResult.decodeStatus === "DECODED" &&
-    qrResult.isTraVerification &&
-    qrResult.stages.verificationLookup.attempted &&
-    qrResult.stages.verificationLookup.status === "FAILED"
-  ) {
-    return "TRA_LOOKUP_FAILED";
-  }
-  return "NONE";
 }
 
 export async function extractQrDataOnly({
@@ -908,7 +837,7 @@ async function parsePdfTextSafely(
     if (!parserCtor) {
       const message = "PDF parser module could not be loaded.";
       if (process.env.NODE_ENV !== "production") {
-        console.info("[inventory][receipt-intake][pdf][error]", {
+        debugLog("[inventory][receipt-intake][pdf][error]", {
           stage: "module_import",
           context,
           message
@@ -932,7 +861,7 @@ async function parsePdfTextSafely(
   } catch (error) {
     const message = error instanceof Error ? error.message : "PDF parsing failed.";
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][pdf][error]", {
+      debugLog("[inventory][receipt-intake][pdf][error]", {
         stage: "parse",
         context,
         message
@@ -970,7 +899,7 @@ async function extractQrDataFromReceipt({
   mode?: "full" | "decode-only";
 }): Promise<ReceiptQrResult> {
   if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][qr][stage]", {
+    debugLog("[inventory][receipt-intake][qr][stage]", {
       stage: "image_received",
       mimeType,
       fileBytes: fileBuffer.length
@@ -1041,13 +970,13 @@ async function extractQrDataFromReceipt({
       qrAssistCrop
     });
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][qr][stage]", {
+      debugLog("[inventory][receipt-intake][qr][stage]", {
         stage: "image_loaded",
         width: metadata.width,
         height: metadata.height,
         isQrOnlyCandidate
       });
-      console.info("[inventory][receipt-intake][qr][stage]", {
+      debugLog("[inventory][receipt-intake][qr][stage]", {
         stage: "preprocessing_applied",
         variantCount: qrVariants.length,
         samplePasses: qrVariants.slice(0, 8).map((variant) => variant.label)
@@ -1065,7 +994,7 @@ async function extractQrDataFromReceipt({
       });
     }
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][qr][decode]", {
+      debugLog("[inventory][receipt-intake][qr][decode]", {
         stage: "decode_started",
         decoderStrategies: decoderStrategies.map((strategy) => strategy.name),
         variantCount: qrVariants.length
@@ -1090,7 +1019,7 @@ async function extractQrDataFromReceipt({
           mode
         });
         if (process.env.NODE_ENV !== "production") {
-          console.info("[inventory][receipt-intake][qr][decode]", {
+          debugLog("[inventory][receipt-intake][qr][decode]", {
             stage: "decode_result",
             detected: true,
             pass: attemptLabel,
@@ -1110,7 +1039,7 @@ async function extractQrDataFromReceipt({
         ? "QR detected but could not be decoded. Try a clearer crop or continue manually."
         : "QR not detected. Continuing with OCR fallback.";
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][qr][decode]", {
+      debugLog("[inventory][receipt-intake][qr][decode]", {
         stage: "decode_result",
         detected: false,
         decodeStatus,
@@ -1178,7 +1107,7 @@ async function resolveQrDecodedResult({
 function logDecodedRawPayload(rawValue: string, decodePass: string) {
   const exactRaw = typeof rawValue === "string" ? rawValue : "";
   const preview = truncateQrLogValue(exactRaw, 200);
-  console.info("[inventory][receipt-intake][qr][raw-decoder]", {
+  debugLog("[inventory][receipt-intake][qr][raw-decoder]", {
     detected: true,
     decodeSucceeded: exactRaw.length > 0,
     decodePass: decodePass || "unknown",
@@ -1332,7 +1261,7 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
 
   try {
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][tra-lookup][request]", { url: target.toString() });
+      debugLog("[inventory][receipt-intake][tra-lookup][request]", { url: target.toString() });
     }
     const renderedLookup = await fetchTraRenderedHtml(target.toString());
     const body = renderedLookup.html;
@@ -1348,7 +1277,7 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
       : renderedLookup.error || `Lookup failed with status ${renderedLookup.httpStatus ?? "unknown"}`;
 
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][tra-lookup][response]", {
+      debugLog("[inventory][receipt-intake][tra-lookup][response]", {
         status: renderedLookup.httpStatus,
         ok: renderedLookup.ok,
         source: renderedLookup.source,
@@ -1362,14 +1291,14 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
         fieldsParseStatus: parsedLookup.fieldsParseStatus,
         lineItemsParseStatus: parsedLookup.lineItemsParseStatus
       });
-      console.info("[inventory][receipt-intake][tra-lookup][mapped-fields]", parsedFields);
+      debugLog("[inventory][receipt-intake][tra-lookup][mapped-fields]", parsedFields);
       if (parsedLookup.debugRawTextPreview) {
-        console.info("[inventory][receipt-intake][tra-lookup][raw-text-preview]", {
+        debugLog("[inventory][receipt-intake][tra-lookup][raw-text-preview]", {
           preview: parsedLookup.debugRawTextPreview
         });
       }
       if (parsedLookup.debugFieldCandidates.length > 0) {
-        console.info("[inventory][receipt-intake][tra-lookup][field-candidates]", {
+        debugLog("[inventory][receipt-intake][tra-lookup][field-candidates]", {
           candidates: parsedLookup.debugFieldCandidates.slice(0, 20)
         });
       }
@@ -1394,7 +1323,7 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Lookup request failed";
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][tra-lookup][error]", { reason });
+      debugLog("[inventory][receipt-intake][tra-lookup][error]", { reason });
     }
     return {
       attempted: true,
@@ -1436,7 +1365,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
       const html = await response.text().catch(() => "");
       const metrics = buildTraHtmlKeywordMetrics(html);
       if (process.env.NODE_ENV !== "production") {
-        console.info("[inventory][receipt-intake][tra-lookup][fetch-fallback]", {
+        debugLog("[inventory][receipt-intake][tra-lookup][fetch-fallback]", {
           reason,
           status: response.status,
           ok: response.ok,
@@ -1506,7 +1435,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
       const metrics = buildTraHtmlKeywordMetrics(html);
 
       if (process.env.NODE_ENV !== "production") {
-        console.info("[inventory][receipt-intake][tra-lookup][playwright-rendered]", {
+        debugLog("[inventory][receipt-intake][tra-lookup][playwright-rendered]", {
           status,
           ok,
           htmlLength: html.length,
@@ -1531,7 +1460,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
     const message =
       error instanceof Error ? error.message : "Playwright rendering failed before lookup parsing.";
     if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][tra-lookup][playwright-error]", { reason: message });
+      debugLog("[inventory][receipt-intake][tra-lookup][playwright-error]", { reason: message });
     }
     return fallbackFetch(message);
   }
@@ -1704,17 +1633,17 @@ function parseTraLookupResponse({
     lineCandidates.length > 0 ? "SUCCESS" : "FAILED";
 
   if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][tra-lookup][html-structure]", parseContext.structureSummary);
-    console.info("[inventory][receipt-intake][tra-lookup][selected-container]", {
+    debugLog("[inventory][receipt-intake][tra-lookup][html-structure]", parseContext.structureSummary);
+    debugLog("[inventory][receipt-intake][tra-lookup][selected-container]", {
       source: parseContext.selectedSource,
       score: parseContext.selectedScore,
       keywordHits: parseContext.selectedKeywordHits,
       preview: parseContext.selectedHtml.slice(0, 1200)
     });
-    console.info("[inventory][receipt-intake][tra-lookup][candidate-summary]", {
+    debugLog("[inventory][receipt-intake][tra-lookup][candidate-summary]", {
       candidates: parseContext.candidateSummaries.slice(0, 8)
     });
-    console.info("[inventory][receipt-intake][tra-lookup][parsed-summary]", {
+    debugLog("[inventory][receipt-intake][tra-lookup][parsed-summary]", {
       parsedFieldCount: resolvedParsedFieldCount,
       parsedLineItemsCount: lineCandidates.length,
       fieldsParseStatus,
@@ -1778,7 +1707,7 @@ function extractTraCriticalFields({
     extractTraSupplierName(criticalTextPool);
 
   if (process.env.NODE_ENV !== "production") {
-    console.info("[inventory][receipt-intake][tra-lookup][supplier-candidates]", {
+    debugLog("[inventory][receipt-intake][tra-lookup][supplier-candidates]", {
       supplierCandidateFromHeader,
       supplierCandidateFromRawText,
       supplierSelectedFinal: supplierName || "",
@@ -3940,42 +3869,6 @@ function safeDecodeURIComponent(value: string) {
   }
 }
 
-function detectRawQrPayloadFormat(
-  rawValue: string
-): "EMPTY" | "URL" | "JSON" | "QUERY_STRING" | "KEY_VALUE" | "PERCENT_ENCODED" | "BASE64_LIKE" | "TEXT" {
-  const trimmed = rawValue.trim();
-  if (!trimmed) {
-    return "EMPTY";
-  }
-  if (looksLikeUrlLikeQrValue(trimmed) || /https?:\/\/\S+/i.test(trimmed)) {
-    return "URL";
-  }
-  if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-    try {
-      JSON.parse(trimmed);
-      return "JSON";
-    } catch {
-      // keep classifying
-    }
-  }
-  if (
-    /(?:^|[?&])[a-z0-9_\-]+=/i.test(trimmed) ||
-    (trimmed.includes("&") && trimmed.includes("="))
-  ) {
-    return "QUERY_STRING";
-  }
-  if (/[a-z][a-z0-9_\s-]{1,32}\s*[:=]\s*[^&;\n\r]+/i.test(trimmed)) {
-    return "KEY_VALUE";
-  }
-  if (/%[0-9a-f]{2}/i.test(trimmed)) {
-    return "PERCENT_ENCODED";
-  }
-  if (/^[A-Za-z0-9+/=]{24,}$/.test(trimmed) && !trimmed.includes(" ")) {
-    return "BASE64_LIKE";
-  }
-  return "TEXT";
-}
-
 function extractVerificationUrlCandidate(value: string) {
   const candidates = Array.from(
     new Set(
@@ -4490,231 +4383,6 @@ function mergeDuplicateLineCandidates(lines: ReceiptLineCandidate[]) {
   return Array.from(byDescription.values()).slice(0, 80);
 }
 
-function suggestInventoryMatch(description: string, items: InventoryReferenceItem[]): ReceiptLineMatchSuggestion {
-  const normalizedDescription = normalizeName(description);
-  const compactDescription = normalizeCompactName(description);
-  const descriptionTokens = splitNormalizedTokens(normalizedDescription);
-  if (!normalizedDescription || items.length === 0) {
-    return {
-      itemId: null,
-      itemName: null,
-      confidence: "NONE",
-      score: 0
-    };
-  }
-
-  let best: { id: string; name: string; score: number } | null = null;
-  for (const item of items) {
-    const normalizedName = normalizeName(item.name);
-    const normalizedSku = normalizeName(item.sku);
-    const compactName = normalizeCompactName(item.name);
-    const compactSku = normalizeCompactName(item.sku);
-    const itemTokens = splitNormalizedTokens(normalizedName);
-    let score = similarityScore(normalizedDescription, normalizedName);
-    score = Math.max(score, tokenOverlapScore(descriptionTokens, itemTokens));
-
-    if (normalizedDescription === normalizedName) {
-      score = 1;
-    } else if (compactDescription && compactName && compactDescription === compactName) {
-      score = Math.max(score, 0.96);
-    } else if (
-      compactDescription &&
-      compactName &&
-      (compactDescription.includes(compactName) || compactName.includes(compactDescription))
-    ) {
-      score = Math.max(score, 0.9);
-    } else if (normalizedDescription.includes(normalizedName) || normalizedName.includes(normalizedDescription)) {
-      score = Math.max(score, 0.85);
-    } else if (normalizedSku && normalizedDescription.includes(normalizedSku)) {
-      score = Math.max(score, 0.78);
-    } else if (
-      compactSku &&
-      compactDescription &&
-      (compactDescription.includes(compactSku) || compactSku.includes(compactDescription))
-    ) {
-      score = Math.max(score, 0.8);
-    }
-
-    if (!best || score > best.score) {
-      best = {
-        id: item.id,
-        name: item.name,
-        score
-      };
-    }
-  }
-
-  if (!best || best.score < 0.72) {
-    return {
-      itemId: null,
-      itemName: null,
-      confidence: "NONE",
-      score: roundCurrency(best?.score || 0)
-    };
-  }
-
-  const confidence: ReceiptFieldConfidence = best.score >= 0.88 ? "HIGH" : "MEDIUM";
-  return {
-    itemId: best.id,
-    itemName: best.name,
-    confidence,
-    score: roundCurrency(best.score)
-  };
-}
-
-function normalizeName(value: string) {
-  return value
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Za-z])(\d)/g, "$1 $2")
-    .replace(/(\d)([A-Za-z])/g, "$1 $2")
-    .toLowerCase()
-    .replace(/[._,/\\-]+/g, " ")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeCompactName(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "").trim();
-}
-
-function splitNormalizedTokens(value: string) {
-  if (!value) {
-    return [];
-  }
-  return value.split(" ").filter(Boolean);
-}
-
-function tokenOverlapScore(left: string[], right: string[]) {
-  if (left.length === 0 || right.length === 0) {
-    return 0;
-  }
-  const leftSet = new Set(left);
-  const rightSet = new Set(right);
-  let intersection = 0;
-  for (const token of leftSet) {
-    if (rightSet.has(token)) {
-      intersection += 1;
-    }
-  }
-  const union = new Set([...leftSet, ...rightSet]).size;
-  if (union === 0) {
-    return 0;
-  }
-  return intersection / union;
-}
-
-function cleanupDescription(value: string) {
-  return normalizeWhitespace(value)
-    .replace(/^[x@\-:|]+/g, "")
-    .replace(/\bqty\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function normalizeWhitespace(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function parseNumberSafe(value: string) {
-  const cleaned = value.replace(/,/g, "").trim();
-  const parsed = Number(cleaned);
-  if (Number.isNaN(parsed)) {
-    return 0;
-  }
-  return parsed;
-}
-
-function toStringValue(value: unknown) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function findPattern(text: string, patterns: RegExp[]) {
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match?.[1]) {
-      return match[1].trim();
-    }
-  }
-  return "";
-}
-
-function findDate(text: string) {
-  const iso = text.match(/\b(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})\b/);
-  if (iso) {
-    const [, year, month, day] = iso;
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-
-  const dmy = text.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](20\d{2})\b/);
-  if (dmy) {
-    const [, day, month, year] = dmy;
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-  }
-
-  return "";
-}
-
-function findTime(text: string) {
-  const twelveHour = text.match(/\b(0?[1-9]|1[0-2]):([0-5]\d)\s*([ap]m)\b/i);
-  if (twelveHour) {
-    const [, hour, minute, meridiem] = twelveHour;
-    return `${hour.padStart(2, "0")}:${minute} ${meridiem.toUpperCase()}`;
-  }
-
-  const twentyFour = text.match(/\b([01]?\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?\b/);
-  if (twentyFour) {
-    const [, hour, minute] = twentyFour;
-    return `${hour.padStart(2, "0")}:${minute}`;
-  }
-
-  return "";
-}
-
-function findPaymentMethod(text: string) {
-  const lower = text.toLowerCase();
-  if (containsAny(lower, ["cash", "paid cash"])) {
-    return "Cash";
-  }
-  if (containsAny(lower, ["mpesa", "m-pesa"])) {
-    return "M-Pesa";
-  }
-  if (containsAny(lower, ["card", "visa", "mastercard", "pos"])) {
-    return "Card";
-  }
-  if (containsAny(lower, ["bank transfer", "eft", "transfer"])) {
-    return "Bank Transfer";
-  }
-  if (containsAny(lower, ["credit"])) {
-    return "Credit";
-  }
-  return "";
-}
-
-function findItemCount(text: string) {
-  const countMatch = text.match(/\b(?:items?|qty|quantity)\s*[:\-]?\s*(\d{1,4})\b/i);
-  if (countMatch?.[1]) {
-    return Number(countMatch[1]);
-  }
-
-  const lines = text
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const probableItemLines = lines.filter((line) => {
-    if (containsAny(line.toLowerCase(), lineSkipKeywords)) {
-      return false;
-    }
-    const amounts = line.match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
-    return amounts.length >= 1 && /[a-z]/i.test(line);
-  });
-
-  if (probableItemLines.length === 0) {
-    return 0;
-  }
-  return Math.min(probableItemLines.length, 999);
-}
-
 function readabilityForText(
   value: string,
   options?: {
@@ -4779,165 +4447,4 @@ function readabilityForCount(value: number): ReceiptFieldReadability {
     return "UNREADABLE";
   }
   return value >= 1 ? "HIGH" : "MEDIUM";
-}
-
-function detectReceiptType({
-  text,
-  lines
-}: {
-  text: string;
-  lines: ReceiptLineExtraction[];
-}): ReceiptType {
-  const lower = text.toLowerCase();
-  const inventoryKeywords = [
-    "filter",
-    "hose",
-    "belt",
-    "bit",
-    "rod",
-    "bearing",
-    "hydraulic",
-    "compressor",
-    "engine oil",
-    "spare part",
-    "drill"
-  ];
-  const expenseKeywords = ["hotel", "lodge", "restaurant", "meal", "transport", "taxi", "airtime", "office"];
-
-  const lineText = lines.map((line) => line.description.toLowerCase()).join(" ");
-  if (
-    lines.length > 0 &&
-    (containsAny(lower, inventoryKeywords) ||
-      containsAny(lineText, inventoryKeywords) ||
-      lines.some((line) => line.matchSuggestion.itemId))
-  ) {
-    return "INVENTORY_PURCHASE";
-  }
-  if (containsAny(lower, expenseKeywords) || containsAny(lineText, expenseKeywords)) {
-    return "GENERAL_EXPENSE";
-  }
-  return "UNCLEAR";
-}
-
-function resolveScanStatus({
-  text,
-  lines,
-  fieldConfidence,
-  qr
-}: {
-  text: string;
-  lines: ReceiptLineExtraction[];
-  fieldConfidence: ReceiptFieldConfidenceMap;
-  qr: ReceiptQrResult;
-}): ReceiptScanStatus {
-  const verificationLookup = qr.stages.verificationLookup;
-  const hasTraCoreParse =
-    verificationLookup.attempted &&
-    verificationLookup.status === "SUCCESS" &&
-    (verificationLookup.parsed || verificationLookup.parsedFieldCount >= 6);
-  if (hasTraCoreParse) {
-    return "COMPLETE";
-  }
-
-  if (qr.decodeStatus === "DECODED" && qr.rawValue.trim()) {
-    // QR decode success is its own valid signal, even when OCR text is empty.
-    // Keep this as PARTIAL unless full OCR/header confidence also indicates COMPLETE.
-    if (!text.trim()) {
-      return "PARTIAL";
-    }
-    if (qr.parseStatus === "UNPARSED") {
-      return "PARTIAL";
-    }
-  }
-
-  if (!text.trim()) {
-    return "UNREADABLE";
-  }
-
-  const readableHeaderFields = Object.values(fieldConfidence).filter(
-    (confidence) => confidence !== "UNREADABLE"
-  ).length;
-  if (readableHeaderFields <= 2 && lines.length === 0) {
-    return "UNREADABLE";
-  }
-
-  const lowConfidenceLineCount = lines.filter((line) => line.extractionConfidence === "LOW").length;
-  const hasPartialSignals = lines.length === 0 || lowConfidenceLineCount > 0 || readableHeaderFields < 8;
-  return hasPartialSignals ? "PARTIAL" : "COMPLETE";
-}
-
-function findCurrency(text: string) {
-  const upper = text.toUpperCase();
-  if (upper.includes("TZS") || upper.includes("T SH") || upper.includes("TSH")) return "TZS";
-  if (upper.includes("USD")) return "USD";
-  if (upper.includes("KES")) return "KES";
-  if (upper.includes("EUR")) return "EUR";
-  return "TZS";
-}
-
-function findLabeledAmount(text: string, labels: string[]) {
-  const rows = text.split(/\r?\n/g);
-  for (const row of rows) {
-    const normalized = row.toLowerCase();
-    if (!containsAny(normalized, labels)) {
-      continue;
-    }
-    const amounts = row.match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
-    if (amounts.length === 0) {
-      continue;
-    }
-    const value = parseNumberSafe(amounts[amounts.length - 1]);
-    if (value > 0) {
-      return value;
-    }
-  }
-  return 0;
-}
-
-function findTotalAmount(text: string, fallbackTotal: number) {
-  const rows = text.split(/\r?\n/g);
-  const candidateTotals: number[] = [];
-  for (const row of rows) {
-    const normalized = row.toLowerCase();
-    if (!containsAny(normalized, ["total", "grand total", "amount due"])) {
-      continue;
-    }
-    const amounts = row.match(/-?\d[\d,]*(?:\.\d+)?/g) || [];
-    if (amounts.length === 0) {
-      continue;
-    }
-    const value = parseNumberSafe(amounts[amounts.length - 1]);
-    if (value > 0) {
-      candidateTotals.push(value);
-    }
-  }
-
-  if (candidateTotals.length === 0) {
-    return fallbackTotal > 0 ? fallbackTotal : 0;
-  }
-
-  return Math.max(...candidateTotals);
-}
-
-function containsAny(value: string, keywords: string[]) {
-  return keywords.some((keyword) => value.includes(keyword));
-}
-
-function similarityScore(a: string, b: string) {
-  if (!a || !b) {
-    return 0;
-  }
-  if (a === b) {
-    return 1;
-  }
-  const aTokens = new Set(a.split(" "));
-  const bTokens = new Set(b.split(" "));
-  let intersection = 0;
-  for (const token of aTokens) {
-    if (bTokens.has(token)) {
-      intersection += 1;
-    }
-  }
-  const union = new Set([...aTokens, ...bTokens]).size;
-  return union === 0 ? 0 : intersection / union;
 }

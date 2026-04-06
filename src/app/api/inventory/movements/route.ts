@@ -38,6 +38,7 @@ const movementInclude = {
   rig: { select: { id: true, rigCode: true } },
   project: { select: { id: true, name: true } },
   maintenanceRequest: { select: { id: true, requestCode: true, status: true } },
+  breakdownReport: { select: { id: true, title: true, status: true, severity: true } },
   expense: { select: { id: true, amount: true, category: true, approvalStatus: true } },
   supplier: { select: { id: true, name: true } },
   locationFrom: { select: { id: true, name: true } },
@@ -56,6 +57,7 @@ interface ParsedMovementInput {
   projectId: string | null;
   clientId: string | null;
   maintenanceRequestId: string | null;
+  breakdownReportId: string | null;
   expenseId: string | null;
   supplierId: string | null;
   locationFromId: string | null;
@@ -82,6 +84,7 @@ export async function GET(request: NextRequest) {
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
+  const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
   const supplierId = nullableFilter(request.nextUrl.searchParams.get("supplierId"));
   const date = buildDateFilter(fromDate, toDate);
 
@@ -92,6 +95,7 @@ export async function GET(request: NextRequest) {
     ...(projectId ? { projectId } : {}),
     ...(clientId ? { clientId } : {}),
     ...(maintenanceRequestId ? { maintenanceRequestId } : {}),
+    ...(breakdownReportId ? { breakdownReportId } : {}),
     ...(supplierId ? { supplierId } : {}),
     ...(date ? { date } : {})
   };
@@ -146,7 +150,8 @@ export async function POST(request: NextRequest) {
   }
   const input = parsed.value;
 
-  const [item, project, rig, maintenanceRequest, expense, supplier, locationFrom, locationTo] = await Promise.all([
+  const [item, project, rig, maintenanceRequest, breakdownReport, expense, supplier, locationFrom, locationTo] =
+    await Promise.all([
     prisma.inventoryItem.findUnique({
       where: { id: input.itemId },
       select: {
@@ -175,7 +180,13 @@ export async function POST(request: NextRequest) {
     input.maintenanceRequestId
       ? prisma.maintenanceRequest.findUnique({
           where: { id: input.maintenanceRequestId },
-          select: { id: true, requestCode: true, status: true }
+          select: { id: true, requestCode: true, status: true, breakdownReportId: true }
+        })
+      : Promise.resolve(null),
+    input.breakdownReportId
+      ? prisma.breakdownReport.findUnique({
+          where: { id: input.breakdownReportId },
+          select: { id: true, rigId: true, projectId: true }
         })
       : Promise.resolve(null),
     input.expenseId
@@ -216,6 +227,9 @@ export async function POST(request: NextRequest) {
   if (input.maintenanceRequestId && !maintenanceRequest) {
     return NextResponse.json({ message: "Maintenance request not found." }, { status: 404 });
   }
+  if (input.breakdownReportId && !breakdownReport) {
+    return NextResponse.json({ message: "Breakdown report not found." }, { status: 404 });
+  }
   if (input.expenseId && !expense) {
     return NextResponse.json({ message: "Linked expense not found." }, { status: 404 });
   }
@@ -227,6 +241,35 @@ export async function POST(request: NextRequest) {
   }
   if (input.locationToId && !locationTo) {
     return NextResponse.json({ message: "To location not found." }, { status: 404 });
+  }
+  if (
+    input.breakdownReportId &&
+    maintenanceRequest?.breakdownReportId &&
+    maintenanceRequest.breakdownReportId !== input.breakdownReportId
+  ) {
+    return NextResponse.json(
+      {
+        message:
+          "Selected maintenance request is linked to a different breakdown. Align maintenance and breakdown linkage before recording movement."
+      },
+      { status: 400 }
+    );
+  }
+  if (input.breakdownReportId && breakdownReport && input.projectId && breakdownReport.projectId !== input.projectId) {
+    return NextResponse.json(
+      {
+        message: "Selected breakdown does not belong to the selected project."
+      },
+      { status: 400 }
+    );
+  }
+  if (input.breakdownReportId && breakdownReport && input.rigId && breakdownReport.rigId !== input.rigId) {
+    return NextResponse.json(
+      {
+        message: "Selected breakdown does not belong to the selected rig."
+      },
+      { status: 400 }
+    );
   }
 
   let resolvedClientId = input.clientId;
@@ -252,6 +295,8 @@ export async function POST(request: NextRequest) {
   }
 
   const effectiveUnitCost = input.unitCost ?? item.unitCost;
+  const resolvedBreakdownReportId =
+    input.breakdownReportId || maintenanceRequest?.breakdownReportId || null;
   const totalCost =
     input.totalCost !== null
       ? roundCurrency(input.totalCost)
@@ -311,6 +356,7 @@ export async function POST(request: NextRequest) {
         rigId: input.rigId,
         projectId: input.projectId,
         maintenanceRequestId: input.maintenanceRequestId,
+        breakdownReportId: resolvedBreakdownReportId,
         expenseId: createdExpenseId,
         supplierId: input.supplierId,
         locationFromId: input.locationFromId,
@@ -345,6 +391,8 @@ export async function POST(request: NextRequest) {
         itemId: item.id,
         movementType: input.movementType,
         quantity: input.quantity,
+        maintenanceRequestId: input.maintenanceRequestId,
+        breakdownReportId: resolvedBreakdownReportId,
         totalCost,
         previousStock: item.quantityInStock,
         nextStock
@@ -407,6 +455,7 @@ async function parseMovementInput(request: NextRequest) {
         projectId: nullableString(asString(formData.get("projectId"))),
         clientId: nullableString(asString(formData.get("clientId"))),
         maintenanceRequestId: nullableString(asString(formData.get("maintenanceRequestId"))),
+        breakdownReportId: nullableString(asString(formData.get("breakdownReportId"))),
         expenseId: nullableString(asString(formData.get("expenseId"))),
         supplierId: nullableString(asString(formData.get("supplierId"))),
         locationFromId: nullableString(asString(formData.get("locationFromId"))),
@@ -456,6 +505,9 @@ async function parseMovementInput(request: NextRequest) {
       clientId: nullableString(typeof body?.clientId === "string" ? body.clientId : ""),
       maintenanceRequestId: nullableString(
         typeof body?.maintenanceRequestId === "string" ? body.maintenanceRequestId : ""
+      ),
+      breakdownReportId: nullableString(
+        typeof body?.breakdownReportId === "string" ? body.breakdownReportId : ""
       ),
       expenseId: nullableString(typeof body?.expenseId === "string" ? body.expenseId : ""),
       supplierId: nullableString(typeof body?.supplierId === "string" ? body.supplierId : ""),

@@ -1,4 +1,6 @@
 import type { BudgetScopeType, Prisma } from "@prisma/client";
+import type { CostSpendCategoryKey } from "@/lib/cost-tracking";
+import type { OperationalPurposeBucket } from "@/lib/approved-spend-classification";
 
 export type BudgetConsumptionStatus = "ON_TRACK" | "OVERSPENT" | "NO_BUDGET";
 export type BudgetAlertLevel = "NONE" | "WATCH_80" | "CRITICAL_90" | "OVERSPENT";
@@ -16,7 +18,7 @@ export interface BudgetVsActualRow {
   id: string;
   name: string;
   budgetAmount: number;
-  approvedSpend: number;
+  recognizedSpend: number;
   remainingBudget: number;
   percentUsed: number | null;
   status: BudgetConsumptionStatus;
@@ -33,13 +35,70 @@ export interface BudgetVsActualSummaryResponse {
   };
   totals: {
     totalBudget: number;
-    approvedSpend: number;
+    recognizedSpend: number;
     remainingBudget: number;
     overspentCount: number;
   };
   byRig: BudgetVsActualRow[];
   byProject: BudgetVsActualRow[];
   alerts?: BudgetAlertSummary;
+  classification?: {
+    rows: BudgetClassifiedSpendRow[];
+    purposeTotals: {
+      recognizedSpendTotal: number;
+      breakdownCost: number;
+      maintenanceCost: number;
+      stockReplenishmentCost: number;
+      operatingCost: number;
+      otherUnlinkedCost: number;
+    };
+    categoryTotals: Record<string, number>;
+    audit: {
+      recognizedSpendTotal: number;
+      purposeTotals: {
+        recognizedSpendTotal: number;
+        breakdownCost: number;
+        maintenanceCost: number;
+        stockReplenishmentCost: number;
+        operatingCost: number;
+        otherUnlinkedCost: number;
+      };
+      categoryTotals: Record<string, number>;
+      purposeCounts: Record<string, number>;
+      legacyUnlinkedCount: number;
+      reconciliationDelta: number;
+    };
+  };
+}
+
+export interface BudgetClassifiedSpendRow {
+  expenseId: string;
+  date: string;
+  amount: number;
+  purposeBucket: OperationalPurposeBucket;
+  purposeLabel: string;
+  accountingCategoryKey: CostSpendCategoryKey;
+  accountingCategoryLabel: string;
+  traceability: string;
+  sourceType:
+    | "EXPLICIT_BREAKDOWN"
+    | "EXPLICIT_MAINTENANCE"
+    | "STOCK_LINKAGE"
+    | "PROJECT_LINKAGE"
+    | "LEGACY_HINT"
+    | "UNLINKED";
+  linkedProjectId: string | null;
+  linkedRigId: string | null;
+  maintenanceRequestId: string | null;
+  breakdownReportId: string | null;
+  requisitionCode: string | null;
+  movementSummary: string | null;
+  legacyFlags: {
+    legacyBreakdownMarker: boolean;
+    maintenanceLikeWithoutLink: boolean;
+    noProjectLink: boolean;
+    noRigLink: boolean;
+  };
 }
 
 export function nullableFilter(value: string | null) {

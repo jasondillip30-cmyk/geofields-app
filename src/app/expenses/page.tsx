@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
 import { AccessGate } from "@/components/layout/access-gate";
@@ -33,6 +34,11 @@ export default function ExpensesPage() {
 }
 
 function ExpensesPageContent() {
+  const searchParams = useSearchParams();
+  const initialProjectId = searchParams.get("projectId")?.trim() || "";
+  const initialBreakdownId = searchParams.get("breakdownId")?.trim() || "";
+  const initialMaintenanceRequestId =
+    searchParams.get("maintenanceRequestId")?.trim() || "";
   const filters: AnalyticsFilters = {
     clientId: "all",
     rigId: "all",
@@ -45,9 +51,12 @@ function ExpensesPageContent() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadReferenceData = useCallback(async () => {
-    setLoading(true);
-    setErrorMessage(null);
+  const loadReferenceData = useCallback(async (options?: { preserveUi?: boolean }) => {
+    const preserveUi = options?.preserveUi === true;
+    if (!preserveUi) {
+      setLoading(true);
+      setErrorMessage(null);
+    }
     try {
       const [clientsRes, projectsRes, rigsRes] = await Promise.all([
         fetch("/api/clients", { cache: "no-store" }),
@@ -82,14 +91,18 @@ function ExpensesPageContent() {
         }))
       );
     } catch (loadError) {
-      setClients([]);
-      setProjects([]);
-      setRigs([]);
+      if (!preserveUi) {
+        setClients([]);
+        setProjects([]);
+        setRigs([]);
+      }
       setErrorMessage(
         loadError instanceof Error ? loadError.message : "Failed to load requisition setup data."
       );
     } finally {
-      setLoading(false);
+      if (!preserveUi) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -129,7 +142,12 @@ function ExpensesPageContent() {
               clients={clients}
               projects={projects}
               rigs={rigs}
-              onWorkflowChanged={loadReferenceData}
+              initialContext={{
+                projectId: initialProjectId || undefined,
+                breakdownId: initialBreakdownId || undefined,
+                maintenanceRequestId: initialMaintenanceRequestId || undefined
+              }}
+              onWorkflowChanged={() => loadReferenceData({ preserveUi: true })}
             />
           )}
         </section>

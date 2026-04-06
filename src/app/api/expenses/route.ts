@@ -8,6 +8,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { isSupportedExpenseCategory } from "@/lib/expense-categories";
+import { filterRecognizedApprovedExpenses } from "@/lib/financial-expense-recognition";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -36,6 +38,7 @@ export async function GET(request: NextRequest) {
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const category = nullableFilter(request.nextUrl.searchParams.get("category"));
   const status = parseApprovalStatus(request.nextUrl.searchParams.get("status"));
+  const recognizedOnly = parseBooleanQuery(request.nextUrl.searchParams.get("recognizedOnly"));
   const appliedFilters = {
     from: fromDate ? startOfDayUtc(fromDate).toISOString() : null,
     to: toDate ? endOfDayUtc(toDate).toISOString() : null,
@@ -44,7 +47,8 @@ export async function GET(request: NextRequest) {
     rigId: rigId || "all",
     projectId: projectId || "all",
     category: category || "all",
-    status: status || "all"
+    status: status || "all",
+    recognizedOnly
   };
 
   const where: Prisma.ExpenseWhereInput = expenseId
@@ -65,11 +69,15 @@ export async function GET(request: NextRequest) {
           : {})
       };
 
-  const expenses = await prisma.expense.findMany({
+  const rawExpenses = await prisma.expense.findMany({
     where,
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     include: expenseInclude
   });
+  const recognizedResult = recognizedOnly
+    ? await filterRecognizedApprovedExpenses(rawExpenses)
+    : null;
+  const expenses = recognizedResult ? recognizedResult.expenses : rawExpenses;
 
   const statusCounts: Record<EntryApprovalStatus, number> = {
     DRAFT: 0,
@@ -78,33 +86,39 @@ export async function GET(request: NextRequest) {
     REJECTED: 0
   };
   let totalExpenses = 0;
-  let approvedExpenses = 0;
+  let approvedIntentAmount = 0;
 
   for (const expense of expenses) {
     totalExpenses += expense.amount;
     statusCounts[expense.approvalStatus] += 1;
     if (expense.approvalStatus === "APPROVED") {
-      approvedExpenses += expense.amount;
+      approvedIntentAmount += expense.amount;
     }
   }
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[expense-visibility][expenses-list]", {
+  debugLog(
+    "[expense-visibility][expenses-list]",
+    {
       appliedFilters,
-      expenseRecordCount: expenses.length,
+      expenseRecordCount: rawExpenses.length,
+      recognizedExpenseRecordCount: expenses.length,
+      recognition: recognizedResult?.stats || null,
       totalExpenses,
-      approvedExpenses,
+      approvedIntentAmount,
       statusCounts
-    });
-  }
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json({
     data: expenses.map(serializeExpenseForClient),
     meta: {
       appliedFilters,
-      expenseRecordCount: expenses.length,
+      expenseRecordCount: rawExpenses.length,
+      recognizedExpenseRecordCount: expenses.length,
+      recognition: recognizedResult?.stats || null,
       totalExpenses,
-      approvedExpenses,
+      approvedIntentAmount,
       statusCounts
     }
   });
@@ -422,6 +436,14 @@ function parseApprovalStatus(value: string | null): EntryApprovalStatus | null {
     return value;
   }
   return null;
+}
+
+function parseBooleanQuery(value: string | null) {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
 function parseSubmissionMode(value: string): SubmissionMode | null {

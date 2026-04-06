@@ -21,6 +21,10 @@ export function canSubmitMaintenanceRequests(role: string | null | undefined) {
   return canRoleAccess(role, "maintenance:submit");
 }
 
+export function canReportMaintenanceActivity(role: string | null | undefined) {
+  return canSubmitMaintenanceRequests(role);
+}
+
 export function canManageMaintenanceApprovalActions(role: string | null | undefined) {
   return canRoleAccess(role, "maintenance:approve");
 }

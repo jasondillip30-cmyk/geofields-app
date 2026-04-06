@@ -42,28 +42,11 @@ interface ExpenseRigBucket {
   amount: number;
 }
 
-const emptyForm = {
-  id: "",
-  rigCode: "",
-  model: "",
-  serialNumber: "",
-  photoUrl: "",
-  acquisitionDate: "",
-  status: "IDLE",
-  condition: "GOOD",
-  conditionScore: "80",
-  totalHoursWorked: "0",
-  totalMetersDrilled: "0",
-  totalLifetimeDays: "0"
-};
-
 export default function RigsPage() {
   const { filters } = useAnalyticsFilters();
   const pathname = usePathname();
   const [rigs, setRigs] = useState<RigRecord[]>([]);
-  const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [revenueByRig, setRevenueByRig] = useState<RevenueRigBucket[]>([]);
   const [expensesByRig, setExpensesByRig] = useState<ExpenseRigBucket[]>([]);
@@ -426,38 +409,6 @@ export default function RigsPage() {
     return () => window.clearTimeout(timeout);
   }, [focusedRowId, focusedSectionId]);
 
-  async function saveRig(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setSaving(true);
-    try {
-      const isUpdate = Boolean(form.id);
-      const response = await fetch(isUpdate ? `/api/rigs/${form.id}` : "/api/rigs", {
-        method: isUpdate ? "PUT" : "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          ...form,
-          conditionScore: Number(form.conditionScore),
-          totalHoursWorked: Number(form.totalHoursWorked),
-          totalMetersDrilled: Number(form.totalMetersDrilled),
-          totalLifetimeDays: Number(form.totalLifetimeDays)
-        })
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({ message: "Failed to save rig." }));
-        alert(payload.message || "Failed to save rig.");
-        return;
-      }
-
-      setForm(emptyForm);
-      await loadRigs();
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function markRigOutOfService(rig: RigRecord) {
     if (
       !window.confirm(
@@ -539,49 +490,14 @@ export default function RigsPage() {
         </section>
 
         <AccessGate permission="rigs:manage">
-          <Card title={form.id ? "Edit Rig" : "Create Rig"}>
-            <form onSubmit={saveRig} className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-              <Input label="Rig Code" value={form.rigCode} onChange={(value) => setForm((current) => ({ ...current, rigCode: value }))} required />
-              <Input label="Model" value={form.model} onChange={(value) => setForm((current) => ({ ...current, model: value }))} required />
-              <Input label="Serial Number" value={form.serialNumber} onChange={(value) => setForm((current) => ({ ...current, serialNumber: value }))} required />
-              <Input label="Acquisition Date" type="date" value={form.acquisitionDate} onChange={(value) => setForm((current) => ({ ...current, acquisitionDate: value }))} />
-              <Select
-                label="Status"
-                value={form.status}
-                onChange={(value) => setForm((current) => ({ ...current, status: value }))}
-                options={["ACTIVE", "IDLE", "MAINTENANCE", "BREAKDOWN"]}
-              />
-              <Select
-                label="Condition"
-                value={form.condition}
-                onChange={(value) => setForm((current) => ({ ...current, condition: value }))}
-                options={["EXCELLENT", "GOOD", "FAIR", "POOR", "CRITICAL"]}
-              />
-              <Input label="Condition Score" type="number" value={form.conditionScore} onChange={(value) => setForm((current) => ({ ...current, conditionScore: value }))} />
-              <Input label="Total Hours Worked" type="number" value={form.totalHoursWorked} onChange={(value) => setForm((current) => ({ ...current, totalHoursWorked: value }))} />
-              <Input label="Total Meters Drilled" type="number" value={form.totalMetersDrilled} onChange={(value) => setForm((current) => ({ ...current, totalMetersDrilled: value }))} />
-              <Input label="Total Lifetime Days" type="number" value={form.totalLifetimeDays} onChange={(value) => setForm((current) => ({ ...current, totalLifetimeDays: value }))} />
-              <Input label="Rig Photo URL" value={form.photoUrl} onChange={(value) => setForm((current) => ({ ...current, photoUrl: value }))} />
-              <div className="lg:col-span-3 flex gap-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                >
-                  {saving ? "Saving..." : form.id ? "Update Rig" : "Create Rig"}
-                </button>
-                {form.id && (
-                  <button
-                    type="button"
-                    onClick={() => setForm(emptyForm)}
-                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-ink-700 hover:bg-slate-50"
-                  >
-                    Cancel Edit
-                  </button>
-                )}
-              </div>
-            </form>
-          </Card>
+          <section className="flex justify-end">
+            <Link
+              href="/rigs/setup"
+              className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100"
+            >
+              Create rig
+            </Link>
+          </section>
         </AccessGate>
 
         <section
@@ -608,28 +524,14 @@ export default function RigsPage() {
                   String(rig.totalHoursWorked),
                   String(rig.totalMetersDrilled),
                   <div key={`actions-${rig.id}`} className="flex gap-2">
-                    <button
-                      type="button"
-                      className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
-                      onClick={() =>
-                        setForm({
-                          id: rig.id,
-                          rigCode: rig.rigCode,
-                          model: rig.model,
-                          serialNumber: rig.serialNumber,
-                          photoUrl: rig.photoUrl || "",
-                          acquisitionDate: rig.acquisitionDate ? rig.acquisitionDate.slice(0, 10) : "",
-                          status: rig.status,
-                          condition: rig.condition,
-                          conditionScore: String(rig.conditionScore),
-                          totalHoursWorked: String(rig.totalHoursWorked),
-                          totalMetersDrilled: String(rig.totalMetersDrilled),
-                          totalLifetimeDays: String(rig.totalLifetimeDays)
-                        })
-                      }
-                    >
-                      Edit
-                    </button>
+                    <AccessGate permission="rigs:manage">
+                      <Link
+                        href={`/rigs/setup?rigId=${rig.id}`}
+                        className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
+                      >
+                        Edit
+                      </Link>
+                    </AccessGate>
                     <button
                       type="button"
                       className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
@@ -649,61 +551,5 @@ export default function RigsPage() {
         </section>
       </div>
     </AccessGate>
-  );
-}
-
-function Input({
-  label,
-  value,
-  onChange,
-  type = "text",
-  required = false
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  required?: boolean;
-}) {
-  return (
-    <label className="text-sm text-ink-700">
-      <span className="mb-1 block">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        required={required}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2"
-      />
-    </label>
-  );
-}
-
-function Select({
-  label,
-  value,
-  onChange,
-  options
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: string[];
-}) {
-  return (
-    <label className="text-sm text-ink-700">
-      <span className="mb-1 block">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }

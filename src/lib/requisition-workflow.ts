@@ -32,6 +32,9 @@ export interface PurchaseRequisitionPayload {
   liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  categoryId: string | null;
+  subcategoryId: string | null;
+  requestedVendorId: string | null;
   requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
@@ -61,6 +64,7 @@ export interface PurchaseRequisitionPayload {
     projectId: string | null;
     rigId: string | null;
     maintenanceRequestId: string | null;
+    breakdownReportId?: string | null;
   };
   lineItems: PurchaseRequisitionLineItem[];
   totals: {
@@ -157,6 +161,9 @@ export function parsePurchaseRequisitionPayload(
       liveProjectSpendType: type === "LIVE_PROJECT_PURCHASE" ? liveProjectSpendType : null,
       category: readString(root.category) || "General",
       subcategory: readNullableString(root.subcategory),
+      categoryId: readNullableString(root.categoryId),
+      subcategoryId: readNullableString(root.subcategoryId),
+      requestedVendorId: readNullableString(root.requestedVendorId),
       requestedVendorName: readNullableString(root.requestedVendorName),
       notes: readNullableString(root.notes),
       submittedAt: readString(root.submittedAt) || new Date(0).toISOString(),
@@ -177,7 +184,8 @@ export function parsePurchaseRequisitionPayload(
         clientId: readNullableString(context?.clientId),
         projectId: readNullableString(context?.projectId),
         rigId: readNullableString(context?.rigId),
-        maintenanceRequestId: readNullableString(context?.maintenanceRequestId)
+        maintenanceRequestId: readNullableString(context?.maintenanceRequestId),
+        breakdownReportId: readNullableString(context?.breakdownReportId)
       },
       lineItems,
       totals: {

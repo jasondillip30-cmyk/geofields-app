@@ -66,7 +66,7 @@ interface LinkageCenterPayload {
     missingRigCount: number;
     missingProjectCount: number;
     missingMaintenanceCount: number;
-    totalApprovedCostAffected: number;
+    totalRecognizedCostAffected: number;
     fixedToday: number;
   };
   rows: {
@@ -113,7 +113,7 @@ const emptyPayload: LinkageCenterPayload = {
     missingRigCount: 0,
     missingProjectCount: 0,
     missingMaintenanceCount: 0,
-    totalApprovedCostAffected: 0,
+    totalRecognizedCostAffected: 0,
     fixedToday: 0
   },
   rows: {
@@ -722,7 +722,7 @@ export default function DataQualityLinkageCenterPage() {
       whyThisMatters:
         assistTarget?.reason ||
         (row
-          ? `${row.linkageType} linkage is missing on ${row.sourceRecordType.toLowerCase()} record ${row.recordId}, which affects approved-cost attribution${suggestedTarget ? `. Suggested target: ${suggestedTarget}` : ""}.`
+          ? `${row.linkageType} linkage is missing on ${row.sourceRecordType.toLowerCase()} record ${row.recordId}, which affects recognized-cost attribution${suggestedTarget ? `. Suggested target: ${suggestedTarget}` : ""}.`
           : "This linkage target was prioritized to improve reporting accuracy."),
       inspectFirst: [
         "Review source record reference, vendor/description context, and amount.",
@@ -759,7 +759,11 @@ export default function DataQualityLinkageCenterPage() {
         { key: "missingRigLinkage", label: "Records Needing Rig Linkage", value: payload.summary.missingRigCount },
         { key: "missingProjectLinkage", label: "Records Needing Project Linkage", value: payload.summary.missingProjectCount },
         { key: "missingMaintenanceLinkage", label: "Records Needing Maintenance Linkage", value: payload.summary.missingMaintenanceCount },
-        { key: "totalApprovedCostAffected", label: "Total Approved Cost Affected", value: payload.summary.totalApprovedCostAffected },
+        {
+          key: "totalRecognizedCostAffected",
+          label: "Total Recognized Cost Affected",
+          value: payload.summary.totalRecognizedCostAffected
+        },
         { key: "fixedToday", label: "Fixed Today", value: payload.summary.fixedToday }
       ],
       tablePreviews: [
@@ -876,7 +880,7 @@ export default function DataQualityLinkageCenterPage() {
       payload.summary.missingMaintenanceCount,
       payload.summary.missingProjectCount,
       payload.summary.missingRigCount,
-      payload.summary.totalApprovedCostAffected,
+      payload.summary.totalRecognizedCostAffected,
       selectedItemRows,
       allRows,
       aiSuggestions,
@@ -903,7 +907,7 @@ export default function DataQualityLinkageCenterPage() {
         >
           <SectionHeader
             title="Data Quality / Linkage Center"
-            description="Identify approved spend records missing operational linkage and apply targeted corrections."
+            description="Identify recognized spend records missing operational linkage and apply targeted corrections."
             action={
               <button
                 type="button"
@@ -930,8 +934,8 @@ export default function DataQualityLinkageCenterPage() {
               value={formatNumber(payload.summary.missingMaintenanceCount)}
             />
             <MetricCard
-              label={isScoped ? "Approved Cost Affected in Scope" : "Total Approved Cost Affected"}
-              value={formatCurrency(payload.summary.totalApprovedCostAffected)}
+              label={isScoped ? "Recognized Cost Affected in Scope" : "Total Recognized Cost Affected"}
+              value={formatCurrency(payload.summary.totalRecognizedCostAffected)}
               tone="warn"
             />
           </div>

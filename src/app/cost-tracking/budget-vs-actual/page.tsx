@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { RotateCw } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
@@ -8,18 +9,46 @@ import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-contex
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import {
+  AnalyticsEmptyState,
+  getScopedKpiHelper,
+  getScopedKpiValue
+} from "@/components/layout/analytics-empty-state";
 import { useRole } from "@/components/layout/role-provider";
+import {
+  BudgetPlanModal,
+  type BudgetPlanModalInitialData,
+  type BudgetPlanModalPayload
+} from "@/components/modules/budget-plan-modal";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { DataTable } from "@/components/ui/table";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { canAccess } from "@/lib/auth/permissions";
-import type {
+import {
   BudgetAlertLevel,
+  BudgetClassifiedSpendRow,
   BudgetVsActualRow,
-  BudgetVsActualSummaryResponse
+  BudgetVsActualSummaryResponse,
+  roundCurrency
 } from "@/lib/budget-vs-actual";
-import { cn, formatCurrency, formatPercent } from "@/lib/utils";
+import {
+  buildClassificationAudit,
+  buildCompositionFromExpenses,
+  buildFiltersQuery,
+  deriveOperationalBudgetStatus,
+  deriveProjectBudgetPeriod,
+  EMPTY_SPEND_COMPOSITION,
+  formatDate,
+  formatPercentUsed,
+  readApiError,
+  reconcileCompositionToRecognizedSpend,
+  toDateKey,
+  type ClassificationAudit,
+  type OperationalBudgetStatus,
+  type SpendComposition
+} from "@/lib/budget-vs-actual-workspace";
+import { cn, formatCurrency } from "@/lib/utils";
 
 type BudgetScopeType = "RIG" | "PROJECT";
 type BudgetSummaryPayload = BudgetVsActualSummaryResponse;
@@ -46,9 +75,29 @@ interface BudgetPlanRow {
   updatedAt: string;
 }
 
+interface ProjectLookupRow {
+  id: string;
+  name: string;
+  clientId: string;
+  clientName: string;
+  startDate: string;
+  endDate: string | null;
+  assignedRigId: string | null;
+  status: string;
+}
+
+interface ClassifiedExpenseRow extends BudgetClassifiedSpendRow {
+  id: string;
+  trace: string;
+}
+
+const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
+
+const EMPTY_CLASSIFIED_EXPENSE_ROWS: ClassifiedExpenseRow[] = [];
+
 const emptySummary: BudgetSummaryPayload = {
   filters: { clientId: "all", rigId: "all", from: null, to: null },
-  totals: { totalBudget: 0, approvedSpend: 0, remainingBudget: 0, overspentCount: 0 },
+  totals: { totalBudget: 0, recognizedSpend: 0, remainingBudget: 0, overspentCount: 0 },
   byRig: [],
   byProject: [],
   alerts: {
@@ -57,23 +106,38 @@ const emptySummary: BudgetSummaryPayload = {
     watchCount: 0,
     noBudgetCount: 0,
     attentionCount: 0
+  },
+  classification: {
+    rows: [],
+    purposeTotals: {
+      recognizedSpendTotal: 0,
+      breakdownCost: 0,
+      maintenanceCost: 0,
+      stockReplenishmentCost: 0,
+      operatingCost: 0,
+      otherUnlinkedCost: 0
+    },
+    categoryTotals: {},
+    audit: {
+      recognizedSpendTotal: 0,
+      purposeTotals: {
+        recognizedSpendTotal: 0,
+        breakdownCost: 0,
+        maintenanceCost: 0,
+        stockReplenishmentCost: 0,
+        operatingCost: 0,
+        otherUnlinkedCost: 0
+      },
+      categoryTotals: {},
+      purposeCounts: {},
+      legacyUnlinkedCount: 0,
+      reconciliationDelta: 0
+    }
   }
 };
 
-const initialForm = {
-  scopeType: "RIG" as BudgetScopeType,
-  name: "",
-  amount: "",
-  periodStart: "",
-  periodEnd: "",
-  notes: "",
-  clientId: "all",
-  rigId: "all",
-  projectId: "all"
-};
-
 export default function BudgetVsActualPage() {
-  const { filters } = useAnalyticsFilters();
+  const { filters, resetFilters, setFilters } = useAnalyticsFilters();
   const { user } = useRole();
   const canEdit = Boolean(user?.role && canAccess(user.role, "finance:edit"));
   const isScoped = hasActiveScopeFilters(filters);
@@ -96,14 +160,28 @@ export default function BudgetVsActualPage() {
   const [summary, setSummary] = useState<BudgetSummaryPayload>(emptySummary);
   const [plans, setPlans] = useState<BudgetPlanRow[]>([]);
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
-  const [rigs, setRigs] = useState<Array<{ id: string; name: string }>>([]);
-  const [projects, setProjects] = useState<Array<{ id: string; name: string; clientId: string }>>([]);
+  const [projects, setProjects] = useState<ProjectLookupRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState(initialForm);
+  const [budgetModal, setBudgetModal] = useState<{
+    open: boolean;
+    mode: "create" | "edit";
+    data: BudgetPlanModalInitialData | null;
+  }>({
+    open: false,
+    mode: "create",
+    data: null
+  });
+  const [rowDetailsModal, setRowDetailsModal] = useState<{
+    open: boolean;
+    rowId: string | null;
+  }>({
+    open: false,
+    rowId: null
+  });
   const [focusedBudgetRowId, setFocusedBudgetRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
 
@@ -166,16 +244,14 @@ export default function BudgetVsActualPage() {
   );
 
   const loadPlansAndLookups = useCallback(async () => {
-    const [plansRes, clientsRes, rigsRes, projectsRes] = await Promise.all([
+    const [plansRes, clientsRes, projectsRes] = await Promise.all([
       fetch("/api/budgets/plans?activeOnly=false", { cache: "no-store" }),
       fetch("/api/clients", { cache: "no-store" }),
-      fetch("/api/rigs", { cache: "no-store" }),
       fetch("/api/projects", { cache: "no-store" })
     ]);
 
     const plansPayload = plansRes.ok ? await plansRes.json() : { data: [] };
     const clientsPayload = clientsRes.ok ? await clientsRes.json() : { data: [] };
-    const rigsPayload = rigsRes.ok ? await rigsRes.json() : { data: [] };
     const projectsPayload = projectsRes.ok ? await projectsRes.json() : { data: [] };
 
     setPlans((plansPayload.data || []) as BudgetPlanRow[]);
@@ -185,17 +261,27 @@ export default function BudgetVsActualPage() {
         name: entry.name
       }))
     );
-    setRigs(
-      ((rigsPayload.data || []) as Array<{ id: string; rigCode?: string; name?: string }>).map((entry) => ({
-        id: entry.id,
-        name: entry.name || entry.rigCode || "Unnamed Rig"
-      }))
-    );
     setProjects(
-      ((projectsPayload.data || []) as Array<{ id: string; name: string; clientId: string }>).map((entry) => ({
+      (
+        (projectsPayload.data || []) as Array<{
+          id: string;
+          name: string;
+          clientId: string;
+          startDate: string;
+          endDate?: string | null;
+          status?: string;
+          assignedRigId?: string | null;
+          client?: { id: string; name: string } | null;
+        }>
+      ).map((entry) => ({
         id: entry.id,
         name: entry.name,
-        clientId: entry.clientId
+        clientId: entry.clientId,
+        clientName: entry.client?.name || "",
+        startDate: entry.startDate,
+        endDate: entry.endDate || null,
+        assignedRigId: entry.assignedRigId || null,
+        status: entry.status || "PLANNED"
       }))
     );
   }, []);
@@ -218,168 +304,311 @@ export default function BudgetVsActualPage() {
     return () => clearInterval(interval);
   }, [loadBudgetSummary]);
 
-  const filteredProjects = useMemo(() => {
-    if (form.scopeType !== "PROJECT") {
-      return projects;
+  const projectBudgetRows = useMemo(() => summary.byProject, [summary.byProject]);
+  const projectTotals = useMemo(() => {
+    let totalBudget = 0;
+    let recognizedSpend = 0;
+    for (const row of projectBudgetRows) {
+      totalBudget += row.budgetAmount;
+      recognizedSpend += row.recognizedSpend;
     }
-    if (filters.clientId !== "all") {
-      return projects.filter((entry) => entry.clientId === filters.clientId);
+    return {
+      totalBudget: roundCurrency(totalBudget),
+      recognizedSpend: roundCurrency(recognizedSpend),
+      remainingBudget: roundCurrency(totalBudget - recognizedSpend)
+    };
+  }, [projectBudgetRows]);
+  const hasBudgetData = useMemo(
+    () =>
+      projectBudgetRows.length > 0 ||
+      projectTotals.totalBudget > 0 ||
+      projectTotals.recognizedSpend > 0,
+    [projectBudgetRows.length, projectTotals.recognizedSpend, projectTotals.totalBudget]
+  );
+  const isFilteredEmpty = !loading && isScoped && !hasBudgetData;
+  const applyDatePreset = useCallback(
+    (days: number) => {
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      const start = new Date(end);
+      start.setUTCDate(end.getUTCDate() - Math.max(days - 1, 0));
+      setFilters((current) => ({
+        ...current,
+        from: toDateKey(start),
+        to: toDateKey(end)
+      }));
+    },
+    [setFilters]
+  );
+  const handleClearFilters = useCallback(() => {
+    resetFilters();
+  }, [resetFilters]);
+  const handleLast30Days = useCallback(() => {
+    applyDatePreset(30);
+  }, [applyDatePreset]);
+  const handleLast90Days = useCallback(() => {
+    applyDatePreset(90);
+  }, [applyDatePreset]);
+  const clientNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const client of clients) {
+      map.set(client.id, client.name);
     }
-    return projects;
-  }, [filters.clientId, form.scopeType, projects]);
+    return map;
+  }, [clients]);
+  const projectById = useMemo(() => {
+    const map = new Map<string, ProjectLookupRow>();
+    for (const project of projects) {
+      map.set(project.id, project);
+    }
+    return map;
+  }, [projects]);
+  const overviewCounts = useMemo(() => {
+    let overspentCount = 0;
+    let noBudgetCount = 0;
+    let watchlistCount = 0;
 
-  const alertCounts = useMemo(() => {
-    if (summary.alerts) {
-      return summary.alerts;
+    for (const row of projectBudgetRows) {
+      const status = deriveOperationalBudgetStatus(row);
+      if (status === "Overspent") {
+        overspentCount += 1;
+        continue;
+      }
+      if (status === "No Budget" && row.recognizedSpend > 0) {
+        noBudgetCount += 1;
+        continue;
+      }
+      if (status === "Watch") {
+        watchlistCount += 1;
+      }
     }
-    const rows = [...summary.byRig, ...summary.byProject];
-    const overspentCount = rows.filter((entry) => entry.alertLevel === "OVERSPENT").length;
-    const criticalCount = rows.filter((entry) => entry.alertLevel === "CRITICAL_90").length;
-    const watchCount = rows.filter((entry) => entry.alertLevel === "WATCH_80").length;
-    const noBudgetCount = rows.filter((entry) => entry.status === "NO_BUDGET").length;
+
     return {
       overspentCount,
-      criticalCount,
-      watchCount,
       noBudgetCount,
-      attentionCount: overspentCount + criticalCount
+      watchlistCount
     };
-  }, [summary.alerts, summary.byProject, summary.byRig]);
+  }, [projectBudgetRows]);
+  const projectBudgetPlans = useMemo(
+    () => plans.filter((plan) => plan.scopeType === "PROJECT"),
+    [plans]
+  );
+  const findActiveProjectPlan = useCallback(
+    (projectId: string) => {
+      const candidates = projectBudgetPlans
+        .filter((plan) => plan.isActive && plan.projectId === projectId)
+        .sort((a, b) => {
+          const byPeriodEnd = new Date(b.periodEnd).getTime() - new Date(a.periodEnd).getTime();
+          if (byPeriodEnd !== 0) {
+            return byPeriodEnd;
+          }
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        });
+      return candidates[0] || null;
+    },
+    [projectBudgetPlans]
+  );
+  const openBudgetEditorForProject = useCallback(
+    (entry: BudgetVsActualRow) => {
+      const project = projectById.get(entry.id) || null;
+      const existingPlan = findActiveProjectPlan(entry.id);
+      const projectPeriod = deriveProjectBudgetPeriod(project, existingPlan);
+      const resolvedClientId = project?.clientId || existingPlan?.clientId || null;
+      setBudgetModal({
+        open: true,
+        mode: existingPlan ? "edit" : "create",
+        data: {
+          id: existingPlan?.id,
+          scopeType: "PROJECT",
+          projectId: entry.id,
+          clientId: resolvedClientId,
+          name: existingPlan?.name || `${entry.name} Budget`,
+          amount: existingPlan ? existingPlan.amount : entry.budgetAmount > 0 ? entry.budgetAmount : "",
+          periodStart: projectPeriod.periodStart,
+          periodEnd: projectPeriod.periodEnd,
+          notes: existingPlan?.notes || ""
+        }
+      });
+    },
+    [findActiveProjectPlan, projectById]
+  );
 
-  const rigRows = useMemo(
-    () =>
-      summary.byRig.map((entry) => [
-        <span key={`${entry.id}-name`} className="font-medium text-ink-900">
-          {entry.name}
-        </span>,
-        formatCurrency(entry.budgetAmount),
-        formatCurrency(entry.approvedSpend),
-        formatCurrency(entry.remainingBudget),
-        formatPercentUsed(entry.percentUsed),
-        <StatusBadge
-          key={`${entry.id}-status`}
-          alertLevel={entry.alertLevel}
-          statusLabel={entry.statusLabel}
-        />
-      ]),
-    [summary.byRig]
+  const classifiedExpenseRows = useMemo(() => {
+    return (summary.classification?.rows || []).map((row) => ({
+      ...row,
+      id: row.expenseId,
+      trace: row.traceability
+    }));
+  }, [summary.classification?.rows]);
+
+  const classifiedExpenseRowsByProject = useMemo(() => {
+    const map = new Map<string, ClassifiedExpenseRow[]>();
+    for (const row of classifiedExpenseRows) {
+      const key = row.linkedProjectId || UNASSIGNED_PROJECT_ID;
+      const bucket = map.get(key) || [];
+      bucket.push(row);
+      map.set(key, bucket);
+    }
+    return map;
+  }, [classifiedExpenseRows]);
+
+  const deterministicSpendByProject = useMemo(() => {
+    const map = new Map<string, SpendComposition>();
+    for (const [key, rows] of classifiedExpenseRowsByProject) {
+      map.set(key, buildCompositionFromExpenses(rows));
+    }
+    return map;
+  }, [classifiedExpenseRowsByProject]);
+
+  const spendCompositionByProject = useMemo(() => {
+    const map = new Map<string, SpendComposition>();
+    for (const row of projectBudgetRows) {
+      map.set(
+        row.id,
+        reconcileCompositionToRecognizedSpend(
+          deterministicSpendByProject.get(row.id) || EMPTY_SPEND_COMPOSITION,
+          row.recognizedSpend
+        )
+      );
+    }
+    return map;
+  }, [deterministicSpendByProject, projectBudgetRows]);
+
+  const spendPurposeSummary = useMemo(() => {
+    const sharedPurposeTotals = summary.classification?.purposeTotals || {
+      recognizedSpendTotal: 0,
+      breakdownCost: 0,
+      maintenanceCost: 0,
+      operatingCost: 0,
+      stockReplenishmentCost: 0,
+      otherUnlinkedCost: 0
+    };
+    return reconcileCompositionToRecognizedSpend(
+      {
+        totalRecognizedSpend: sharedPurposeTotals.recognizedSpendTotal,
+        breakdownCost: sharedPurposeTotals.breakdownCost,
+        maintenanceCost: sharedPurposeTotals.maintenanceCost,
+        operatingCost: sharedPurposeTotals.operatingCost,
+        stockReplenishmentCost: sharedPurposeTotals.stockReplenishmentCost,
+        otherUnlinkedCost: sharedPurposeTotals.otherUnlinkedCost
+      },
+      projectTotals.recognizedSpend
+    );
+  }, [projectTotals.recognizedSpend, summary.classification?.purposeTotals]);
+
+  const openRowDetails = useCallback((rowId: string) => {
+    setRowDetailsModal({
+      open: true,
+      rowId
+    });
+  }, []);
+
+  const renderProjectActionCell = useCallback(
+    (entry: BudgetVsActualRow) => {
+      const hasActivePlan = Boolean(findActiveProjectPlan(entry.id));
+      return (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => openRowDetails(entry.id)}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-ink-700 hover:bg-slate-50"
+          >
+            View details
+          </button>
+          <Link
+            href={`/projects/${entry.id}`}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-ink-700 hover:bg-slate-50"
+          >
+            Open project
+          </Link>
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => openBudgetEditorForProject(entry)}
+              className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+            >
+              {hasActivePlan ? "Edit budget" : "Add budget"}
+            </button>
+          ) : null}
+        </div>
+      );
+    },
+    [canEdit, findActiveProjectPlan, openBudgetEditorForProject, openRowDetails]
   );
-  const rigRowIds = useMemo(
-    () => summary.byRig.map((entry) => `ai-focus-${entry.id}`),
-    [summary.byRig]
-  );
-  const rigRowClassNames = useMemo(
-    () =>
-      summary.byRig.map((entry) =>
-        entry.id === focusedBudgetRowId ? "bg-indigo-50/70 ring-1 ring-inset ring-indigo-200" : ""
-      ),
-    [focusedBudgetRowId, summary.byRig]
-  );
+
+  const sortedProjectBudgetRows = useMemo(() => {
+    return [...projectBudgetRows].sort((a, b) => {
+      const statusRank = (row: BudgetVsActualRow) => {
+        const status = deriveOperationalBudgetStatus(row);
+        if (status === "Overspent") {
+          return 0;
+        }
+        if (status === "No Budget") {
+          return 1;
+        }
+        if (status === "Watch") {
+          return 2;
+        }
+        return 3;
+      };
+
+      const rankDelta = statusRank(a) - statusRank(b);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+
+      if (deriveOperationalBudgetStatus(a) === "No Budget" && deriveOperationalBudgetStatus(b) === "No Budget") {
+        return b.recognizedSpend - a.recognizedSpend;
+      }
+
+      const percentA = a.percentUsed || 0;
+      const percentB = b.percentUsed || 0;
+      if (percentB !== percentA) {
+        return percentB - percentA;
+      }
+      return b.recognizedSpend - a.recognizedSpend;
+    });
+  }, [projectBudgetRows]);
 
   const projectRows = useMemo(
     () =>
-      summary.byProject.map((entry) => [
-        <span key={`${entry.id}-name`} className="font-medium text-ink-900">
-          {entry.name}
-        </span>,
+      sortedProjectBudgetRows.map((entry) => [
+        <div key={`${entry.id}-name`} className="space-y-0.5">
+          <p className="font-medium text-ink-900">{entry.name}</p>
+        </div>,
+        projectById.get(entry.id)?.clientName ||
+          clientNameById.get(projectById.get(entry.id)?.clientId || "") ||
+          "—",
         formatCurrency(entry.budgetAmount),
-        formatCurrency(entry.approvedSpend),
+        formatCurrency(entry.recognizedSpend),
         formatCurrency(entry.remainingBudget),
         formatPercentUsed(entry.percentUsed),
         <StatusBadge
           key={`${entry.id}-status`}
-          alertLevel={entry.alertLevel}
-          statusLabel={entry.statusLabel}
-        />
+          status={deriveOperationalBudgetStatus(entry)}
+        />,
+        renderProjectActionCell(entry)
       ]),
-    [summary.byProject]
+    [
+      clientNameById,
+      projectById,
+      renderProjectActionCell,
+      sortedProjectBudgetRows
+    ]
   );
   const projectRowIds = useMemo(
-    () => summary.byProject.map((entry) => `ai-focus-${entry.id}`),
-    [summary.byProject]
+    () => sortedProjectBudgetRows.map((entry) => `ai-focus-${entry.id}`),
+    [sortedProjectBudgetRows]
   );
   const projectRowClassNames = useMemo(
     () =>
-      summary.byProject.map((entry) =>
+      sortedProjectBudgetRows.map((entry) =>
         entry.id === focusedBudgetRowId ? "bg-indigo-50/70 ring-1 ring-inset ring-indigo-200" : ""
       ),
-    [focusedBudgetRowId, summary.byProject]
+    [focusedBudgetRowId, sortedProjectBudgetRows]
   );
 
-  const attentionEntries = useMemo(() => {
-    const combined = [
-      ...summary.byRig.map((entry) => ({ scope: "Rig", ...entry })),
-      ...summary.byProject.map((entry) => ({ scope: "Project", ...entry }))
-    ];
-
-    return combined
-      .filter((entry) => entry.alertLevel === "OVERSPENT" || entry.alertLevel === "CRITICAL_90")
-      .sort((a, b) => {
-        const rank = (level: BudgetAlertLevel) => (level === "OVERSPENT" ? 0 : 1);
-        const levelOrder = rank(a.alertLevel) - rank(b.alertLevel);
-        if (levelOrder !== 0) {
-          return levelOrder;
-        }
-        const percentA = a.percentUsed || 0;
-        const percentB = b.percentUsed || 0;
-        if (percentB !== percentA) {
-          return percentB - percentA;
-        }
-        return b.approvedSpend - a.approvedSpend;
-      });
-  }, [summary.byProject, summary.byRig]);
-
-  const attentionRows = useMemo(
-    () =>
-      attentionEntries
-      .map((entry) => [
-        entry.scope,
-        <span key={`${entry.scope}-${entry.id}-name`} className="font-medium text-ink-900">
-          {entry.name}
-        </span>,
-        formatCurrency(entry.budgetAmount),
-        formatCurrency(entry.approvedSpend),
-        formatCurrency(entry.remainingBudget),
-        formatPercentUsed(entry.percentUsed),
-        <StatusBadge
-          key={`${entry.scope}-${entry.id}-status`}
-          alertLevel={entry.alertLevel}
-          statusLabel={entry.statusLabel}
-        />
-      ]),
-    [attentionEntries]
-  );
-  const attentionRowIds = useMemo(
-    () => attentionEntries.map((entry) => `ai-focus-${entry.id}`),
-    [attentionEntries]
-  );
-  const attentionRowClassNames = useMemo(
-    () =>
-      attentionEntries.map((entry) =>
-        entry.id === focusedBudgetRowId ? "bg-indigo-50/70 ring-1 ring-inset ring-indigo-200" : ""
-      ),
-    [attentionEntries, focusedBudgetRowId]
-  );
-
-  const archivePlan = useCallback(
-    async (planId: string) => {
-      if (!canEdit) {
-        return;
-      }
-      setError(null);
-      setNotice(null);
-      const response = await fetch(`/api/budgets/plans/${planId}`, { method: "DELETE" });
-      if (!response.ok) {
-        setError(await readApiError(response, "Failed to archive budget plan."));
-        return;
-      }
-      setNotice("Budget plan archived.");
-      await refreshWorkspace(true);
-    },
-    [canEdit, refreshWorkspace]
-  );
-
-  const submitPlan = useCallback(async () => {
+  const saveBudgetPlanFromModal = useCallback(async (payload: BudgetPlanModalPayload) => {
     if (!canEdit) {
       return;
     }
@@ -387,72 +616,99 @@ export default function BudgetVsActualPage() {
     setError(null);
     setNotice(null);
     try {
-      const payload = {
-        scopeType: form.scopeType,
-        name: form.name,
-        amount: form.amount,
-        periodStart: form.periodStart,
-        periodEnd: form.periodEnd,
-        notes: form.notes,
-        clientId: form.scopeType === "RIG" && form.clientId !== "all" ? form.clientId : null,
-        rigId: form.scopeType === "RIG" && form.rigId !== "all" ? form.rigId : null,
-        projectId: form.scopeType === "PROJECT" && form.projectId !== "all" ? form.projectId : null
-      };
+      const linkedProject = payload.projectId ? projectById.get(payload.projectId) || null : null;
+      const projectPeriod = deriveProjectBudgetPeriod(linkedProject, payload);
+      const periodStart = projectPeriod.periodStart || payload.periodStart;
+      const periodEnd = projectPeriod.periodEnd || payload.periodEnd;
 
-      const response = await fetch("/api/budgets/plans", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!response.ok) {
-        setError(await readApiError(response, "Failed to create budget plan."));
+      if (!payload.projectId) {
+        setError("Project context is required to save project budget details.");
         return;
       }
-      setNotice("Budget plan created.");
-      setForm(initialForm);
+      if (!periodStart || !periodEnd) {
+        setError("Project timeline is missing. Set project dates before saving budget.");
+        return;
+      }
+
+      if (budgetModal.mode === "edit" && payload.id) {
+        const response = await fetch(`/api/budgets/plans/${payload.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: payload.name,
+            amount: payload.amount,
+            periodStart,
+            periodEnd,
+            notes: payload.notes
+          })
+        });
+        if (!response.ok) {
+          setError(await readApiError(response, "Failed to update project budget."));
+          return;
+        }
+        setNotice("Project budget updated.");
+      } else {
+        const response = await fetch("/api/budgets/plans", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scopeType: "PROJECT",
+            name: payload.name,
+            amount: payload.amount,
+            periodStart,
+            periodEnd,
+            notes: payload.notes,
+            clientId: linkedProject?.clientId || payload.clientId,
+            rigId: null,
+            projectId: payload.projectId
+          })
+        });
+        if (!response.ok) {
+          setError(await readApiError(response, "Failed to add project budget."));
+          return;
+        }
+        setNotice("Project budget added.");
+      }
+      setBudgetModal({ open: false, mode: "create", data: null });
       await refreshWorkspace(true);
     } finally {
       setSaving(false);
     }
-  }, [canEdit, form, refreshWorkspace]);
+  }, [budgetModal.mode, canEdit, projectById, refreshWorkspace]);
 
-  const planRows = useMemo(
-    () =>
-      plans.map((plan) => [
-        <div key={`${plan.id}-name`} className="space-y-0.5">
-          <p className="font-medium text-ink-900">{plan.name}</p>
-          <p className="text-xs text-slate-500">
-            {formatDate(plan.periodStart)} - {formatDate(plan.periodEnd)}
-          </p>
-        </div>,
-        plan.scopeType === "RIG" ? "Rig Budget" : "Project Budget",
-        plan.scopeType === "RIG" ? plan.rig?.name || "-" : plan.project?.name || "-",
-        plan.client?.name || "-",
-        formatCurrency(plan.amount),
-        plan.isActive ? (
-          <span key={`${plan.id}-active`} className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
-            Active
-          </span>
-        ) : (
-          <span key={`${plan.id}-inactive`} className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-            Archived
-          </span>
-        ),
-        canEdit && plan.isActive ? (
-          <button
-            key={`${plan.id}-archive`}
-            type="button"
-            className="gf-btn-subtle"
-            onClick={() => void archivePlan(plan.id)}
-          >
-            Archive
-          </button>
-        ) : (
-          "—"
-        )
-      ]),
-    [archivePlan, canEdit, plans]
-  );
+  const selectedRowDetails = useMemo(() => {
+    if (!rowDetailsModal.open || !rowDetailsModal.rowId) {
+      return null;
+    }
+    const row = projectBudgetRows.find((entry) => entry.id === rowDetailsModal.rowId) || null;
+    if (!row) {
+      return null;
+    }
+    const composition = spendCompositionByProject.get(row.id) || EMPTY_SPEND_COMPOSITION;
+    const linkedExpenses = classifiedExpenseRowsByProject.get(row.id) || EMPTY_CLASSIFIED_EXPENSE_ROWS;
+    const linkedSum = roundCurrency(
+      linkedExpenses.reduce((sum, entry) => sum + entry.amount, 0)
+    );
+    const reconciliationDelta = roundCurrency(row.recognizedSpend - linkedSum);
+    const classificationAudit = buildClassificationAudit({
+      linkedExpenses,
+      composition,
+      recognizedSpend: row.recognizedSpend
+    });
+    return {
+      row,
+      composition,
+      linkedExpenses,
+      reconciliationDelta,
+      classificationAudit
+    };
+  }, [
+    classifiedExpenseRowsByProject,
+    rowDetailsModal.open,
+    rowDetailsModal.rowId,
+    spendCompositionByProject,
+    projectBudgetRows
+  ]);
 
   const copilotContext = useMemo<CopilotPageContext>(
     () => ({
@@ -465,58 +721,35 @@ export default function BudgetVsActualPage() {
         to: filters.to || null
       },
       summaryMetrics: [
-        { key: "totalBudget", label: "Total Budget", value: summary.totals.totalBudget },
-        { key: "approvedSpend", label: "Approved Spend", value: summary.totals.approvedSpend },
-        { key: "remainingBudget", label: "Remaining Budget", value: summary.totals.remainingBudget },
-        { key: "overspentBuckets", label: "Overspent Buckets", value: alertCounts.overspentCount },
-        { key: "criticalBuckets", label: "Critical Buckets", value: alertCounts.criticalCount },
-        { key: "watchBuckets", label: "Watch Buckets", value: alertCounts.watchCount },
-        { key: "noBudgetBuckets", label: "No Budget Buckets", value: alertCounts.noBudgetCount }
+        { key: "totalProjectBudget", label: "Total Project Budget", value: projectTotals.totalBudget },
+        { key: "recognizedSpend", label: "Recognized Spend", value: projectTotals.recognizedSpend },
+        { key: "remainingBudget", label: "Remaining Budget", value: projectTotals.remainingBudget },
+        { key: "overspentProjects", label: "Overspent Projects", value: overviewCounts.overspentCount },
+        { key: "watchlistProjects", label: "Watchlist Projects", value: overviewCounts.watchlistCount },
+        { key: "noBudgetProjects", label: "No Budget Projects", value: overviewCounts.noBudgetCount }
       ],
       tablePreviews: [
         {
-          key: "rig-budget-vs-actual",
-          title: "Rig Budget vs Actual",
-          rowCount: summary.byRig.length,
-          columns: ["Id", "Rig", "Budget", "ApprovedSpend", "PercentUsed", "Status"],
-          rows: summary.byRig.slice(0, 8).map((row) => ({
-            id: row.id,
-            rig: row.name,
-            budget: row.budgetAmount,
-            approvedSpend: row.approvedSpend,
-            percentUsed: row.percentUsed,
-            status: row.statusLabel,
-            href: budgetVsActualHref,
-            targetId: row.id,
-            sectionId: "rig-budget-section",
-            targetPageKey: "budget-vs-actual",
-            scope: "Rig"
-          }))
-        },
-        {
           key: "project-budget-vs-actual",
           title: "Project Budget vs Actual",
-          rowCount: summary.byProject.length,
-          columns: ["Id", "Project", "Budget", "ApprovedSpend", "PercentUsed", "Status"],
-          rows: summary.byProject.slice(0, 8).map((row) => ({
+          rowCount: sortedProjectBudgetRows.length,
+          columns: ["Id", "Project", "Budget", "RecognizedSpend", "PercentUsed", "Status"],
+          rows: sortedProjectBudgetRows.slice(0, 8).map((row) => ({
             id: row.id,
             project: row.name,
             budget: row.budgetAmount,
-            approvedSpend: row.approvedSpend,
+            recognizedSpend: row.recognizedSpend,
             percentUsed: row.percentUsed,
             status: row.statusLabel,
             href: budgetVsActualHref,
             targetId: row.id,
             sectionId: "project-budget-section",
-            targetPageKey: "budget-vs-actual",
-            scope: "Project"
+            targetPageKey: "budget-vs-actual"
           }))
         }
       ],
-      priorityItems: [
-        ...summary.byRig.map((row) => ({ scope: "Rig", ...row })),
-        ...summary.byProject.map((row) => ({ scope: "Project", ...row }))
-      ]
+      priorityItems: sortedProjectBudgetRows
+        .map((row) => ({ ...row }))
         .filter((row) => row.alertLevel !== "NONE" || row.status === "NO_BUDGET")
         .sort((a, b) => {
           const rank = (level: BudgetAlertLevel) =>
@@ -530,12 +763,12 @@ export default function BudgetVsActualPage() {
           if (percentB !== percentA) {
             return percentB - percentA;
           }
-          return b.approvedSpend - a.approvedSpend;
+          return b.recognizedSpend - a.recognizedSpend;
         })
         .slice(0, 6)
         .map((row) => ({
           id: row.id,
-          label: `${row.scope}: ${row.name}`,
+          label: `Project: ${row.name}`,
           reason: `${row.statusLabel}${row.percentUsed !== null ? ` • ${formatPercentUsed(row.percentUsed)} used` : ""}`,
           severity:
             row.alertLevel === "OVERSPENT"
@@ -545,11 +778,11 @@ export default function BudgetVsActualPage() {
                 : row.alertLevel === "WATCH_80"
                   ? ("MEDIUM" as const)
                   : ("MEDIUM" as const),
-          amount: row.approvedSpend,
+          amount: row.recognizedSpend,
           href: budgetVsActualHref,
           issueType: row.status === "NO_BUDGET" ? "NO_BUDGET" : row.alertLevel,
           targetId: row.id,
-          sectionId: row.scope === "Rig" ? "rig-budget-section" : "project-budget-section",
+          sectionId: "project-budget-section",
           targetPageKey: "budget-vs-actual"
         })),
       navigationTargets: [
@@ -562,10 +795,6 @@ export default function BudgetVsActualPage() {
       ]
     }),
     [
-      alertCounts.criticalCount,
-      alertCounts.noBudgetCount,
-      alertCounts.overspentCount,
-      alertCounts.watchCount,
       alertsCenterHref,
       budgetVsActualHref,
       costTrackingHref,
@@ -573,11 +802,13 @@ export default function BudgetVsActualPage() {
       filters.from,
       filters.rigId,
       filters.to,
-      summary.byProject,
-      summary.byRig,
-      summary.totals.approvedSpend,
-      summary.totals.remainingBudget,
-      summary.totals.totalBudget
+      overviewCounts.noBudgetCount,
+      overviewCounts.overspentCount,
+      overviewCounts.watchlistCount,
+      sortedProjectBudgetRows,
+      projectTotals.recognizedSpend,
+      projectTotals.remainingBudget,
+      projectTotals.totalBudget
     ]
   );
 
@@ -586,18 +817,31 @@ export default function BudgetVsActualPage() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} />
+        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+
+        {!loading && !hasBudgetData ? (
+          <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
+            <AnalyticsEmptyState
+              variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
+              moduleHint="Add project budgets and recognized spend to populate budget tracking."
+              scopeHint={`${projectBudgetRows.length} projects in current scope`}
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+            />
+          </Card>
+        ) : null}
 
         <section
-          id="attention-needed-section"
+          id="budget-overview-section"
           className={cn(
             "gf-section",
-            focusedSectionId === "attention-needed-section" && "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+            focusedSectionId === "budget-overview-section" && "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
           )}
         >
           <SectionHeader
-            title="Budget vs Actual"
-            description="Compare approved spend against planned rig and project budgets."
+            title="Budget Performance Overview"
+            description="Compare project budgets against recognized operating spend to confirm profitability pressure."
             action={
               <button
                 type="button"
@@ -611,75 +855,74 @@ export default function BudgetVsActualPage() {
           />
           <div className="gf-kpi-grid-primary">
             <MetricCard
-              label={isScoped ? "Budget in Scope" : "Total Budget"}
-              value={formatCurrency(summary.totals.totalBudget)}
+              label={isScoped ? "Project Budget in Scope" : "Total Project Budget"}
+              value={getScopedKpiValue(formatCurrency(projectTotals.totalBudget), isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
-            <MetricCard label="Approved Spend" value={formatCurrency(summary.totals.approvedSpend)} tone="warn" />
+            <MetricCard
+              label="Recognized Spend"
+              value={getScopedKpiValue(formatCurrency(projectTotals.recognizedSpend), isFilteredEmpty)}
+              tone="warn"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
             <MetricCard
               label="Remaining Budget"
-              value={formatCurrency(summary.totals.remainingBudget)}
-              tone={summary.totals.remainingBudget < 0 ? "danger" : "good"}
+              value={getScopedKpiValue(formatCurrency(projectTotals.remainingBudget), isFilteredEmpty)}
+              tone={projectTotals.remainingBudget < 0 ? "danger" : "good"}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
             />
           </div>
           <div className="gf-kpi-grid-secondary">
-            <MetricCard label="Overspent Buckets" value={`${alertCounts.overspentCount}`} tone="danger" />
-            <MetricCard label="Critical Buckets" value={`${alertCounts.criticalCount}`} tone="warn" />
-            <MetricCard label="Watch Buckets" value={`${alertCounts.watchCount}`} tone="warn" />
-            <MetricCard label="No Budget Buckets" value={`${alertCounts.noBudgetCount}`} />
+            <MetricCard
+              label="Overspent Project Count"
+              value={getScopedKpiValue(`${overviewCounts.overspentCount}`, isFilteredEmpty)}
+              tone="danger"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="No-Budget Project Count"
+              value={getScopedKpiValue(`${overviewCounts.noBudgetCount}`, isFilteredEmpty)}
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
+            <MetricCard
+              label="Watchlist Project Count"
+              value={getScopedKpiValue(`${overviewCounts.watchlistCount}`, isFilteredEmpty)}
+              tone="warn"
+              change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+            />
           </div>
           <div className="gf-inline-note">
-            Missing budgets are shown as <strong>No Budget</strong> and are not treated as overspent.
+            Approval grants permission. Financial reporting on this page uses posted / recognized operating costs, including completed receipt postings and approved stock-out recognition.
+          </div>
+          {summary.classification?.audit.legacyUnlinkedCount ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              {summary.classification.audit.legacyUnlinkedCount} legacy records remain in Other / Unlinked due to incomplete historical linkage.
+            </div>
+          ) : null}
+          <div className="mt-3 grid gap-2 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3 sm:grid-cols-2 lg:grid-cols-5">
+            <ScopeBreakdownBadge
+              label="Breakdown Cost"
+              value={getScopedKpiValue(formatCurrency(spendPurposeSummary.breakdownCost), isFilteredEmpty)}
+            />
+            <ScopeBreakdownBadge
+              label="Maintenance Cost"
+              value={getScopedKpiValue(formatCurrency(spendPurposeSummary.maintenanceCost), isFilteredEmpty)}
+            />
+            <ScopeBreakdownBadge
+              label="Operating Cost"
+              value={getScopedKpiValue(formatCurrency(spendPurposeSummary.operatingCost), isFilteredEmpty)}
+            />
+            <ScopeBreakdownBadge
+              label="Stock Replenishment"
+              value={getScopedKpiValue(formatCurrency(spendPurposeSummary.stockReplenishmentCost), isFilteredEmpty)}
+            />
+            <ScopeBreakdownBadge
+              label="Other / Unlinked"
+              value={getScopedKpiValue(formatCurrency(spendPurposeSummary.otherUnlinkedCost), isFilteredEmpty)}
+            />
           </div>
           {notice ? <div className="gf-feedback-success">{notice}</div> : null}
           {error ? <div className="gf-feedback-error">{error}</div> : null}
-        </section>
-
-        <section className="gf-section">
-          <SectionHeader
-            title="Attention Needed"
-            description="Overspent and critical budget buckets prioritized for manager review."
-          />
-          {loading ? (
-            <Card>
-              <p className="text-sm text-slate-600">Loading budget alerts...</p>
-            </Card>
-          ) : attentionRows.length === 0 ? (
-            <div className="gf-empty-state">No critical or overspent budget buckets in the current scope.</div>
-          ) : (
-            <DataTable
-              columns={["Scope", "Entity", "Budget", "Approved Spend", "Remaining", "% Used", "Status"]}
-              rows={attentionRows}
-              rowIds={attentionRowIds}
-              rowClassNames={attentionRowClassNames}
-            />
-          )}
-        </section>
-
-        <section
-          id="rig-budget-section"
-          className={cn(
-            "gf-section",
-            focusedSectionId === "rig-budget-section" && "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <SectionHeader
-            title="Rig Budget vs Actual"
-            description="Approved spend compared to matched active rig budget plans."
-          />
-          {loading ? (
-            <Card>
-              <p className="text-sm text-slate-600">Loading rig budget comparison...</p>
-            </Card>
-          ) : rigRows.length === 0 ? (
-            <div className="gf-empty-state">No rig budget or spend data found for current filters.</div>
-          ) : (
-            <DataTable
-              columns={["Rig", "Budget", "Approved Spend", "Remaining", "% Used", "Status"]}
-              rows={rigRows}
-              rowIds={rigRowIds}
-              rowClassNames={rigRowClassNames}
-            />
-          )}
         </section>
 
         <section
@@ -691,17 +934,36 @@ export default function BudgetVsActualPage() {
         >
           <SectionHeader
             title="Project Budget vs Actual"
-            description="Approved spend compared to matched active project budget plans."
+            description="Project-level budget comparison with client context and recognized operating spend."
           />
+          <p className="mb-3 text-xs text-slate-600">
+            Recognized spend is sourced from posted operating costs already used in cost tracking and profitability views.
+          </p>
           {loading ? (
             <Card>
               <p className="text-sm text-slate-600">Loading project budget comparison...</p>
             </Card>
           ) : projectRows.length === 0 ? (
-            <div className="gf-empty-state">No project budget or spend data found for current filters.</div>
+            <AnalyticsEmptyState
+              variant={isScoped ? "filtered-empty" : "no-data"}
+              moduleHint="No project budget or spend data found yet."
+              scopeHint={`${projectRows.length} project budget rows in current scope`}
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+            />
           ) : (
             <DataTable
-              columns={["Project", "Budget", "Approved Spend", "Remaining", "% Used", "Status"]}
+              columns={[
+                "Project",
+                "Client",
+                "Budget",
+                "Recognized Spend",
+                "Remaining",
+                "% Used",
+                "Status",
+                "Action"
+              ]}
               rows={projectRows}
               rowIds={projectRowIds}
               rowClassNames={projectRowClassNames}
@@ -709,236 +971,239 @@ export default function BudgetVsActualPage() {
           )}
         </section>
 
-        <section className="gf-section">
-          <SectionHeader
-            title="Budget Plans"
-            description="Define active budget envelopes per rig or project. Overlapping active plans are blocked."
-          />
-          {canEdit ? (
-            <Card title="Create Budget Plan" subtitle="Separate budget layer; existing cost tracking calculations remain unchanged.">
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-ink-800">Scope Type</span>
-                  <select
-                    value={form.scopeType}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        scopeType: event.target.value as BudgetScopeType,
-                        rigId: "all",
-                        projectId: "all",
-                        clientId: "all"
-                      }))
-                    }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  >
-                    <option value="RIG">Rig</option>
-                    <option value="PROJECT">Project</option>
-                  </select>
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-ink-800">Plan Name</span>
-                  <input
-                    value={form.name}
-                    onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Q2 Rig Budget"
-                  />
-                </label>
-                {form.scopeType === "RIG" ? (
-                  <label className="space-y-1 text-sm">
-                    <span className="font-medium text-ink-800">Rig</span>
-                    <select
-                      value={form.rigId}
-                      onChange={(event) => setForm((current) => ({ ...current, rigId: event.target.value }))}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="all">Select rig</option>
-                      {rigs.map((rig) => (
-                        <option key={rig.id} value={rig.id}>
-                          {rig.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="space-y-1 text-sm">
-                    <span className="font-medium text-ink-800">Project</span>
-                    <select
-                      value={form.projectId}
-                      onChange={(event) => setForm((current) => ({ ...current, projectId: event.target.value }))}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="all">Select project</option>
-                      {filteredProjects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {form.scopeType === "RIG" ? (
-                  <label className="space-y-1 text-sm">
-                    <span className="font-medium text-ink-800">Client (Optional)</span>
-                    <select
-                      value={form.clientId}
-                      onChange={(event) => setForm((current) => ({ ...current, clientId: event.target.value }))}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="all">All clients</option>
-                      {clients.map((client) => (
-                        <option key={client.id} value={client.id}>
-                          {client.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <div />
-                )}
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-ink-800">Budget Amount</span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.amount}
-                    onChange={(event) => setForm((current) => ({ ...current, amount: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="0.00"
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-ink-800">Period Start</span>
-                  <input
-                    type="date"
-                    value={form.periodStart}
-                    onChange={(event) => setForm((current) => ({ ...current, periodStart: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="font-medium text-ink-800">Period End</span>
-                  <input
-                    type="date"
-                    value={form.periodEnd}
-                    onChange={(event) => setForm((current) => ({ ...current, periodEnd: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="space-y-1 text-sm md:col-span-2">
-                  <span className="font-medium text-ink-800">Notes (Optional)</span>
-                  <textarea
-                    value={form.notes}
-                    onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    rows={3}
-                    placeholder="Budget assumptions"
-                  />
-                </label>
-              </div>
-              <div className="mt-4 flex justify-end">
-                <button type="button" className="gf-btn-primary" disabled={saving} onClick={() => void submitPlan()}>
-                  {saving ? "Saving..." : "Create Budget Plan"}
-                </button>
-              </div>
-            </Card>
-          ) : null}
+        <BudgetPlanModal
+          open={budgetModal.open}
+          mode={budgetModal.mode}
+          saving={saving}
+          initialData={budgetModal.data}
+          clients={clients}
+          projects={projects.map((entry) => ({
+            id: entry.id,
+            name: entry.name,
+            clientId: entry.clientId
+          }))}
+          projectOnly
+          onClose={() => {
+            if (!saving) {
+              setBudgetModal({ open: false, mode: "create", data: null });
+            }
+          }}
+          onSave={saveBudgetPlanFromModal}
+        />
 
-          {planRows.length === 0 ? (
-            <div className="gf-empty-state">No budget plans found yet.</div>
-          ) : (
-            <DataTable
-              columns={["Plan", "Scope", "Entity", "Client", "Amount", "Status", "Action"]}
-              rows={planRows}
-            />
-          )}
-        </section>
+        <BudgetRowDetailsModal
+          open={rowDetailsModal.open}
+          row={selectedRowDetails?.row || null}
+          composition={selectedRowDetails?.composition || null}
+          linkedExpenses={selectedRowDetails?.linkedExpenses || EMPTY_CLASSIFIED_EXPENSE_ROWS}
+          reconciliationDelta={selectedRowDetails?.reconciliationDelta || 0}
+          classificationAudit={selectedRowDetails?.classificationAudit || null}
+          onClose={() =>
+            setRowDetailsModal({
+              open: false,
+              rowId: null
+            })
+          }
+        />
       </div>
     </AccessGate>
   );
 }
 
 function StatusBadge({
-  alertLevel,
-  statusLabel
+  status
 }: {
-  alertLevel: BudgetAlertLevel;
-  statusLabel: BudgetVsActualRow["statusLabel"];
+  status: OperationalBudgetStatus;
 }) {
-  if (alertLevel === "OVERSPENT") {
+  if (status === "Overspent") {
     return (
       <span className="rounded-full border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
-        {statusLabel}
+        Overspent
       </span>
     );
   }
-  if (statusLabel === "No Budget") {
+  if (status === "No Budget") {
     return (
       <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-        {statusLabel}
+        No Budget
       </span>
     );
   }
-  if (alertLevel === "CRITICAL_90") {
-    return (
-      <span className="rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700">
-        {statusLabel}
-      </span>
-    );
-  }
-  if (alertLevel === "WATCH_80") {
+  if (status === "Watch") {
     return (
       <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-        {statusLabel}
+        Watch
       </span>
     );
   }
   return (
     <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-      {statusLabel}
+      Within Budget
     </span>
   );
 }
 
-function formatPercentUsed(value: number | null) {
-  if (value === null) {
-    return "No Budget";
+function BudgetRowDetailsModal({
+  open,
+  row,
+  composition,
+  linkedExpenses,
+  reconciliationDelta,
+  classificationAudit,
+  onClose
+}: {
+  open: boolean;
+  row: BudgetVsActualRow | null;
+  composition: SpendComposition | null;
+  linkedExpenses: ClassifiedExpenseRow[];
+  reconciliationDelta: number;
+  classificationAudit: ClassificationAudit | null;
+  onClose: () => void;
+}) {
+  if (!open || !row || !composition) {
+    return null;
   }
-  if (value >= 1000) {
-    return "999%+";
-  }
-  return formatPercent(value);
+
+  const expenseRows = linkedExpenses.map((entry) => [
+    formatDate(entry.date),
+    <a
+      key={`${entry.id}-link`}
+      href={`/expenses?expenseId=${entry.id}`}
+      className="font-medium text-brand-700 underline"
+    >
+      {entry.id.slice(-8).toUpperCase()}
+    </a>,
+    entry.purposeLabel,
+    formatCurrency(entry.amount),
+    <div key={`${entry.id}-trace`} className="space-y-0.5">
+      <p className="text-xs text-slate-700">{entry.trace}</p>
+      <p className="text-[11px] text-slate-500">
+        {entry.requisitionCode ? `Req ${entry.requisitionCode}` : null}
+        {entry.movementSummary
+          ? `${entry.requisitionCode ? " • " : ""}${entry.movementSummary}`
+          : ""}
+      </p>
+    </div>
+  ]);
+
+  return (
+    <div className="fixed inset-0 z-[93] flex items-center justify-center bg-slate-900/45 p-4">
+      <button
+        type="button"
+        className="absolute inset-0"
+        aria-label="Close spend details"
+        onClick={onClose}
+      />
+      <div className="relative z-10 max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,0.24)]">
+        <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Project Budget Detail
+              </p>
+              <h3 className="text-xl font-semibold text-ink-900">{row.name}</h3>
+            </div>
+            <button type="button" className="gf-btn-secondary" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-5 py-4">
+          <div className="grid gap-3 md:grid-cols-4">
+            <Card>
+              <p className="text-xs text-slate-500">Budget</p>
+              <p className="text-lg font-semibold text-ink-900">{formatCurrency(row.budgetAmount)}</p>
+            </Card>
+            <Card>
+              <p className="text-xs text-slate-500">Recognized Spend</p>
+              <p className="text-lg font-semibold text-ink-900">{formatCurrency(row.recognizedSpend)}</p>
+            </Card>
+            <Card>
+              <p className="text-xs text-slate-500">Remaining</p>
+              <p className="text-lg font-semibold text-ink-900">{formatCurrency(row.remainingBudget)}</p>
+            </Card>
+            <Card>
+              <p className="text-xs text-slate-500">% Used</p>
+              <div className="mt-1 flex items-center gap-2">
+                <p className="text-lg font-semibold text-ink-900">{formatPercentUsed(row.percentUsed)}</p>
+                <StatusBadge status={deriveOperationalBudgetStatus(row)} />
+              </div>
+            </Card>
+          </div>
+
+          <Card title="Spend Composition">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              <CompositionMetricCard label="Breakdown Cost" value={composition.breakdownCost} />
+              <CompositionMetricCard label="Maintenance Cost" value={composition.maintenanceCost} />
+              <CompositionMetricCard label="Operating Cost" value={composition.operatingCost} />
+              <CompositionMetricCard
+                label="Stock Replenishment"
+                value={composition.stockReplenishmentCost}
+              />
+              <CompositionMetricCard label="Other / Unlinked" value={composition.otherUnlinkedCost} />
+            </div>
+          </Card>
+
+          <Card title="Linked Recognized Expenses">
+            {expenseRows.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                No recognized expense records were linked directly for this row in the current scope.
+              </p>
+            ) : (
+              <DataTable
+                columns={["Date", "Expense", "Bucket", "Amount", "Traceability"]}
+                rows={expenseRows}
+                stickyHeader={false}
+              />
+            )}
+          </Card>
+
+          {reconciliationDelta !== 0 ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Some recognized spend in this scope is not fully linked to operational context yet.
+              It is included under Other / Unlinked: {formatCurrency(reconciliationDelta)}.
+            </div>
+          ) : null}
+
+          {classificationAudit && classificationAudit.delta !== 0 ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Classification delta detected: {formatCurrency(classificationAudit.delta)}.
+              Review linked records for missing operational context.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function formatDate(value: string) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return "—";
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "2-digit",
-    year: "numeric"
-  }).format(parsed);
+function CompositionMetricCard({
+  label,
+  value
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+      <p className="text-[11px] text-slate-600">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-ink-900">{formatCurrency(value)}</p>
+    </div>
+  );
 }
 
-async function readApiError(response: Response, fallback: string) {
-  try {
-    const payload = await response.json();
-    if (typeof payload?.message === "string" && payload.message.trim()) {
-      return payload.message;
-    }
-  } catch {}
-  return fallback;
-}
-
-function buildFiltersQuery(filters: { clientId: string; rigId: string; from: string; to: string }) {
-  const params = new URLSearchParams();
-  if (filters.from) params.set("from", filters.from);
-  if (filters.to) params.set("to", filters.to);
-  if (filters.clientId !== "all") params.set("clientId", filters.clientId);
-  if (filters.rigId !== "all") params.set("rigId", filters.rigId);
-  return params;
+function ScopeBreakdownBadge({
+  label,
+  value
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+      <p className="text-[11px] text-slate-600">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-ink-900">{value}</p>
+    </div>
+  );
 }

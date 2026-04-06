@@ -438,7 +438,7 @@ export const maintenanceRequests: MaintenanceRequest[] = [
     photos: ["/maintenance/gf003-hose-leak-1.jpg", "/maintenance/gf003-hose-leak-2.jpg"],
     notes: "Can continue at reduced output for 1-2 days maximum.",
     estimatedDowntimeHours: 16,
-    status: "UNDER_REVIEW",
+    status: "OPEN",
     approvalNotes: null
   },
   {
@@ -454,7 +454,7 @@ export const maintenanceRequests: MaintenanceRequest[] = [
     photos: ["/maintenance/gf005-compressor-1.jpg"],
     notes: "Rig currently unavailable.",
     estimatedDowntimeHours: 48,
-    status: "APPROVED",
+    status: "IN_REPAIR",
     approvalNotes: "Approved by office for immediate purchase and repair."
   },
   {

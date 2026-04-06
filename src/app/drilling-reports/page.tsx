@@ -148,7 +148,7 @@ export default function DrillingReportsPage() {
       if (Array.isArray(parsed)) {
         setRecentProjectIds(parsed.filter((value): value is string => typeof value === "string"));
       }
-    } catch (_error) {
+    } catch {
       setRecentProjectIds([]);
     }
   }, []);
@@ -202,7 +202,7 @@ export default function DrillingReportsPage() {
       const activeProjects = (projectsPayload.data || []).filter((project: ProjectOption) => project.status === "ACTIVE");
       setProjects(activeProjects);
       setRigs(rigsPayload.data || []);
-    } catch (_error) {
+    } catch {
       setProjects([]);
       setRigs([]);
     } finally {
@@ -264,7 +264,7 @@ export default function DrillingReportsPage() {
         }
         return rows[0]?.id || null;
       });
-    } catch (_error) {
+    } catch {
       setReports([]);
       setStats(emptyStats);
       setSelectedReportId(null);

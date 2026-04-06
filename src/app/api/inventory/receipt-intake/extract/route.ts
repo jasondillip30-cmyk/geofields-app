@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -240,14 +241,16 @@ export async function POST(request: NextRequest) {
       contentType: typeof extraction.qr.contentType === "string" ? extraction.qr.contentType : "UNKNOWN"
     });
     logLookupStagesFromQr(extraction.qr);
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][supplier-mapping]", {
+    debugLog(
+      "[inventory][receipt-intake][supplier-mapping]",
+      {
         parsedSupplierRaw: hydratedSupplier.parsedSupplierRaw,
         headerSupplierBefore: hydratedSupplier.headerSupplierBefore,
         headerSupplierAfter: hydratedSupplier.headerSupplierAfter,
         source: hydratedSupplier.source
-      });
-    }
+      },
+      { channel: "inventory-receipt" }
+    );
 
     const message = resolveReceiptIntakeMessage(extraction);
     const debugFlags = readDebugFlagsFromExtraction(extraction as unknown as Record<string, unknown>);
@@ -258,13 +261,15 @@ export async function POST(request: NextRequest) {
       extractedTin: typeof extraction.header?.tin === "string" ? extraction.header.tin : "",
       suppliers
     });
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[inventory][receipt-intake][supplier-mapping][payload]", {
+    debugLog(
+      "[inventory][receipt-intake][supplier-mapping][payload]",
+      {
         payloadSupplier: hydratedSupplier.headerSupplierAfter,
         suggestedSupplierId: supplierSuggestion.supplierId,
         suggestedSupplierName: supplierSuggestion.supplierName
-      });
-    }
+      },
+      { channel: "inventory-receipt" }
+    );
 
     const hasPdfModuleError =
       isPdfUpload &&
@@ -366,13 +371,14 @@ function detectUploadKind(file: File): "pdf" | "image" | "unknown" {
 }
 
 function logRouteStage(stage: string, extra?: Record<string, unknown>) {
-  if (process.env.NODE_ENV === "production") {
-    return;
-  }
-  console.info("[inventory][receipt-intake][route]", {
-    stage,
-    ...(extra || {})
-  });
+  debugLog(
+    "[inventory][receipt-intake][route]",
+    {
+      stage,
+      ...(extra || {})
+    },
+    { channel: "inventory-receipt" }
+  );
 }
 
 function logLookupStagesFromQr(qrValue: Record<string, unknown>) {
@@ -578,30 +584,38 @@ function logQrDebugInfo(qrValue: Record<string, unknown>) {
   const decodeStatus = typeof qrValue.decodeStatus === "string" ? qrValue.decodeStatus : "UNKNOWN";
   const decodeSucceeded = decodeStatus === "DECODED";
   const rawPreview = truncateLogValue(rawQrContent, 200);
-  console.info("[inventory][receipt-intake][qr-raw-debug]", {
-    detected,
-    decodeSucceeded,
-    rawLength: rawQrContent.length,
-    rawPreview
-  });
-  console.info("[inventory][receipt-intake][qr]", {
-    detected,
-    type: detectedType,
-    decodeStatus,
-    decodePass: typeof qrValue.decodePass === "string" ? qrValue.decodePass : "",
-    parseStatus: typeof qrValue.parseStatus === "string" ? qrValue.parseStatus : "UNKNOWN",
-    failureReason: typeof qrValue.failureReason === "string" ? qrValue.failureReason : "",
-    lookupStatus:
-      qrValue.stages &&
-      typeof qrValue.stages === "object" &&
-      (qrValue.stages as Record<string, unknown>).verificationLookup &&
-      typeof (qrValue.stages as Record<string, unknown>).verificationLookup === "object" &&
-      typeof ((qrValue.stages as Record<string, unknown>).verificationLookup as Record<string, unknown>).status === "string"
-        ? (((qrValue.stages as Record<string, unknown>).verificationLookup as Record<string, unknown>).status as string)
-        : "UNKNOWN",
-    rawQrContent: truncateLogValue(rawQrContent),
-    isTraVerification: Boolean(qrValue.isTraVerification)
-  });
+  debugLog(
+    "[inventory][receipt-intake][qr-raw-debug]",
+    {
+      detected,
+      decodeSucceeded,
+      rawLength: rawQrContent.length,
+      rawPreview
+    },
+    { channel: "inventory-receipt" }
+  );
+  debugLog(
+    "[inventory][receipt-intake][qr]",
+    {
+      detected,
+      type: detectedType,
+      decodeStatus,
+      decodePass: typeof qrValue.decodePass === "string" ? qrValue.decodePass : "",
+      parseStatus: typeof qrValue.parseStatus === "string" ? qrValue.parseStatus : "UNKNOWN",
+      failureReason: typeof qrValue.failureReason === "string" ? qrValue.failureReason : "",
+      lookupStatus:
+        qrValue.stages &&
+        typeof qrValue.stages === "object" &&
+        (qrValue.stages as Record<string, unknown>).verificationLookup &&
+        typeof (qrValue.stages as Record<string, unknown>).verificationLookup === "object" &&
+        typeof ((qrValue.stages as Record<string, unknown>).verificationLookup as Record<string, unknown>).status === "string"
+          ? (((qrValue.stages as Record<string, unknown>).verificationLookup as Record<string, unknown>).status as string)
+          : "UNKNOWN",
+      rawQrContent: truncateLogValue(rawQrContent),
+      isTraVerification: Boolean(qrValue.isTraVerification)
+    },
+    { channel: "inventory-receipt" }
+  );
 }
 
 function truncateLogValue(value: string, maxLength = 500) {

@@ -1,11 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import type { AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import {
+  isRequisitionAwaitingReceipt,
+  isRequisitionPendingApproval,
+  isRequisitionPostedComplete
+} from "@/lib/requisition-lifecycle";
+import { normalizeNameForComparison, normalizeNameForStorage } from "@/lib/name-normalization";
 import { formatCurrency } from "@/lib/utils";
 
 type RequisitionType =
@@ -20,7 +26,9 @@ type RequisitionStatus =
   | "REJECTED"
   | "PURCHASE_COMPLETED";
 
-type RequisitionWizardStep = 1 | 2 | 3 | 4 | 5;
+type RequisitionWizardStep = 1 | 2 | 3 | 4;
+type MaintenancePriority = "LOW" | "MEDIUM" | "HIGH";
+type InventoryReason = "LOW_STOCK" | "RESTOCK" | "EMERGENCY" | "OTHER";
 
 interface RequisitionLineItem {
   id: string;
@@ -39,6 +47,9 @@ interface RequisitionRow {
   liveProjectSpendType: LiveProjectSpendType | null;
   category: string;
   subcategory: string | null;
+  categoryId: string | null;
+  subcategoryId: string | null;
+  requestedVendorId: string | null;
   requestedVendorName: string | null;
   notes: string | null;
   submittedAt: string;
@@ -52,6 +63,7 @@ interface RequisitionRow {
     projectId: string | null;
     rigId: string | null;
     maintenanceRequestId: string | null;
+    breakdownReportId: string | null;
   };
   lineItems: RequisitionLineItem[];
   totals: {
@@ -85,18 +97,48 @@ interface RequisitionRow {
   };
 }
 
-interface MaintenanceOption {
+interface InventoryLocationOption {
   id: string;
-  requestCode: string;
-  rigId: string;
+  name: string;
+  isActive: boolean;
 }
 
-interface RequisitionFormLine {
+interface InventoryItemSuggestion {
   id: string;
-  description: string;
-  quantity: string;
-  estimatedUnitCost: string;
-  notes: string;
+  name: string;
+  sku: string;
+  category: string;
+}
+
+interface VendorSuggestion {
+  id: string;
+  name: string;
+  additionalInfo: string | null;
+}
+
+interface RequisitionCategoryOption {
+  id: string;
+  name: string;
+}
+
+interface RequisitionSubcategoryOption {
+  id: string;
+  name: string;
+  categoryId: string;
+}
+
+interface BreakdownLinkOption {
+  id: string;
+  title: string;
+  severity: string;
+  reportDate: string;
+}
+
+interface MaintenanceLinkOption {
+  id: string;
+  requestCode: string;
+  issueDescription: string;
+  status: string;
 }
 
 interface RequisitionWorkflowCardProps {
@@ -104,30 +146,55 @@ interface RequisitionWorkflowCardProps {
   clients: Array<{ id: string; name: string }>;
   projects: Array<{ id: string; name: string; clientId: string; assignedRigId?: string | null }>;
   rigs: Array<{ id: string; name: string }>;
+  initialContext?: {
+    projectId?: string;
+    breakdownId?: string;
+    maintenanceRequestId?: string;
+  };
   onWorkflowChanged?: () => Promise<void> | void;
 }
 
-const initialFormLine = (): RequisitionFormLine => ({
-  id: `line-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-  description: "",
-  quantity: "1",
-  estimatedUnitCost: "",
-  notes: ""
-});
-
-function createInitialFormState() {
+function createInitialFormState(initialContext?: RequisitionWorkflowCardProps["initialContext"]) {
+  const prefilledProjectId = initialContext?.projectId?.trim() || "";
+  const prefilledBreakdownId = initialContext?.breakdownId?.trim() || "";
+  const prefilledMaintenanceRequestId =
+    initialContext?.maintenanceRequestId?.trim() || "";
+  const prefilledMaintenancePurchase = prefilledMaintenanceRequestId.length > 0;
+  const prefilledBreakdownPurchase =
+    !prefilledMaintenancePurchase && prefilledBreakdownId.length > 0;
+  const prefilledProjectPurchase =
+    !prefilledMaintenancePurchase &&
+    !prefilledBreakdownPurchase &&
+    prefilledProjectId.length > 0;
   return {
-    type: "" as RequisitionType | "",
+    type: (
+      prefilledMaintenancePurchase
+        ? "MAINTENANCE_PURCHASE"
+        : prefilledBreakdownPurchase || prefilledProjectPurchase
+          ? "LIVE_PROJECT_PURCHASE"
+          : ""
+    ) as RequisitionType | "",
     liveProjectSpendType: "" as LiveProjectSpendType | "",
     clientId: "",
-    projectId: "",
+    projectId: prefilledProjectId,
     rigId: "",
-    maintenanceRequestId: "",
-    category: "Materials",
+    maintenanceRequestId: prefilledMaintenanceRequestId,
+    breakdownReportId: prefilledBreakdownId,
+    stockLocationId: "",
+    maintenancePriority: "" as MaintenancePriority | "",
+    inventoryReason: "" as InventoryReason | "",
+    categoryId: "",
+    category: "",
+    subcategoryId: "",
     subcategory: "",
+    requestedVendorId: "",
     requestedVendorName: "",
-    notes: "",
-    lines: [initialFormLine()]
+    shortReason: "",
+    itemName: "",
+    quantity: "1",
+    unit: "PCS",
+    estimatedUnitCost: "",
+    itemNote: ""
   };
 }
 
@@ -136,6 +203,7 @@ export function RequisitionWorkflowCard({
   clients,
   projects,
   rigs,
+  initialContext,
   onWorkflowChanged
 }: RequisitionWorkflowCardProps) {
   const [loading, setLoading] = useState(true);
@@ -144,72 +212,126 @@ export function RequisitionWorkflowCard({
   const [notice, setNotice] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<RequisitionStatus | "all">("all");
   const [rows, setRows] = useState<RequisitionRow[]>([]);
-  const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceOption[]>([]);
-  const [form, setForm] = useState(() => createInitialFormState());
-  const [wizardStep, setWizardStep] = useState<RequisitionWizardStep>(1);
+  const [setupCategories, setSetupCategories] = useState<RequisitionCategoryOption[]>([]);
+  const [setupSubcategories, setSetupSubcategories] = useState<RequisitionSubcategoryOption[]>([]);
+  const [breakdownOptions, setBreakdownOptions] = useState<BreakdownLinkOption[]>([]);
+  const [_breakdownLoading, setBreakdownLoading] = useState(false);
+  const [maintenanceOptions, setMaintenanceOptions] = useState<MaintenanceLinkOption[]>([]);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [setupLoading, setSetupLoading] = useState(true);
+  const [locationOptions, setLocationOptions] = useState<InventoryLocationOption[]>([]);
+  const [inventorySuggestions, setInventorySuggestions] = useState<InventoryItemSuggestion[]>([]);
+  const [vendorSuggestions, setVendorSuggestions] = useState<VendorSuggestion[]>([]);
+  const [vendorSuggestionLoading, setVendorSuggestionLoading] = useState(false);
+  const [vendorSuggestionStatus, setVendorSuggestionStatus] = useState<
+    "idle" | "ready" | "empty"
+  >("idle");
+  const [vendorFocused, setVendorFocused] = useState(false);
+  const [activeVendorSuggestionIndex, setActiveVendorSuggestionIndex] = useState(-1);
+  const [creatingVendor, setCreatingVendor] = useState(false);
+  const [inventorySuggestionLoading, setInventorySuggestionLoading] = useState(false);
+  const [inventorySuggestionStatus, setInventorySuggestionStatus] = useState<
+    "idle" | "ready" | "empty"
+  >("idle");
+  const [itemNameFocused, setItemNameFocused] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const [subcategoryFocused, setSubcategoryFocused] = useState(false);
+  const [activeSubcategorySuggestionIndex, setActiveSubcategorySuggestionIndex] = useState(-1);
+  const [creatingSubcategory, setCreatingSubcategory] = useState(false);
+  const [form, setForm] = useState(() => createInitialFormState(initialContext));
+  const hasPrefilledContext = Boolean(
+    initialContext?.projectId || initialContext?.maintenanceRequestId || initialContext?.breakdownId
+  );
+  const [wizardStep, setWizardStep] = useState<RequisitionWizardStep>(
+    hasPrefilledContext ? 2 : 1
+  );
+  const submitInFlightRef = useRef(false);
+  const hasMaintenanceEntryContext = Boolean(
+    initialContext?.maintenanceRequestId?.trim()
+  );
+  const hasBreakdownEntryContext = Boolean(initialContext?.breakdownId?.trim());
+  const showMaintenanceTypeOption =
+    hasMaintenanceEntryContext || form.type === "MAINTENANCE_PURCHASE";
+  const minimumWizardStep: RequisitionWizardStep =
+    hasMaintenanceEntryContext || hasBreakdownEntryContext ? 2 : 1;
 
-  const filteredProjects = useMemo(() => {
-    if (!form.clientId) {
-      return projects;
-    }
-    return projects.filter((project) => project.clientId === form.clientId);
-  }, [form.clientId, projects]);
-
-  const filteredMaintenanceOptions = useMemo(() => {
-    if (!form.rigId) {
-      return maintenanceOptions;
-    }
-    return maintenanceOptions.filter((entry) => entry.rigId === form.rigId);
-  }, [form.rigId, maintenanceOptions]);
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === form.projectId) || null,
+    [form.projectId, projects]
+  );
+  const derivedClientName = useMemo(
+    () =>
+      selectedProject
+        ? clients.find((client) => client.id === selectedProject.clientId)?.name || "-"
+        : "-",
+    [clients, selectedProject]
+  );
+  const derivedRigName = useMemo(
+    () =>
+      selectedProject?.assignedRigId
+        ? rigs.find((rig) => rig.id === selectedProject.assignedRigId)?.name || "-"
+        : "-",
+    [rigs, selectedProject]
+  );
+  const selectedLocationName = useMemo(
+    () => locationOptions.find((location) => location.id === form.stockLocationId)?.name || "",
+    [form.stockLocationId, locationOptions]
+  );
 
   const estimatedTotal = useMemo(
-    () =>
-      form.lines.reduce((sum, line) => {
-        const quantity = Number(line.quantity);
-        const unitCost = Number(line.estimatedUnitCost);
-        if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) {
-          return sum;
-        }
-        return sum + quantity * unitCost;
-      }, 0),
-    [form.lines]
+    () => {
+      const quantity = Number(form.quantity);
+      const unitCost = Number(form.estimatedUnitCost);
+      if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitCost) || unitCost < 0) {
+        return 0;
+      }
+      return quantity * unitCost;
+    },
+    [form.estimatedUnitCost, form.quantity]
   );
 
   const validLineItems = useMemo(
-    () =>
-      form.lines
-        .map((line, index) => ({
-          id: line.id || `line-${index + 1}`,
-          description: line.description.trim(),
-          quantity: Number(line.quantity),
-          estimatedUnitCost: Number(line.estimatedUnitCost),
-          estimatedTotalCost:
-            Number(line.quantity) > 0 && Number(line.estimatedUnitCost) >= 0
-              ? Number(line.quantity) * Number(line.estimatedUnitCost)
-              : 0,
-          notes: line.notes.trim() || null
-        }))
-        .filter(
-          (line) =>
-            line.description &&
-            Number.isFinite(line.quantity) &&
-            line.quantity > 0 &&
-            Number.isFinite(line.estimatedUnitCost) &&
-            line.estimatedUnitCost >= 0
-        ),
-    [form.lines]
+    () => {
+      const description = form.itemName.trim();
+      const quantity = Number(form.quantity);
+      const estimatedUnitCost = Number(form.estimatedUnitCost);
+      if (
+        !description ||
+        !Number.isFinite(quantity) ||
+        quantity <= 0 ||
+        !Number.isFinite(estimatedUnitCost) ||
+        estimatedUnitCost < 0
+      ) {
+        return [];
+      }
+      const noteParts = [
+        form.unit.trim() ? `Unit: ${form.unit.trim()}` : "",
+        form.itemNote.trim()
+      ].filter(Boolean);
+      return [
+        {
+          id: "line-1",
+          description,
+          quantity,
+          estimatedUnitCost,
+          estimatedTotalCost: quantity * estimatedUnitCost,
+          notes: noteParts.length > 0 ? noteParts.join(" | ") : null
+        }
+      ];
+    },
+    [form.estimatedUnitCost, form.itemName, form.itemNote, form.quantity, form.unit]
   );
 
   const pendingCount = useMemo(
-    () => rows.filter((row) => row.status === "SUBMITTED").length,
+    () => rows.filter((row) => isRequisitionPendingApproval(row.status)).length,
     [rows]
   );
   const approvedReadyCount = useMemo(
-    () => rows.filter((row) => row.status === "APPROVED").length,
+    () => rows.filter((row) => isRequisitionAwaitingReceipt(row.status)).length,
     [rows]
   );
   const completedCount = useMemo(
-    () => rows.filter((row) => row.status === "PURCHASE_COMPLETED").length,
+    () => rows.filter((row) => isRequisitionPostedComplete(row.status)).length,
     [rows]
   );
 
@@ -246,16 +368,101 @@ export function RequisitionWorkflowCard({
     void loadRequisitions();
   }, [loadRequisitions]);
 
+  const loadRequisitionSetup = useCallback(async () => {
+    setSetupLoading(true);
+    try {
+      const response = await fetch("/api/requisitions/setup", {
+        cache: "no-store"
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            data?: {
+              categories?: Array<{ id?: string; name?: string }>;
+              subcategories?: Array<{ id?: string; name?: string; categoryId?: string }>;
+            };
+            message?: string;
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to load requisition setup.");
+      }
+
+      const categories = Array.isArray(payload?.data?.categories)
+        ? payload.data.categories
+            .map((entry) => ({
+              id: typeof entry.id === "string" ? entry.id : "",
+              name: typeof entry.name === "string" ? entry.name.trim() : ""
+            }))
+            .filter((entry) => entry.id && entry.name)
+        : [];
+      const subcategories = Array.isArray(payload?.data?.subcategories)
+        ? payload.data.subcategories
+            .map((entry) => ({
+              id: typeof entry.id === "string" ? entry.id : "",
+              name: typeof entry.name === "string" ? entry.name.trim() : "",
+              categoryId: typeof entry.categoryId === "string" ? entry.categoryId : ""
+            }))
+            .filter((entry) => entry.id && entry.name && entry.categoryId)
+        : [];
+
+      setSetupCategories(categories);
+      setSetupSubcategories(subcategories);
+
+      setForm((current) => {
+        if (current.categoryId) {
+          const linked = categories.find((entry) => entry.id === current.categoryId);
+          if (linked) {
+            return {
+              ...current,
+              category: linked.name
+            };
+          }
+        }
+        if (current.category.trim()) {
+          const linked = categories.find(
+            (entry) => normalizeSearchText(entry.name) === normalizeSearchText(current.category)
+          );
+          if (linked) {
+            return {
+              ...current,
+              categoryId: linked.id,
+              category: linked.name
+            };
+          }
+        }
+        return {
+          ...current,
+          categoryId: "",
+          category: "",
+          subcategoryId: "",
+          subcategory: ""
+        };
+      });
+    } catch (setupError) {
+      setSetupCategories([]);
+      setSetupSubcategories([]);
+      setError(
+        setupError instanceof Error ? setupError.message : "Failed to load requisition setup."
+      );
+    } finally {
+      setSetupLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRequisitionSetup();
+  }, [loadRequisitionSetup]);
+
   useEffect(() => {
     let cancelled = false;
-    void fetch("/api/maintenance-requests?status=SUBMITTED", { cache: "no-store" })
+    void fetch("/api/inventory/locations", { cache: "no-store" })
       .then(async (response) => {
         const payload = (await response.json().catch(() => null)) as
           | {
               data?: Array<{
                 id: string;
-                requestCode?: string;
-                rigId?: string;
+                name: string;
+                isActive?: boolean;
               }>;
             }
           | null;
@@ -263,17 +470,19 @@ export function RequisitionWorkflowCard({
           return;
         }
         const mapped = Array.isArray(payload?.data)
-          ? payload.data.map((entry) => ({
-              id: entry.id,
-              requestCode: entry.requestCode || entry.id,
-              rigId: entry.rigId || ""
-            }))
+          ? payload.data
+              .filter((entry) => entry.isActive !== false)
+              .map((entry) => ({
+                id: entry.id,
+                name: entry.name,
+                isActive: entry.isActive !== false
+              }))
           : [];
-        setMaintenanceOptions(mapped);
+        setLocationOptions(mapped);
       })
       .catch(() => {
         if (!cancelled) {
-          setMaintenanceOptions([]);
+          setLocationOptions([]);
         }
       });
     return () => {
@@ -281,33 +490,459 @@ export function RequisitionWorkflowCard({
     };
   }, []);
 
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!initialContext?.breakdownId) {
+      return;
+    }
+    setNotice("Breakdown context loaded. This request is linked to that breakdown case.");
+  }, [initialContext?.breakdownId]);
+
+  useEffect(() => {
+    if (!initialContext?.maintenanceRequestId) {
+      return;
+    }
+    setNotice("Maintenance context loaded. This request can be linked to that maintenance record.");
+  }, [initialContext?.maintenanceRequestId]);
+
+  useEffect(() => {
+    if (form.type !== "MAINTENANCE_PURCHASE") {
+      return;
+    }
+    if (!form.maintenanceRequestId || form.rigId) {
+      return;
+    }
+
+    let cancelled = false;
+    const maintenanceRequestId = form.maintenanceRequestId;
+    void (async () => {
+      try {
+        const query = new URLSearchParams({
+          maintenanceRequestId
+        });
+        const response = await fetch(`/api/maintenance-requests?${query.toString()}`, {
+          cache: "no-store"
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              data?: Array<{
+                id?: string;
+                rigId?: string;
+                projectId?: string | null;
+              }>;
+            }
+          | null;
+        if (!response.ok || cancelled) {
+          return;
+        }
+        const matched = Array.isArray(payload?.data) ? payload.data[0] : null;
+        const rigId = typeof matched?.rigId === "string" ? matched.rigId : "";
+        const projectId =
+          typeof matched?.projectId === "string" ? matched.projectId : "";
+        if (!rigId) {
+          return;
+        }
+
+        setForm((current) => {
+          if (
+            current.type !== "MAINTENANCE_PURCHASE" ||
+            current.maintenanceRequestId !== maintenanceRequestId
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            rigId: current.rigId || rigId,
+            projectId: current.projectId || projectId
+          };
+        });
+      } catch {
+        // keep manual fallback if context preload fails
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.maintenanceRequestId, form.rigId, form.type]);
+
+  useEffect(() => {
+    const searchTerm = form.requestedVendorName.trim();
+    if (searchTerm.length < 2) {
+      setVendorSuggestions([]);
+      setVendorSuggestionStatus("idle");
+      setVendorSuggestionLoading(false);
+      setActiveVendorSuggestionIndex(-1);
+      return;
+    }
+
+    const controller = new AbortController();
+    const normalizedSearchTerm = normalizeSearchText(searchTerm);
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        setVendorSuggestionLoading(true);
+        try {
+          const query = new URLSearchParams();
+          query.set("search", searchTerm);
+          query.set("limit", "6");
+          const response = await fetch(`/api/vendors?${query.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                data?: Array<{
+                  id?: string;
+                  name?: string;
+                  additionalInfo?: string | null;
+                }>;
+              }
+            | null;
+          if (!response.ok || controller.signal.aborted) {
+            setVendorSuggestions([]);
+            setVendorSuggestionStatus("empty");
+            return;
+          }
+          const nextSuggestions = Array.isArray(payload?.data)
+            ? payload.data
+                .map((entry) => ({
+                  id: typeof entry.id === "string" ? entry.id : "",
+                  name: typeof entry.name === "string" ? entry.name.trim() : "",
+                  additionalInfo:
+                    typeof entry.additionalInfo === "string" && entry.additionalInfo.trim().length > 0
+                      ? entry.additionalInfo.trim()
+                      : null
+                }))
+                .filter((entry) => entry.id && entry.name)
+                .filter((entry) => normalizeSearchText(entry.name).includes(normalizedSearchTerm))
+                .slice(0, 6)
+            : [];
+          setVendorSuggestions(nextSuggestions);
+          setVendorSuggestionStatus(nextSuggestions.length > 0 ? "ready" : "empty");
+          setActiveVendorSuggestionIndex(-1);
+        } catch {
+          if (!controller.signal.aborted) {
+            setVendorSuggestions([]);
+            setVendorSuggestionStatus("empty");
+            setActiveVendorSuggestionIndex(-1);
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setVendorSuggestionLoading(false);
+          }
+        }
+      })();
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [form.requestedVendorName]);
+
+  useEffect(() => {
+    const searchTerm = form.itemName.trim();
+    if (searchTerm.length < 2) {
+      setInventorySuggestions([]);
+      setInventorySuggestionStatus("idle");
+      setInventorySuggestionLoading(false);
+      setActiveSuggestionIndex(-1);
+      return;
+    }
+
+    const controller = new AbortController();
+    const normalizedSearchTerm = normalizeSearchText(searchTerm);
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        setInventorySuggestionLoading(true);
+        try {
+          const query = new URLSearchParams();
+          query.set("search", searchTerm);
+          query.set("status", "ACTIVE");
+          const response = await fetch(`/api/inventory/items?${query.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                data?: Array<{
+                  id?: string;
+                  name?: string;
+                  sku?: string;
+                  category?: string;
+                }>;
+              }
+            | null;
+          if (!response.ok || controller.signal.aborted) {
+            setInventorySuggestions([]);
+            setInventorySuggestionStatus("empty");
+            return;
+          }
+          const nextSuggestions = Array.isArray(payload?.data)
+            ? payload.data
+                .map((entry) => ({
+                  id: typeof entry.id === "string" ? entry.id : "",
+                  name: typeof entry.name === "string" ? entry.name.trim() : "",
+                  sku: typeof entry.sku === "string" ? entry.sku.trim() : "",
+                  category:
+                    typeof entry.category === "string" && entry.category.trim().length > 0
+                      ? entry.category.trim()
+                      : "Materials"
+                }))
+                .filter((entry) => entry.id && entry.name)
+                .filter((entry) => {
+                  const searchable = normalizeSearchText(
+                    `${entry.name} ${entry.sku} ${entry.category}`
+                  );
+                  return searchable.includes(normalizedSearchTerm);
+                })
+                .slice(0, 6)
+            : [];
+          setInventorySuggestions(nextSuggestions);
+          setInventorySuggestionStatus(nextSuggestions.length > 0 ? "ready" : "empty");
+          setActiveSuggestionIndex(-1);
+        } catch {
+          if (!controller.signal.aborted) {
+            setInventorySuggestions([]);
+            setInventorySuggestionStatus("empty");
+            setActiveSuggestionIndex(-1);
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setInventorySuggestionLoading(false);
+          }
+        }
+      })();
+    }, 220);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [form.itemName]);
+
+  useEffect(() => {
+    if (form.type !== "LIVE_PROJECT_PURCHASE" || !form.projectId) {
+      setBreakdownOptions([]);
+      setBreakdownLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        setBreakdownLoading(true);
+        try {
+          const query = new URLSearchParams();
+          query.set("projectId", form.projectId);
+          query.set("status", "OPEN");
+          const response = await fetch(`/api/breakdowns?${query.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                data?: Array<{
+                  id?: string;
+                  title?: string;
+                  severity?: string;
+                  reportDate?: string;
+                }>;
+              }
+            | null;
+          if (!response.ok || controller.signal.aborted) {
+            setBreakdownOptions([]);
+            return;
+          }
+          const nextOptions = Array.isArray(payload?.data)
+            ? payload.data
+                .map((entry) => ({
+                  id: typeof entry.id === "string" ? entry.id : "",
+                  title: typeof entry.title === "string" ? entry.title.trim() : "",
+                  severity: typeof entry.severity === "string" ? entry.severity.trim() : "MEDIUM",
+                  reportDate:
+                    typeof entry.reportDate === "string" ? entry.reportDate : new Date().toISOString()
+                }))
+                .filter((entry) => entry.id && entry.title)
+            : [];
+          setBreakdownOptions(nextOptions);
+          setForm((current) => {
+            if (!current.breakdownReportId) {
+              return current;
+            }
+            const stillExists = nextOptions.some((entry) => entry.id === current.breakdownReportId);
+            return stillExists
+              ? current
+              : {
+                  ...current,
+                  breakdownReportId: ""
+                };
+          });
+        } catch {
+          if (!controller.signal.aborted) {
+            setBreakdownOptions([]);
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setBreakdownLoading(false);
+          }
+        }
+      })();
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [form.projectId, form.type]);
+
+  useEffect(() => {
+    if (form.type !== "MAINTENANCE_PURCHASE" || !form.rigId) {
+      setMaintenanceOptions([]);
+      setMaintenanceLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        setMaintenanceLoading(true);
+        try {
+          const query = new URLSearchParams();
+          query.set("rigId", form.rigId);
+          const response = await fetch(`/api/maintenance-requests?${query.toString()}`, {
+            cache: "no-store",
+            signal: controller.signal
+          });
+          const payload = (await response.json().catch(() => null)) as
+            | {
+                data?: Array<{
+                  id?: string;
+                  requestCode?: string;
+                  issueDescription?: string;
+                  status?: string;
+                }>;
+              }
+            | null;
+          if (!response.ok || controller.signal.aborted) {
+            setMaintenanceOptions([]);
+            return;
+          }
+          const nextOptions = Array.isArray(payload?.data)
+            ? payload.data
+                .map((entry) => ({
+                  id: typeof entry.id === "string" ? entry.id : "",
+                  requestCode:
+                    typeof entry.requestCode === "string" ? entry.requestCode.trim() : "",
+                  issueDescription:
+                    typeof entry.issueDescription === "string"
+                      ? entry.issueDescription.trim()
+                      : "",
+                  status: typeof entry.status === "string" ? entry.status : "SUBMITTED"
+                }))
+                .filter((entry) => entry.id && entry.requestCode)
+                .filter((entry) => isMaintenanceRecordOpen(entry.status))
+            : [];
+          setMaintenanceOptions(nextOptions);
+          setForm((current) => {
+            if (nextOptions.length === 1) {
+              return {
+                ...current,
+                maintenanceRequestId: nextOptions[0].id
+              };
+            }
+            if (!current.maintenanceRequestId) {
+              return current;
+            }
+            const exists = nextOptions.some((entry) => entry.id === current.maintenanceRequestId);
+            return exists
+              ? current
+              : {
+                  ...current,
+                  maintenanceRequestId: ""
+                };
+          });
+        } catch {
+          if (!controller.signal.aborted) {
+            setMaintenanceOptions([]);
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setMaintenanceLoading(false);
+          }
+        }
+      })();
+    }, 120);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [form.rigId, form.type]);
+
   const validateStep = useCallback(
     (step: RequisitionWizardStep) => {
       if (step === 1 && !form.type) {
         return "Choose a requisition type to continue.";
       }
       if (step === 2) {
-        if (form.type === "LIVE_PROJECT_PURCHASE" && !form.liveProjectSpendType) {
-          return "Choose Breakdown or Normal expense to continue.";
-        }
-      }
-      if (step === 3) {
         if (form.type === "LIVE_PROJECT_PURCHASE" && !form.projectId) {
-          return "Live project purchase requisitions require a project.";
+          return form.breakdownReportId
+            ? "Breakdown-linked purchases require the linked project context."
+            : "Project Purchase requires a project.";
         }
         if (form.type === "MAINTENANCE_PURCHASE" && !form.rigId) {
-          return "Maintenance purchase requisitions require a rig.";
+          return "Maintenance-linked purchases require a rig.";
+        }
+        if (form.type === "MAINTENANCE_PURCHASE") {
+          if (maintenanceLoading) {
+            return "Loading open maintenance cases for the selected rig.";
+          }
+          if (maintenanceOptions.length === 0) {
+            return "No open maintenance case exists for this rig. Open a maintenance case first.";
+          }
+          if (maintenanceOptions.length > 1 && !form.maintenanceRequestId) {
+            return "Select which open maintenance case this purchase belongs to.";
+          }
+        }
+        if (
+          form.type === "INVENTORY_STOCK_UP" &&
+          locationOptions.length > 0 &&
+          !form.stockLocationId
+        ) {
+          return "Inventory Stock-up requires a stock location.";
         }
       }
-      if (step === 4 && validLineItems.length === 0) {
-        return "Add at least one valid line item with quantity and estimated unit cost.";
+      if (step === 3 && validLineItems.length === 0) {
+        return "Enter item name, quantity, and estimated unit cost.";
       }
-      if (step === 4 && !form.category.trim()) {
+      if (step === 3 && setupLoading) {
+        return "Loading setup categories.";
+      }
+      if (step === 3 && setupCategories.length === 0) {
+        return "No setup categories are available. Configure categories in setup first.";
+      }
+      if (step === 3 && !form.categoryId.trim()) {
         return "Category is required.";
       }
       return null;
     },
-    [form, validLineItems.length]
+    [
+      form,
+      locationOptions.length,
+      maintenanceLoading,
+      maintenanceOptions.length,
+      setupCategories.length,
+      setupLoading,
+      validLineItems.length
+    ]
   );
 
   function continueWizard() {
@@ -317,33 +952,31 @@ export function RequisitionWorkflowCard({
       return;
     }
     setError(null);
-    setWizardStep((current) => Math.min(5, current + 1) as RequisitionWizardStep);
+    setWizardStep((current) => Math.min(4, current + 1) as RequisitionWizardStep);
   }
 
   function backWizard() {
     setError(null);
-    setWizardStep((current) => Math.max(1, current - 1) as RequisitionWizardStep);
-  }
-
-  function restartWizard() {
-    setForm(createInitialFormState());
-    setWizardStep(1);
-    setError(null);
+    setWizardStep(
+      (current) => Math.max(minimumWizardStep, current - 1) as RequisitionWizardStep
+    );
   }
 
   const createRequisition = useCallback(
-    async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      setError(null);
-      setNotice(null);
-
-      if (wizardStep !== 5) {
-        setWizardStep(5);
-        setError("Review the requisition, then click Submit Requisition to continue.");
+    async () => {
+      if (saving || submitInFlightRef.current) {
         return;
       }
 
-      for (const step of [1, 2, 3, 4] as RequisitionWizardStep[]) {
+      setError(null);
+      setNotice(null);
+
+      if (wizardStep !== 4) {
+        setError("Review the request, then submit.");
+        return;
+      }
+
+      for (const step of [1, 2, 3] as RequisitionWizardStep[]) {
         const validationError = validateStep(step);
         if (validationError) {
           setWizardStep(step);
@@ -352,23 +985,59 @@ export function RequisitionWorkflowCard({
         }
       }
 
+      submitInFlightRef.current = true;
       setSaving(true);
       try {
+        const resolvedMaintenanceRequestId =
+          form.type === "MAINTENANCE_PURCHASE"
+            ? form.maintenanceRequestId || maintenanceOptions[0]?.id || ""
+            : "";
         const response = await fetch("/api/requisitions", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             type: form.type,
             liveProjectSpendType:
-              form.type === "LIVE_PROJECT_PURCHASE" ? form.liveProjectSpendType : null,
-            clientId: form.clientId || null,
-            projectId: form.projectId || null,
-            rigId: form.rigId || null,
-            maintenanceRequestId: form.maintenanceRequestId || null,
+              form.type === "LIVE_PROJECT_PURCHASE"
+                ? form.breakdownReportId
+                  ? "BREAKDOWN"
+                  : "NORMAL_EXPENSE"
+                : null,
+            clientId:
+              form.type === "LIVE_PROJECT_PURCHASE"
+                ? selectedProject?.clientId || null
+                : null,
+            projectId:
+              form.type === "LIVE_PROJECT_PURCHASE"
+                ? form.projectId || null
+                : null,
+            rigId:
+              form.type === "MAINTENANCE_PURCHASE"
+                ? form.rigId || null
+                : form.type === "LIVE_PROJECT_PURCHASE"
+                  ? selectedProject?.assignedRigId || null
+                  : null,
+            maintenanceRequestId:
+              form.type === "MAINTENANCE_PURCHASE" && resolvedMaintenanceRequestId
+                ? resolvedMaintenanceRequestId
+                : null,
+            breakdownReportId:
+              form.type === "LIVE_PROJECT_PURCHASE" && form.breakdownReportId
+                ? form.breakdownReportId
+                : null,
             category: form.category,
             subcategory: form.subcategory || null,
+            categoryId: form.categoryId || null,
+            subcategoryId: form.subcategoryId || null,
+            requestedVendorId: form.requestedVendorId || null,
             requestedVendorName: form.requestedVendorName || null,
-            notes: form.notes || null,
+            notes: buildRequestNote({
+              type: form.type,
+              shortReason: form.shortReason,
+              maintenancePriority: form.maintenancePriority,
+              inventoryReason: form.inventoryReason,
+              stockLocationName: selectedLocationName
+            }),
             lineItems: validLineItems
           })
         });
@@ -380,11 +1049,9 @@ export function RequisitionWorkflowCard({
           throw new Error(payload?.message || "Failed to create requisition.");
         }
 
-        setNotice(
-          "Purchase request submitted. Next step is manager approval, then receipt/purchase posting."
-        );
-        setForm(createInitialFormState());
-        setWizardStep(1);
+        setNotice("Purchase request submitted.");
+        setForm(createInitialFormState(initialContext));
+        setWizardStep(minimumWizardStep);
         await loadRequisitions();
         if (onWorkflowChanged) {
           await onWorkflowChanged();
@@ -397,9 +1064,24 @@ export function RequisitionWorkflowCard({
         );
       } finally {
         setSaving(false);
+        submitInFlightRef.current = false;
       }
     },
-    [form, loadRequisitions, onWorkflowChanged, validLineItems, validateStep, wizardStep]
+    [
+      form,
+      initialContext,
+      loadRequisitions,
+      maintenanceOptions,
+      minimumWizardStep,
+      onWorkflowChanged,
+      saving,
+      selectedLocationName,
+      selectedProject?.assignedRigId,
+      selectedProject?.clientId,
+      validLineItems,
+      validateStep,
+      wizardStep
+    ]
   );
 
   const requisitionRows = useMemo(
@@ -422,7 +1104,7 @@ export function RequisitionWorkflowCard({
           formatCurrency(row.totals.estimatedTotalCost),
           formatIsoDate(row.submittedAt),
           <div key={`${row.id}-actions`} className="flex max-w-[320px] flex-wrap gap-2">
-            {row.status === "APPROVED" && (
+            {isRequisitionAwaitingReceipt(row.status) && (
               <Link
                 href={receiptUrl}
                 className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
@@ -430,12 +1112,12 @@ export function RequisitionWorkflowCard({
                 Continue to receipt follow-up
               </Link>
             )}
-            {row.status === "PURCHASE_COMPLETED" && (
+            {isRequisitionPostedComplete(row.status) && (
               <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
                 Posted
               </span>
             )}
-            {row.status === "SUBMITTED" && (
+            {isRequisitionPendingApproval(row.status) && (
               <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800">
                 Pending approval
               </span>
@@ -450,13 +1132,398 @@ export function RequisitionWorkflowCard({
       }),
     [projects, rigs, rows]
   );
+  const categoryOptions = setupCategories;
+  const subcategoryOptions = useMemo(
+    () =>
+      setupSubcategories
+        .filter((entry) => entry.categoryId === form.categoryId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [form.categoryId, setupSubcategories]
+  );
+  const unitOptions = ["PCS", "SET", "LITER", "KG", "METER", "BOX"];
+  const hasStartedRequest = Boolean(form.type) || wizardStep > 1;
   const currentStepError = validateStep(wizardStep);
+  const requestCardTitle = useMemo(() => {
+    if (form.type === "MAINTENANCE_PURCHASE") {
+      return "Maintenance Request";
+    }
+    if (form.type === "LIVE_PROJECT_PURCHASE" && form.breakdownReportId) {
+      return "Breakdown-linked Purchase";
+    }
+    if (form.type === "LIVE_PROJECT_PURCHASE") {
+      return "Project Request";
+    }
+    if (form.type === "INVENTORY_STOCK_UP") {
+      return "Inventory Stock-up Request";
+    }
+    return "New Request";
+  }, [form.breakdownReportId, form.type]);
+  const showItemSuggestions =
+    itemNameFocused &&
+    form.itemName.trim().length >= 2 &&
+    (inventorySuggestionLoading || inventorySuggestionStatus !== "idle");
+  const showVendorSuggestions =
+    vendorFocused &&
+    form.requestedVendorName.trim().length >= 2 &&
+    (vendorSuggestionLoading || vendorSuggestionStatus !== "idle");
+  const showCreateVendorOption =
+    showVendorSuggestions &&
+    !vendorSuggestionLoading &&
+    !creatingVendor &&
+    vendorSuggestions.length === 0 &&
+    form.requestedVendorName.trim().length >= 2;
+  const normalizedSubcategoryQuery = normalizeSearchText(form.subcategory);
+  const filteredSubcategorySuggestions = useMemo(
+    () =>
+      subcategoryOptions
+        .filter((subcategory) =>
+          normalizeSearchText(subcategory.name).includes(normalizedSubcategoryQuery)
+        )
+        .slice(0, 6),
+    [normalizedSubcategoryQuery, subcategoryOptions]
+  );
+  const showSubcategorySuggestions =
+    subcategoryFocused &&
+    form.categoryId.trim().length > 0 &&
+    form.subcategory.trim().length >= 1;
+  const showCreateSubcategoryOption =
+    showSubcategorySuggestions &&
+    filteredSubcategorySuggestions.length === 0 &&
+    form.subcategory.trim().length >= 1;
+
+  function applyVendorSuggestion(suggestion: VendorSuggestion) {
+    setForm((current) => ({
+      ...current,
+      requestedVendorId: suggestion.id,
+      requestedVendorName: suggestion.name
+    }));
+    setVendorFocused(false);
+    setVendorSuggestions([]);
+    setVendorSuggestionStatus("idle");
+    setActiveVendorSuggestionIndex(-1);
+  }
+
+  async function createVendorFromInput() {
+    if (creatingVendor) {
+      return;
+    }
+    const candidate = normalizeNameForStorage(form.requestedVendorName);
+    if (candidate.length < 2) {
+      return;
+    }
+
+    setCreatingVendor(true);
+    try {
+      const response = await fetch("/api/vendors", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ name: candidate, source: "request_flow" })
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            message?: string;
+            created?: boolean;
+            data?: {
+              id?: string;
+              name?: string;
+              additionalInfo?: string | null;
+            };
+          }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to create vendor.");
+      }
+
+      const createdId = typeof payload?.data?.id === "string" ? payload.data.id : "";
+      const createdName = typeof payload?.data?.name === "string" ? payload.data.name.trim() : "";
+      if (!createdId || !createdName) {
+        throw new Error("Vendor was created but response was invalid.");
+      }
+
+      if (payload?.created === false) {
+        setNotice("Using existing vendor.");
+      }
+
+      applyVendorSuggestion({
+        id: createdId,
+        name: createdName,
+        additionalInfo:
+          typeof payload?.data?.additionalInfo === "string" &&
+          payload.data.additionalInfo.trim().length > 0
+            ? payload.data.additionalInfo.trim()
+            : null
+      });
+    } catch (vendorError) {
+      setError(vendorError instanceof Error ? vendorError.message : "Failed to create vendor.");
+    } finally {
+      setCreatingVendor(false);
+    }
+  }
+
+  function closeVendorSuggestions() {
+    setVendorFocused(false);
+    setActiveVendorSuggestionIndex(-1);
+  }
+
+  function applyInventorySuggestion(suggestion: InventoryItemSuggestion) {
+    const linkedCategory =
+      categoryOptions.find(
+        (entry) => normalizeSearchText(entry.name) === normalizeSearchText(suggestion.category)
+      ) || null;
+    setForm((current) => ({
+      ...current,
+      itemName: suggestion.name,
+      categoryId: linkedCategory?.id || current.categoryId,
+      category: linkedCategory?.name || current.category,
+      subcategoryId: linkedCategory?.id === current.categoryId ? current.subcategoryId : "",
+      subcategory: linkedCategory?.id === current.categoryId ? current.subcategory : ""
+    }));
+    setItemNameFocused(false);
+    setInventorySuggestions([]);
+    setInventorySuggestionStatus("idle");
+    setActiveSuggestionIndex(-1);
+  }
+
+  function closeItemSuggestions() {
+    setItemNameFocused(false);
+    setActiveSuggestionIndex(-1);
+  }
+
+  function applySubcategorySuggestion(subcategory: RequisitionSubcategoryOption) {
+    setForm((current) => ({
+      ...current,
+      subcategoryId: subcategory.id,
+      subcategory: subcategory.name
+    }));
+    setSubcategoryFocused(false);
+    setActiveSubcategorySuggestionIndex(-1);
+  }
+
+  async function createSubcategoryFromInput() {
+    if (creatingSubcategory) {
+      return;
+    }
+    const candidate = normalizeNameForStorage(form.subcategory);
+    if (!form.categoryId || !candidate) {
+      return;
+    }
+
+    setCreatingSubcategory(true);
+    try {
+      const response = await fetch("/api/requisitions/setup", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "create_subcategory",
+          categoryId: form.categoryId,
+          name: candidate,
+          source: "request_flow"
+        })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            message?: string;
+            data?: {
+              created?: boolean;
+              subcategory?: {
+                id?: string;
+                name?: string;
+                categoryId?: string;
+              };
+            };
+          }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to create subcategory.");
+      }
+
+      const created = payload?.data?.subcategory;
+      const createdId = typeof created?.id === "string" ? created.id : "";
+      const createdName = typeof created?.name === "string" ? created.name.trim() : "";
+      const createdCategoryId =
+        typeof created?.categoryId === "string" ? created.categoryId : form.categoryId;
+      if (!createdId || !createdName || !createdCategoryId) {
+        throw new Error("Subcategory was created but response was invalid.");
+      }
+      if (payload?.data?.created === false) {
+        setNotice("Using existing subcategory.");
+      }
+
+      const createdOption: RequisitionSubcategoryOption = {
+        id: createdId,
+        name: createdName,
+        categoryId: createdCategoryId
+      };
+      setSetupSubcategories((current) => {
+        if (current.some((entry) => entry.id === createdOption.id)) {
+          return current;
+        }
+        return [...current, createdOption];
+      });
+      applySubcategorySuggestion(createdOption);
+    } catch (subcategoryError) {
+      setError(
+        subcategoryError instanceof Error
+          ? subcategoryError.message
+          : "Failed to create subcategory."
+      );
+    } finally {
+      setCreatingSubcategory(false);
+    }
+  }
+
+  function closeSubcategorySuggestions() {
+    setSubcategoryFocused(false);
+    setActiveSubcategorySuggestionIndex(-1);
+  }
+
+  function applyCategorySelection(categoryId: string) {
+    const selectedCategory = categoryOptions.find((entry) => entry.id === categoryId) || null;
+    setForm((current) => ({
+      ...current,
+      categoryId: selectedCategory?.id || "",
+      category: selectedCategory?.name || "",
+      subcategoryId: "",
+      subcategory: ""
+    }));
+    setActiveSubcategorySuggestionIndex(-1);
+  }
+
+  function handleVendorNameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      closeVendorSuggestions();
+      return;
+    }
+
+    const suggestionCount = vendorSuggestions.length + (showCreateVendorOption ? 1 : 0);
+    if (!showVendorSuggestions || suggestionCount === 0) {
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveVendorSuggestionIndex((current) =>
+        Math.min(current < 0 ? 0 : current + 1, suggestionCount - 1)
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveVendorSuggestionIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      if (activeVendorSuggestionIndex >= 0) {
+        event.preventDefault();
+        const selectedVendor = vendorSuggestions[activeVendorSuggestionIndex];
+        if (selectedVendor) {
+          applyVendorSuggestion(selectedVendor);
+          return;
+        }
+        if (showCreateVendorOption) {
+          void createVendorFromInput();
+          return;
+        }
+      }
+      if (showCreateVendorOption && vendorSuggestions.length === 0) {
+        event.preventDefault();
+        void createVendorFromInput();
+      }
+    }
+  }
+
+  function handleItemNameKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      closeItemSuggestions();
+      return;
+    }
+    if (!showItemSuggestions || inventorySuggestions.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSuggestionIndex((current) =>
+        Math.min(current < 0 ? 0 : current + 1, inventorySuggestions.length - 1)
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSuggestionIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter" && activeSuggestionIndex >= 0) {
+      event.preventDefault();
+      const selected = inventorySuggestions[activeSuggestionIndex];
+      if (selected) {
+        applyInventorySuggestion(selected);
+      }
+    }
+  }
+
+  function handleSubcategoryKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape") {
+      closeSubcategorySuggestions();
+      return;
+    }
+    const suggestionCount =
+      filteredSubcategorySuggestions.length + (showCreateSubcategoryOption ? 1 : 0);
+    if (!showSubcategorySuggestions || suggestionCount === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSubcategorySuggestionIndex((current) =>
+        Math.min(current < 0 ? 0 : current + 1, suggestionCount - 1)
+      );
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSubcategorySuggestionIndex((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      if (activeSubcategorySuggestionIndex >= 0) {
+        event.preventDefault();
+        const selected = filteredSubcategorySuggestions[activeSubcategorySuggestionIndex];
+        if (selected) {
+          applySubcategorySuggestion(selected);
+          return;
+        }
+        if (showCreateSubcategoryOption) {
+          void createSubcategoryFromInput();
+          return;
+        }
+      }
+      if (showCreateSubcategoryOption && filteredSubcategorySuggestions.length === 0) {
+        event.preventDefault();
+        void createSubcategoryFromInput();
+      }
+    }
+  }
 
   return (
     <section id="expenses-requisition-workflow" className="space-y-4">
       {notice && (
-        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          {notice}
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200/90 bg-emerald-50/70 px-3.5 py-2.5 text-sm text-emerald-900 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
+            <p className="font-medium">{notice}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
+          >
+            Dismiss
+          </button>
         </div>
       )}
       {error && (
@@ -465,155 +1532,426 @@ export function RequisitionWorkflowCard({
         </div>
       )}
 
-      <Card
-        title="Create Purchase Request"
-        subtitle="Guided requisition flow: type → purchase path → context → item details → review"
-      >
-        <div className="mb-4 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5">
+      <Card title={requestCardTitle}>
+        <div className="mb-3 grid gap-2 text-xs sm:grid-cols-2 xl:grid-cols-4">
           {([
-            { step: 1, label: "Choose Type" },
-            { step: 2, label: "Purchase Path" },
-            { step: 3, label: "Operational Context" },
-            { step: 4, label: "Item Details" },
-            { step: 5, label: "Review & Submit" }
+            { step: 1, label: "Request type" },
+            { step: 2, label: "Request context" },
+            { step: 3, label: "Item details" },
+            { step: 4, label: "Review" }
           ] as Array<{ step: RequisitionWizardStep; label: string }>).map((entry) => (
             <div
               key={entry.step}
               className={`rounded-lg border px-2 py-1.5 ${
                 wizardStep === entry.step
                   ? "border-brand-300 bg-brand-50 text-brand-900"
-                  : "border-slate-200 bg-slate-50 text-slate-700"
+                  : "border-slate-200 bg-slate-50 text-slate-600"
               }`}
             >
-              <p className="font-semibold">Step {entry.step}</p>
-              <p>{entry.label}</p>
+              <p className="font-semibold">{entry.step}. {entry.label}</p>
             </div>
           ))}
         </div>
-        <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-          Purchasing workflow: requisition submission is an estimate only. Real posted cost happens after approved purchase receipt completion.
-        </p>
 
-        <form onSubmit={createRequisition} className="space-y-4">
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+          }}
+          className="space-y-3"
+        >
           {wizardStep === 1 && (
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 1 — Choose Requisition Type
-              </p>
-              <div className="grid gap-2 md:grid-cols-3">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((current) => ({
-                      ...current,
-                      type: "LIVE_PROJECT_PURCHASE",
-                      liveProjectSpendType: "",
-                      projectId: "",
-                      rigId: "",
-                      maintenanceRequestId: ""
-                    }))
-                  }
-                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
-                    form.type === "LIVE_PROJECT_PURCHASE"
-                      ? "border-brand-300 bg-brand-50 text-brand-900"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  <p className="font-semibold">Live Project</p>
-                  <p className="mt-1 text-xs text-slate-600">Project-linked purchase that will flow into project cost after posting.</p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((current) => ({
-                      ...current,
-                      type: "INVENTORY_STOCK_UP",
-                      liveProjectSpendType: "",
-                      projectId: "",
-                      rigId: "",
-                      maintenanceRequestId: ""
-                    }))
-                  }
-                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
-                    form.type === "INVENTORY_STOCK_UP"
-                      ? "border-brand-300 bg-brand-50 text-brand-900"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  <p className="font-semibold">Inventory Stock-up</p>
-                  <p className="mt-1 text-xs text-slate-600">Inventory replenishment with no required live project linkage.</p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm((current) => ({
-                      ...current,
-                      type: "MAINTENANCE_PURCHASE",
-                      liveProjectSpendType: "",
-                      projectId: ""
-                    }))
-                  }
-                  className={`rounded-lg border px-3 py-3 text-left text-sm ${
-                    form.type === "MAINTENANCE_PURCHASE"
-                      ? "border-brand-300 bg-brand-50 text-brand-900"
-                      : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  <p className="font-semibold">Maintenance (Non-live / Idle Rig)</p>
-                  <p className="mt-1 text-xs text-slate-600">Rig repair or maintenance purchase outside active live-project scope.</p>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {wizardStep === 2 && (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 2 — Choose Purchase Path
-              </p>
-              {form.type === "LIVE_PROJECT_PURCHASE" ? (
-                <div className="grid gap-2 md:grid-cols-2">
+              <p className="text-sm font-semibold text-slate-900">What is this request for?</p>
+              {hasBreakdownEntryContext ? (
+                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-3 text-sm text-brand-900">
+                  <p className="font-semibold">Breakdown-linked Purchase</p>
+                  <p className="mt-1 text-xs text-brand-800">
+                    This request was opened from a breakdown case.
+                  </p>
+                </div>
+              ) : (
+                <div className={`grid gap-2 ${showMaintenanceTypeOption ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+                  {showMaintenanceTypeOption && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setForm((current) => ({
+                          ...current,
+                          type: "MAINTENANCE_PURCHASE",
+                          liveProjectSpendType: "",
+                          clientId: "",
+                          projectId: current.projectId,
+                          rigId: current.rigId,
+                          maintenanceRequestId: current.maintenanceRequestId,
+                          breakdownReportId: current.breakdownReportId,
+                          stockLocationId: "",
+                          inventoryReason: "",
+                          maintenancePriority: current.maintenancePriority
+                        }))
+                      }
+                      className={`rounded-lg border px-3 py-3 text-left text-sm ${
+                        form.type === "MAINTENANCE_PURCHASE"
+                          ? "border-brand-300 bg-brand-50 text-brand-900"
+                          : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                      }`}
+                    >
+                      <p className="font-semibold">Maintenance-linked Purchase</p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        Available only from a maintenance case.
+                      </p>
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() =>
-                      setForm((current) => ({ ...current, liveProjectSpendType: "BREAKDOWN" }))
+                      setForm((current) => ({
+                        ...current,
+                        type: "LIVE_PROJECT_PURCHASE",
+                        liveProjectSpendType: "NORMAL_EXPENSE",
+                        projectId: "",
+                        clientId: "",
+                        rigId: "",
+                        maintenanceRequestId: "",
+                        breakdownReportId: "",
+                        stockLocationId: "",
+                        inventoryReason: "",
+                        maintenancePriority: ""
+                      }))
                     }
                     className={`rounded-lg border px-3 py-3 text-left text-sm ${
-                      form.liveProjectSpendType === "BREAKDOWN"
+                      form.type === "LIVE_PROJECT_PURCHASE"
                         ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                     }`}
                   >
-                    <p className="font-semibold">Breakdown</p>
-                    <p className="mt-1 text-xs text-slate-600">
-                      Urgent purchase to recover active drilling performance.
-                    </p>
+                    <p className="font-semibold">Project Purchase</p>
+                    <p className="mt-1 text-xs text-slate-600">Purchase linked to a project.</p>
                   </button>
                   <button
                     type="button"
                     onClick={() =>
                       setForm((current) => ({
                         ...current,
-                        liveProjectSpendType: "NORMAL_EXPENSE"
+                        type: "INVENTORY_STOCK_UP",
+                        liveProjectSpendType: "",
+                        projectId: "",
+                        clientId: "",
+                        rigId: "",
+                        maintenanceRequestId: "",
+                        breakdownReportId: "",
+                        stockLocationId: "",
+                        inventoryReason: "",
+                        maintenancePriority: ""
                       }))
                     }
                     className={`rounded-lg border px-3 py-3 text-left text-sm ${
-                      form.liveProjectSpendType === "NORMAL_EXPENSE"
+                      form.type === "INVENTORY_STOCK_UP"
                         ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                     }`}
                   >
-                    <p className="font-semibold">Normal Expense</p>
+                    <p className="font-semibold">Inventory Stock-up</p>
                     <p className="mt-1 text-xs text-slate-600">
-                      Planned project purchase that is not breakdown-driven.
+                      Replenish stock for warehouse/site use.
                     </p>
                   </button>
                 </div>
-              ) : (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                  {form.type === "INVENTORY_STOCK_UP"
-                    ? "Inventory stock-up selected. Continue to choose business context."
-                    : "Maintenance purchase selected. Continue to choose rig context."}
+              )}
+            </div>
+          )}
+
+          {wizardStep === 2 && (
+            <div className="space-y-3">
+              {form.type === "MAINTENANCE_PURCHASE" && (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <SelectInput
+                    label="Rig"
+                    value={form.rigId}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        rigId: value,
+                        maintenanceRequestId:
+                          current.rigId === value ? current.maintenanceRequestId : ""
+                      }))
+                    }
+                    options={[
+                      { value: "", label: "Select rig" },
+                      ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
+                    ]}
+                  />
+                  <VendorTypeaheadInput
+                    value={form.requestedVendorName}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        requestedVendorName: value,
+                        requestedVendorId: ""
+                      }))
+                    }
+                    onFocus={() => setVendorFocused(true)}
+                    onBlur={() => {
+                      window.setTimeout(() => closeVendorSuggestions(), 120);
+                    }}
+                    onKeyDown={handleVendorNameKeyDown}
+                    showSuggestions={showVendorSuggestions}
+                    loading={vendorSuggestionLoading || creatingVendor}
+                    suggestions={vendorSuggestions}
+                    activeSuggestionIndex={activeVendorSuggestionIndex}
+                    onSuggestionHover={setActiveVendorSuggestionIndex}
+                    onSuggestionSelect={applyVendorSuggestion}
+                    showCreateOption={showCreateVendorOption}
+                    onCreateOptionSelect={() => {
+                      void createVendorFromInput();
+                    }}
+                  />
+                  {form.rigId && maintenanceOptions.length === 1 && !maintenanceLoading ? (
+                    <label className="text-sm text-ink-700">
+                      Linked maintenance case
+                      <input
+                        value={`${maintenanceOptions[0].requestCode} (auto-linked)`}
+                        readOnly
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                      />
+                    </label>
+                  ) : (
+                    <SelectInput
+                      label="Linked maintenance case"
+                      value={form.maintenanceRequestId}
+                      onChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          maintenanceRequestId: value
+                        }))
+                      }
+                      disabled={!form.rigId || maintenanceLoading}
+                      options={[
+                        {
+                          value: "",
+                          label:
+                            !form.rigId
+                              ? "Select rig first"
+                              : maintenanceLoading
+                                ? "Loading maintenance requests..."
+                                : maintenanceOptions.length > 0
+                                  ? "Select maintenance case"
+                                  : "No open maintenance case"
+                        },
+                        ...maintenanceOptions.map((entry) => ({
+                          value: entry.id,
+                          label: `${entry.requestCode} - ${
+                            entry.issueDescription || "Maintenance case"
+                          }`
+                        }))
+                      ]}
+                    />
+                  )}
+                  <SelectInput
+                    label="Priority"
+                    value={form.maintenancePriority}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        maintenancePriority: (value as MaintenancePriority | "") || ""
+                      }))
+                    }
+                    options={[
+                      { value: "", label: "No priority" },
+                      { value: "LOW", label: "Low" },
+                      { value: "MEDIUM", label: "Medium" },
+                      { value: "HIGH", label: "High" }
+                    ]}
+                  />
+                  <TextInput
+                    label="Short reason"
+                    value={form.shortReason}
+                    onChange={(value) => setForm((current) => ({ ...current, shortReason: value }))}
+                  />
+                  {form.rigId && !maintenanceLoading && maintenanceOptions.length === 0 && (
+                    <p className="md:col-span-2 xl:col-span-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      No open maintenance case exists for this rig. Report maintenance first, then
+                      create a maintenance-linked purchase request.
+                    </p>
+                  )}
+                  {form.rigId &&
+                    !maintenanceLoading &&
+                    maintenanceOptions.length > 1 &&
+                    !form.maintenanceRequestId && (
+                      <p className="md:col-span-2 xl:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                        Multiple open maintenance cases found. Select the case this purchase
+                        belongs to.
+                      </p>
+                    )}
+                </div>
+              )}
+
+              {form.type === "LIVE_PROJECT_PURCHASE" && (
+                <div className="space-y-3">
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    <SelectInput
+                      label="Project"
+                      value={form.projectId}
+                      onChange={(value) => {
+                        const nextProject = projects.find((project) => project.id === value);
+                        setForm((current) => ({
+                          ...current,
+                          projectId: value,
+                          clientId: nextProject?.clientId || "",
+                          rigId: nextProject?.assignedRigId || "",
+                          breakdownReportId:
+                            current.projectId === value ? current.breakdownReportId : ""
+                        }));
+                      }}
+                      disabled={
+                        hasBreakdownEntryContext &&
+                        Boolean(form.breakdownReportId) &&
+                        Boolean(form.projectId)
+                      }
+                      options={[
+                        { value: "", label: "Select project" },
+                        ...projects.map((project) => ({ value: project.id, label: project.name }))
+                      ]}
+                    />
+                    <VendorTypeaheadInput
+                      value={form.requestedVendorName}
+                      onChange={(value) =>
+                        setForm((current) => ({
+                          ...current,
+                          requestedVendorName: value,
+                          requestedVendorId: ""
+                        }))
+                      }
+                      onFocus={() => setVendorFocused(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => closeVendorSuggestions(), 120);
+                      }}
+                      onKeyDown={handleVendorNameKeyDown}
+                      showSuggestions={showVendorSuggestions}
+                      loading={vendorSuggestionLoading || creatingVendor}
+                      suggestions={vendorSuggestions}
+                      activeSuggestionIndex={activeVendorSuggestionIndex}
+                      onSuggestionHover={setActiveVendorSuggestionIndex}
+                      onSuggestionSelect={applyVendorSuggestion}
+                      showCreateOption={showCreateVendorOption}
+                      onCreateOptionSelect={() => {
+                        void createVendorFromInput();
+                      }}
+                    />
+                    {hasBreakdownEntryContext ? (
+                      <label className="text-sm text-ink-700">
+                        Linked breakdown
+                        <input
+                          value={
+                            breakdownOptions.find(
+                              (entry) => entry.id === form.breakdownReportId
+                            )
+                              ? `${
+                                  breakdownOptions.find(
+                                    (entry) => entry.id === form.breakdownReportId
+                                  )?.title
+                                } (context linked)`
+                              : form.breakdownReportId || "Loading breakdown context..."
+                          }
+                          readOnly
+                          className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                        />
+                      </label>
+                    ) : null}
+                    <TextInput
+                      label="Short reason"
+                      value={form.shortReason}
+                      onChange={(value) => setForm((current) => ({ ...current, shortReason: value }))}
+                    />
+                  </div>
+                  {form.projectId && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      <p>
+                        <span className="font-semibold">Client context:</span> {derivedClientName}
+                      </p>
+                      <p>
+                        <span className="font-semibold">Rig context:</span> {derivedRigName}
+                      </p>
+                      {form.breakdownReportId && (
+                        <p>
+                          <span className="font-semibold">Linked breakdown:</span>{" "}
+                          {breakdownOptions.find((entry) => entry.id === form.breakdownReportId)?.title ||
+                            form.breakdownReportId}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {form.type === "INVENTORY_STOCK_UP" && (
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {locationOptions.length > 0 ? (
+                    <SelectInput
+                      label="Warehouse / Stock Location"
+                      value={form.stockLocationId}
+                      onChange={(value) =>
+                        setForm((current) => ({ ...current, stockLocationId: value }))
+                      }
+                      options={[
+                        { value: "", label: "Select location" },
+                        ...locationOptions.map((location) => ({
+                          value: location.id,
+                          label: location.name
+                        }))
+                      ]}
+                    />
+                  ) : (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      No active stock location is configured yet.
+                    </div>
+                  )}
+                  <VendorTypeaheadInput
+                    value={form.requestedVendorName}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        requestedVendorName: value,
+                        requestedVendorId: ""
+                      }))
+                    }
+                    onFocus={() => setVendorFocused(true)}
+                    onBlur={() => {
+                      window.setTimeout(() => closeVendorSuggestions(), 120);
+                    }}
+                    onKeyDown={handleVendorNameKeyDown}
+                    showSuggestions={showVendorSuggestions}
+                    loading={vendorSuggestionLoading || creatingVendor}
+                    suggestions={vendorSuggestions}
+                    activeSuggestionIndex={activeVendorSuggestionIndex}
+                    onSuggestionHover={setActiveVendorSuggestionIndex}
+                    onSuggestionSelect={applyVendorSuggestion}
+                    showCreateOption={showCreateVendorOption}
+                    onCreateOptionSelect={() => {
+                      void createVendorFromInput();
+                    }}
+                  />
+                  <SelectInput
+                    label="Reason"
+                    value={form.inventoryReason}
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        inventoryReason: (value as InventoryReason | "") || ""
+                      }))
+                    }
+                    options={[
+                      { value: "", label: "No reason" },
+                      { value: "LOW_STOCK", label: "Low stock" },
+                      { value: "RESTOCK", label: "Restock" },
+                      { value: "EMERGENCY", label: "Emergency" },
+                      { value: "OTHER", label: "Other" }
+                    ]}
+                  />
+                  <TextInput
+                    label="Short reason"
+                    value={form.shortReason}
+                    onChange={(value) => setForm((current) => ({ ...current, shortReason: value }))}
+                  />
                 </div>
               )}
             </div>
@@ -621,312 +1959,323 @@ export function RequisitionWorkflowCard({
 
           {wizardStep === 3 && (
             <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 3 — Select Operational Context
-              </p>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <SelectInput
-                  label="Client"
-                  value={form.clientId}
-                  onChange={(value) =>
-                    setForm((current) => ({
-                      ...current,
-                      clientId: value,
-                      projectId:
-                        value &&
-                        current.projectId &&
-                        !projects.some((project) => project.id === current.projectId && project.clientId === value)
-                          ? ""
-                          : current.projectId
-                    }))
-                  }
-                  options={[
-                    { value: "", label: "No client" },
-                    ...clients.map((client) => ({ value: client.id, label: client.name }))
-                  ]}
-                />
-                <SelectInput
-                  label={form.type === "INVENTORY_STOCK_UP" ? "Project (not required)" : "Project"}
-                  value={form.projectId}
-                  onChange={(value) => {
-                    const selectedProject = projects.find((project) => project.id === value);
-                    setForm((current) => ({
-                      ...current,
-                      projectId: value,
-                      clientId: selectedProject?.clientId || current.clientId,
-                      rigId: selectedProject?.assignedRigId || current.rigId
-                    }));
-                  }}
-                  disabled={form.type === "INVENTORY_STOCK_UP"}
-                  options={[
-                    {
-                      value: "",
-                      label:
-                        form.type === "LIVE_PROJECT_PURCHASE"
-                          ? "Select project (required)"
-                          : "No project"
-                    },
-                    ...filteredProjects.map((project) => ({
-                      value: project.id,
-                      label: project.name
-                    }))
-                  ]}
-                />
-                <SelectInput
-                  label={form.type === "MAINTENANCE_PURCHASE" ? "Rig (required)" : "Rig"}
-                  value={form.rigId}
-                  onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
-                  options={[
-                    {
-                      value: "",
-                      label:
-                        form.type === "MAINTENANCE_PURCHASE"
-                          ? "Select rig (required)"
-                          : "No rig"
-                    },
-                    ...rigs.map((rig) => ({ value: rig.id, label: rig.name }))
-                  ]}
-                />
-                {form.type === "MAINTENANCE_PURCHASE" && (
-                  <SelectInput
-                    label="Maintenance Request (optional)"
-                    value={form.maintenanceRequestId}
-                    onChange={(value) =>
-                      setForm((current) => ({ ...current, maintenanceRequestId: value }))
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Item name</span>
+                  <div className="relative">
+                    <input
+                      value={form.itemName}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, itemName: event.target.value }))
+                      }
+                      onFocus={() => setItemNameFocused(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => closeItemSuggestions(), 120);
+                      }}
+                      onKeyDown={handleItemNameKeyDown}
+                      aria-haspopup="listbox"
+                      aria-controls="requisition-item-suggestion-list"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                    {showItemSuggestions && (
+                      <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                        {inventorySuggestionLoading ? (
+                          <p className="px-3 py-2 text-xs text-slate-600">Searching inventory...</p>
+                        ) : inventorySuggestions.length > 0 ? (
+                          <ul id="requisition-item-suggestion-list" role="listbox" className="max-h-52 overflow-auto py-1.5">
+                            {inventorySuggestions.map((suggestion, index) => (
+                              <li key={suggestion.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    applyInventorySuggestion(suggestion);
+                                  }}
+                                  onMouseEnter={() => setActiveSuggestionIndex(index)}
+                                  className={`w-full px-3 py-2 text-left ${
+                                    activeSuggestionIndex === index
+                                      ? "bg-slate-100"
+                                      : "hover:bg-slate-50"
+                                  }`}
+                                >
+                                  <p className="text-sm font-medium text-slate-900">{suggestion.name}</p>
+                                  <p className="text-xs text-slate-600">
+                                    {suggestion.sku ? `${suggestion.sku} • ` : ""}
+                                    {suggestion.category}
+                                  </p>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="px-3 py-2 text-xs text-slate-600">No matching inventory item.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </label>
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Quantity</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.quantity}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, quantity: event.target.value }))
                     }
-                    options={[
-                      { value: "", label: "No maintenance request" },
-                      ...filteredMaintenanceOptions.map((option) => ({
-                        value: option.id,
-                        label: option.requestCode
-                      }))
-                    ]}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
                   />
-                )}
+                </label>
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Unit</span>
+                  <input
+                    list="requisition-unit-options"
+                    value={form.unit}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, unit: event.target.value }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  />
+                  <datalist id="requisition-unit-options">
+                    {unitOptions.map((unit) => (
+                      <option key={unit} value={unit} />
+                    ))}
+                  </datalist>
+                </label>
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Estimated unit cost</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.estimatedUnitCost}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        estimatedUnitCost: event.target.value
+                      }))
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Category</span>
+                  <select
+                    value={form.categoryId}
+                    onChange={(event) => applyCategorySelection(event.target.value)}
+                    disabled={setupLoading || categoryOptions.length === 0}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {setupLoading
+                        ? "Loading categories..."
+                        : categoryOptions.length === 0
+                          ? "No setup categories"
+                          : "Select category"}
+                    </option>
+                    {categoryOptions.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                  {!setupLoading && categoryOptions.length === 0 && (
+                    <p className="mt-1 text-xs text-amber-800">
+                      No categories are configured in setup yet. Add setup categories before submitting requests.
+                    </p>
+                  )}
+                </label>
+                <label className="text-sm text-ink-700">
+                  <span className="mb-1 block">Subcategory</span>
+                  <div className="relative">
+                    <input
+                      disabled={!form.categoryId}
+                      value={form.subcategory}
+                      onChange={(event) => {
+                        setForm((current) => ({
+                          ...current,
+                          subcategory: event.target.value,
+                          subcategoryId: ""
+                        }));
+                        setActiveSubcategorySuggestionIndex(-1);
+                      }}
+                      onFocus={() => setSubcategoryFocused(true)}
+                      onBlur={() => {
+                        window.setTimeout(() => closeSubcategorySuggestions(), 120);
+                      }}
+                      onKeyDown={handleSubcategoryKeyDown}
+                      aria-haspopup="listbox"
+                      aria-controls="requisition-subcategory-suggestion-list"
+                      placeholder={form.categoryId ? "Search or enter subcategory" : "Select category first"}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 disabled:bg-slate-100"
+                    />
+                    {showSubcategorySuggestions && (
+                      <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                        {filteredSubcategorySuggestions.length > 0 ? (
+                          <ul
+                            id="requisition-subcategory-suggestion-list"
+                            role="listbox"
+                            className="max-h-48 overflow-auto py-1.5"
+                          >
+                            {filteredSubcategorySuggestions.map((subcategory, index) => (
+                              <li key={subcategory.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(event) => {
+                                    event.preventDefault();
+                                    applySubcategorySuggestion(subcategory);
+                                  }}
+                                  onMouseEnter={() => setActiveSubcategorySuggestionIndex(index)}
+                                  className={`w-full px-3 py-2 text-left text-sm ${
+                                    activeSubcategorySuggestionIndex === index
+                                      ? "bg-slate-100 text-slate-900"
+                                      : "text-slate-700 hover:bg-slate-50"
+                                  }`}
+                                >
+                                  {subcategory.name}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : showCreateSubcategoryOption ? (
+                          <div className="py-1.5">
+                            <button
+                              type="button"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                                void createSubcategoryFromInput();
+                              }}
+                              onMouseEnter={() => setActiveSubcategorySuggestionIndex(0)}
+                              className={`w-full px-3 py-2 text-left text-sm ${
+                                activeSubcategorySuggestionIndex === 0
+                                  ? "bg-slate-100 text-slate-900"
+                                  : "text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {creatingSubcategory
+                                ? "Creating subcategory..."
+                                : `+ Create "${form.subcategory.trim()}"`}
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="px-3 py-2 text-xs text-slate-600">No matching subcategory.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </label>
               </div>
-              {form.type === "LIVE_PROJECT_PURCHASE" && form.projectId && (
-                <p className="text-xs text-slate-600">
-                  Project context auto-fills known client and primary rig where available.
-                </p>
-              )}
+              <label className="text-sm text-ink-700">
+                <span className="mb-1 block">Optional note</span>
+                <textarea
+                  value={form.itemNote}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, itemNote: event.target.value }))
+                  }
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                  rows={2}
+                />
+              </label>
+              <p className="text-sm text-slate-700">
+                Estimated cost: <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
+              </p>
             </div>
           )}
 
           {wizardStep === 4 && (
             <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 4 — Enter Item Details
-              </p>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <TextInput
-                  label="Expense Category"
-                  value={form.category}
-                  onChange={(value) => setForm((current) => ({ ...current, category: value }))}
-                  required
-                />
-                <TextInput
-                  label="Subcategory"
-                  value={form.subcategory}
-                  onChange={(value) => setForm((current) => ({ ...current, subcategory: value }))}
-                />
-                <TextInput
-                  label="Preferred Vendor (optional)"
-                  value={form.requestedVendorName}
-                  onChange={(value) =>
-                    setForm((current) => ({ ...current, requestedVendorName: value }))
-                  }
-                />
-              </div>
-              <label className="text-sm text-ink-700">
-                <span className="mb-1 block">Reason / Notes (optional)</span>
-                <textarea
-                  value={form.notes}
-                  onChange={(event) =>
-                    setForm((current) => ({ ...current, notes: event.target.value }))
-                  }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2"
-                  placeholder="Explain operational need, urgency, and expected impact."
-                />
-              </label>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <div className="space-y-2">
-                  {form.lines.map((line) => (
-                    <div key={line.id} className="grid gap-2 rounded border border-slate-200 bg-white p-2 md:grid-cols-12">
-                      <input
-                        value={line.description}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            lines: current.lines.map((entry) =>
-                              entry.id === line.id
-                                ? { ...entry, description: event.target.value }
-                                : entry
-                            )
-                          }))
-                        }
-                        placeholder="Description"
-                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-5"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={line.quantity}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            lines: current.lines.map((entry) =>
-                              entry.id === line.id
-                                ? { ...entry, quantity: event.target.value }
-                                : entry
-                            )
-                          }))
-                        }
-                        placeholder="Qty"
-                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={line.estimatedUnitCost}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            lines: current.lines.map((entry) =>
-                              entry.id === line.id
-                                ? { ...entry, estimatedUnitCost: event.target.value }
-                                : entry
-                            )
-                          }))
-                        }
-                        placeholder="Est. unit cost"
-                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
-                      />
-                      <input
-                        value={line.notes}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            lines: current.lines.map((entry) =>
-                              entry.id === line.id ? { ...entry, notes: event.target.value } : entry
-                            )
-                          }))
-                        }
-                        placeholder="Line note (optional)"
-                        className="rounded border border-slate-200 px-2 py-1 text-sm md:col-span-2"
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setForm((current) => ({
-                            ...current,
-                            lines:
-                              current.lines.length <= 1
-                                ? current.lines
-                                : current.lines.filter((entry) => entry.id !== line.id)
-                          }))
-                        }
-                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 md:col-span-1"
-                        disabled={form.lines.length <= 1}
-                      >
-                        Remove
-                      </button>
-                      <p className="text-xs text-slate-600 md:col-span-12">
-                        Line amount:{" "}
-                        <span className="font-semibold">
-                          {formatCurrency(
-                            Math.max(0, Number(line.quantity) || 0) *
-                              Math.max(0, Number(line.estimatedUnitCost) || 0)
-                          )}
-                        </span>
-                      </p>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setForm((current) => ({
-                        ...current,
-                        lines: [...current.lines, initialFormLine()]
-                      }))
-                    }
-                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                  >
-                    Add line item
-                  </button>
-                  <p className="text-xs text-slate-700">
-                    Estimated requisition total:{" "}
-                    <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {wizardStep === 5 && (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Step 5 — Review and Submit
-              </p>
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                 <p>
-                  <span className="font-semibold">Type:</span> {formatRequisitionType(form.type)}
+                  <span className="font-semibold">Request type:</span>{" "}
+                  {formatRequisitionType(form.type, {
+                    breakdownLinked:
+                      form.type === "LIVE_PROJECT_PURCHASE" && Boolean(form.breakdownReportId)
+                  })}
+                </p>
+                <p>
+                  <span className="font-semibold">Context:</span>{" "}
+                  {form.type === "MAINTENANCE_PURCHASE"
+                    ? rigs.find((rig) => rig.id === form.rigId)?.name || "-"
+                    : form.type === "LIVE_PROJECT_PURCHASE"
+                      ? projects.find((project) => project.id === form.projectId)?.name || "-"
+                      : selectedLocationName || "-"}
                 </p>
                 {form.type === "LIVE_PROJECT_PURCHASE" && (
+                  <>
+                    <p>
+                      <span className="font-semibold">Client context:</span> {derivedClientName}
+                    </p>
+                    <p>
+                      <span className="font-semibold">Rig context:</span> {derivedRigName}
+                    </p>
+                    {form.breakdownReportId && (
+                      <p>
+                        <span className="font-semibold">Linked breakdown:</span>{" "}
+                        {breakdownOptions.find((entry) => entry.id === form.breakdownReportId)?.title ||
+                          form.breakdownReportId}
+                      </p>
+                    )}
+                  </>
+                )}
+                {form.type === "MAINTENANCE_PURCHASE" && form.maintenancePriority && (
                   <p>
-                    <span className="font-semibold">Live project path:</span>{" "}
-                    {formatLiveProjectSpendType(form.liveProjectSpendType)}
+                    <span className="font-semibold">Priority:</span>{" "}
+                    {formatMaintenancePriorityLabel(form.maintenancePriority)}
+                  </p>
+                )}
+                {form.type === "MAINTENANCE_PURCHASE" && form.maintenanceRequestId && (
+                  <p>
+                    <span className="font-semibold">Linked maintenance:</span>{" "}
+                    {maintenanceOptions.find(
+                      (entry) => entry.id === form.maintenanceRequestId
+                    )?.requestCode || form.maintenanceRequestId}
+                  </p>
+                )}
+                {form.type === "INVENTORY_STOCK_UP" && form.inventoryReason && (
+                  <p>
+                    <span className="font-semibold">Reason:</span>{" "}
+                    {formatInventoryReasonLabel(form.inventoryReason)}
+                  </p>
+                )}
+                {form.shortReason.trim() && (
+                  <p>
+                    <span className="font-semibold">Reason:</span> {form.shortReason.trim()}
+                  </p>
+                )}
+                {form.requestedVendorName.trim() && (
+                  <p>
+                    <span className="font-semibold">Vendor:</span> {form.requestedVendorName.trim()}
                   </p>
                 )}
                 <p>
-                  <span className="font-semibold">Client:</span>{" "}
-                  {clients.find((entry) => entry.id === form.clientId)?.name || "-"}
+                  <span className="font-semibold">Item:</span> {form.itemName.trim() || "-"}
                 </p>
                 <p>
-                  <span className="font-semibold">Project:</span>{" "}
-                  {projects.find((entry) => entry.id === form.projectId)?.name || "-"}
+                  <span className="font-semibold">Quantity:</span> {form.quantity || "-"} {form.unit || ""}
                 </p>
                 <p>
-                  <span className="font-semibold">Rig:</span>{" "}
-                  {rigs.find((entry) => entry.id === form.rigId)?.name || "-"}
+                  <span className="font-semibold">Estimated unit cost:</span>{" "}
+                  {form.estimatedUnitCost ? formatCurrency(Number(form.estimatedUnitCost) || 0) : "-"}
                 </p>
                 <p>
                   <span className="font-semibold">Category:</span> {form.category || "-"}
                   {form.subcategory ? ` / ${form.subcategory}` : ""}
                 </p>
+                {form.itemNote.trim() && (
+                  <p>
+                    <span className="font-semibold">Item note:</span> {form.itemNote.trim()}
+                  </p>
+                )}
                 <p>
-                  <span className="font-semibold">Preferred Vendor:</span>{" "}
-                  {form.requestedVendorName.trim() || "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Reason:</span>{" "}
-                  {form.notes.trim() || "-"}
+                  <span className="font-semibold">Estimated cost:</span> {formatCurrency(estimatedTotal)}
                 </p>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-white">
-                <DataTable
-                  columns={["Description", "Qty", "Est. Unit Cost", "Est. Total", "Notes"]}
-                  rows={validLineItems.map((line) => [
-                    line.description,
-                    line.quantity,
-                    formatCurrency(line.estimatedUnitCost),
-                    formatCurrency(line.estimatedTotalCost),
-                    line.notes || "-"
-                  ])}
-                />
-              </div>
-              <p className="text-xs text-slate-700">
-                Estimated total request value:{" "}
-                <span className="font-semibold">{formatCurrency(estimatedTotal)}</span>
-              </p>
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-            {wizardStep > 1 && (
+            {wizardStep > minimumWizardStep && (
               <button
                 type="button"
                 onClick={backWizard}
@@ -935,7 +2284,7 @@ export function RequisitionWorkflowCard({
                 Back
               </button>
             )}
-            {wizardStep < 5 ? (
+            {wizardStep < 4 ? (
               <button
                 type="button"
                 onClick={continueWizard}
@@ -946,84 +2295,82 @@ export function RequisitionWorkflowCard({
               </button>
             ) : (
               <button
-                type="submit"
+                type="button"
+                onClick={() => {
+                  void createRequisition();
+                }}
                 disabled={saving}
                 className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
               >
-                {saving ? "Submitting..." : "Submit Requisition"}
+                {saving ? "Submitting..." : "Submit request"}
               </button>
             )}
-            <button
-              type="button"
-              onClick={restartWizard}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              Restart
-            </button>
-            {wizardStep < 5 && currentStepError && (
+            {wizardStep < 4 && currentStepError && (
               <p className="text-xs text-amber-800">{currentStepError}</p>
             )}
           </div>
         </form>
       </Card>
 
-      <details open className="rounded-xl border border-slate-200 bg-white">
-        <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
-          Requisition History
-        </summary>
-        <div className="space-y-3 border-t border-slate-200 p-4">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
-            <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
-              Pending approval: {pendingCount}
-            </span>
-            <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
-              Approved, awaiting receipt: {approvedReadyCount}
-            </span>
-            <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
-              Posted cost complete: {completedCount}
-            </span>
-            <label className="ml-auto flex items-center gap-2">
-              <span className="uppercase tracking-wide text-slate-500">Status</span>
-              <select
-                value={statusFilter}
-                onChange={(event) =>
-                  setStatusFilter(
-                    event.target.value === "all"
-                      ? "all"
-                      : (event.target.value as RequisitionStatus)
-                  )
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
-              >
-                <option value="all">All</option>
-                <option value="SUBMITTED">Submitted</option>
-                <option value="APPROVED">Approved</option>
-                <option value="REJECTED">Rejected</option>
-                <option value="PURCHASE_COMPLETED">Purchase completed</option>
-              </select>
-            </label>
+      {!hasStartedRequest && (
+        <details open className="rounded-xl border border-slate-200 bg-white">
+          <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-800">
+            Requisition History
+          </summary>
+          <div className="space-y-3 border-t border-slate-200 p-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
+              <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold text-amber-800">
+                Pending approval: {pendingCount}
+              </span>
+              <span className="rounded-full border border-indigo-300 bg-indigo-100 px-2 py-0.5 font-semibold text-indigo-800">
+                Approved, awaiting receipt: {approvedReadyCount}
+              </span>
+              <span className="rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-800">
+                Posted cost complete: {completedCount}
+              </span>
+              <label className="ml-auto flex items-center gap-2">
+                <span className="uppercase tracking-wide text-slate-500">Status</span>
+                <select
+                  value={statusFilter}
+                  onChange={(event) =>
+                    setStatusFilter(
+                      event.target.value === "all"
+                        ? "all"
+                        : (event.target.value as RequisitionStatus)
+                    )
+                  }
+                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                >
+                  <option value="all">All</option>
+                  <option value="SUBMITTED">Submitted</option>
+                  <option value="APPROVED">Approved</option>
+                  <option value="REJECTED">Rejected</option>
+                  <option value="PURCHASE_COMPLETED">Purchase completed</option>
+                </select>
+              </label>
+            </div>
+            {loading ? (
+              <p className="text-sm text-slate-600">Loading requisitions...</p>
+            ) : rows.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                No requisitions found for the selected filters.
+              </p>
+            ) : (
+              <DataTable
+                columns={[
+                  "Requisition",
+                  "Status",
+                  "Summary",
+                  "Estimated",
+                  "Submitted",
+                  "Actions"
+                ]}
+                rows={requisitionRows}
+              />
+            )}
           </div>
-          {loading ? (
-            <p className="text-sm text-slate-600">Loading requisitions...</p>
-          ) : rows.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-700">
-              No requisitions found for the selected filters.
-            </p>
-          ) : (
-            <DataTable
-              columns={[
-                "Requisition",
-                "Status",
-                "Summary",
-                "Estimated",
-                "Submitted",
-                "Actions"
-              ]}
-              rows={requisitionRows}
-            />
-          )}
-        </div>
-      </details>
+        </details>
+      )}
     </section>
   );
 }
@@ -1084,6 +2431,102 @@ function TextInput({
   );
 }
 
+function VendorTypeaheadInput({
+  value,
+  onChange,
+  onFocus,
+  onBlur,
+  onKeyDown,
+  showSuggestions,
+  loading,
+  suggestions,
+  activeSuggestionIndex,
+  onSuggestionHover,
+  onSuggestionSelect,
+  showCreateOption,
+  onCreateOptionSelect
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  showSuggestions: boolean;
+  loading: boolean;
+  suggestions: VendorSuggestion[];
+  activeSuggestionIndex: number;
+  onSuggestionHover: (index: number) => void;
+  onSuggestionSelect: (vendor: VendorSuggestion) => void;
+  showCreateOption: boolean;
+  onCreateOptionSelect: () => void;
+}) {
+  return (
+    <label className="text-sm text-ink-700">
+      <span className="mb-1 block">Vendor</span>
+      <div className="relative">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onFocus={onFocus}
+          onBlur={onBlur}
+          onKeyDown={onKeyDown}
+          aria-haspopup="listbox"
+          aria-controls="requisition-vendor-suggestion-list"
+          className="w-full rounded-lg border border-slate-200 px-3 py-2"
+        />
+        {showSuggestions && (
+          <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+            {loading ? (
+              <p className="px-3 py-2 text-xs text-slate-600">Searching vendors...</p>
+            ) : suggestions.length > 0 ? (
+              <ul id="requisition-vendor-suggestion-list" role="listbox" className="max-h-52 overflow-auto py-1.5">
+                {suggestions.map((suggestion, index) => (
+                  <li key={suggestion.id}>
+                    <button
+                      type="button"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        onSuggestionSelect(suggestion);
+                      }}
+                      onMouseEnter={() => onSuggestionHover(index)}
+                      className={`w-full px-3 py-2 text-left ${
+                        activeSuggestionIndex === index ? "bg-slate-100" : "hover:bg-slate-50"
+                      }`}
+                    >
+                      <p className="text-sm font-medium text-slate-900">{suggestion.name}</p>
+                      {suggestion.additionalInfo && (
+                        <p className="text-xs text-slate-600">{suggestion.additionalInfo}</p>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : showCreateOption ? (
+              <div className="py-1.5">
+                <button
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    onCreateOptionSelect();
+                  }}
+                  onMouseEnter={() => onSuggestionHover(0)}
+                  className={`w-full px-3 py-2 text-left text-sm ${
+                    activeSuggestionIndex === 0 ? "bg-slate-100 text-slate-900" : "text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  + Create &quot;{value.trim()}&quot; as new vendor
+                </button>
+              </div>
+            ) : (
+              <p className="px-3 py-2 text-xs text-slate-600">No matching vendor.</p>
+            )}
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}
+
 function buildRequisitionRowSummary({
   row,
   projects,
@@ -1093,43 +2536,49 @@ function buildRequisitionRowSummary({
   projects: Array<{ id: string; name: string }>;
   rigs: Array<{ id: string; name: string }>;
 }) {
-  const typeLabel = formatRequisitionType(row.type);
-  const pathLabel =
-    row.type === "LIVE_PROJECT_PURCHASE" ? formatLiveProjectSpendType(row.liveProjectSpendType) : "";
+  const typeLabel = formatRequisitionType(row.type, {
+    breakdownLinked: row.type === "LIVE_PROJECT_PURCHASE" && Boolean(row.context.breakdownReportId)
+  });
   const projectName = row.context.projectId ? lookupProjectName(projects, row.context.projectId) : "";
   const rigName = row.context.rigId ? lookupRigName(rigs, row.context.rigId) : "";
   const firstLine = row.lineItems[0]?.description?.trim() || "";
   const extraLines = Math.max(0, row.lineItems.length - 1);
+  const contextTokens =
+    row.type === "LIVE_PROJECT_PURCHASE"
+      ? [
+          projectName ? `Project: ${projectName}` : "",
+          rigName ? `Rig context: ${rigName}` : "",
+          row.context.breakdownReportId ? "Breakdown-linked" : ""
+        ]
+      : [
+          projectName ? `Project: ${projectName}` : "",
+          rigName ? `Rig: ${rigName}` : "",
+          row.context.maintenanceRequestId ? "Maintenance-linked" : ""
+        ];
 
   return {
-    primary: pathLabel && pathLabel !== "-" ? `${typeLabel} • ${pathLabel}` : typeLabel,
+    primary: typeLabel,
     context:
-      [projectName ? `Project: ${projectName}` : "", rigName ? `Rig: ${rigName}` : ""]
-        .filter(Boolean)
-        .join(" • ") || "No linked project/rig context",
+      contextTokens.filter(Boolean).join(" • ") ||
+      (row.type === "LIVE_PROJECT_PURCHASE"
+        ? "No linked project context"
+        : "No linked project/rig context"),
     items: firstLine
       ? `${firstLine}${extraLines > 0 ? ` +${extraLines} more item${extraLines > 1 ? "s" : ""}` : ""}`
       : `${row.category}${row.subcategory ? ` / ${row.subcategory}` : ""}`
   };
 }
 
-function formatRequisitionType(type: RequisitionType | "") {
-  if (!type) return "-";
-  if (type === "LIVE_PROJECT_PURCHASE") return "Live project purchase";
-  if (type === "MAINTENANCE_PURCHASE") return "Maintenance purchase";
-  return "Stock / warehouse purchase";
-}
-
-function formatLiveProjectSpendType(
-  spendType: LiveProjectSpendType | "" | null | undefined
+function formatRequisitionType(
+  type: RequisitionType | "",
+  options?: { breakdownLinked?: boolean }
 ) {
-  if (spendType === "BREAKDOWN") {
-    return "Breakdown";
+  if (!type) return "-";
+  if (type === "LIVE_PROJECT_PURCHASE") {
+    return options?.breakdownLinked ? "Breakdown-linked Purchase" : "Project Purchase";
   }
-  if (spendType === "NORMAL_EXPENSE") {
-    return "Normal expense";
-  }
-  return "-";
+  if (type === "MAINTENANCE_PURCHASE") return "Maintenance-linked Purchase";
+  return "Inventory Stock-up";
 }
 
 function lookupProjectName(
@@ -1141,6 +2590,61 @@ function lookupProjectName(
 
 function lookupRigName(rigs: Array<{ id: string; name: string }>, rigId: string) {
   return rigs.find((rig) => rig.id === rigId)?.name || rigId;
+}
+
+function buildRequestNote({
+  type,
+  shortReason,
+  maintenancePriority,
+  inventoryReason,
+  stockLocationName
+}: {
+  type: RequisitionType | "";
+  shortReason: string;
+  maintenancePriority: MaintenancePriority | "";
+  inventoryReason: InventoryReason | "";
+  stockLocationName: string;
+}) {
+  const parts: string[] = [];
+  if (type === "MAINTENANCE_PURCHASE" && maintenancePriority) {
+    parts.push(`Priority: ${formatMaintenancePriorityLabel(maintenancePriority)}`);
+  }
+  if (type === "INVENTORY_STOCK_UP" && stockLocationName) {
+    parts.push(`Stock location: ${stockLocationName}`);
+  }
+  if (type === "INVENTORY_STOCK_UP" && inventoryReason) {
+    parts.push(`Reason: ${formatInventoryReasonLabel(inventoryReason)}`);
+  }
+  if (shortReason.trim()) {
+    parts.push(shortReason.trim());
+  }
+  return parts.length > 0 ? parts.join(" | ") : null;
+}
+
+function formatMaintenancePriorityLabel(priority: MaintenancePriority) {
+  if (priority === "HIGH") return "High";
+  if (priority === "MEDIUM") return "Medium";
+  return "Low";
+}
+
+function formatInventoryReasonLabel(reason: InventoryReason) {
+  if (reason === "LOW_STOCK") return "Low stock";
+  if (reason === "RESTOCK") return "Restock";
+  if (reason === "EMERGENCY") return "Emergency";
+  return "Other";
+}
+
+function isMaintenanceRecordOpen(status: string) {
+  const normalized = status.trim().toUpperCase();
+  return (
+    normalized === "OPEN" ||
+    normalized === "IN_REPAIR" ||
+    normalized === "WAITING_FOR_PARTS"
+  );
+}
+
+function normalizeSearchText(value: string) {
+  return normalizeNameForComparison(value);
 }
 
 function formatIsoDate(value: string) {
@@ -1167,6 +2671,9 @@ function buildReceiptIntakeHref(row: RequisitionRow) {
   }
   if (row.context.maintenanceRequestId) {
     query.set("maintenanceRequestId", row.context.maintenanceRequestId);
+  }
+  if (row.context.breakdownReportId) {
+    query.set("breakdownReportId", row.context.breakdownReportId);
   }
   return `/purchasing/receipt-follow-up?${query.toString()}`;
 }

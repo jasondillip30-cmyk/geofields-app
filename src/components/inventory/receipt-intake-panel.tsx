@@ -1,9 +1,47 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import Link from "next/link";
 
 import { Card } from "@/components/ui/card";
+import {
+  DuplicateLinksGroup,
+  InputField,
+  RecordLinkedRows,
+  RecordSummaryGrid,
+  SelectField,
+  formatLinkedRecordType,
+  normalizeLinkedRecordUrl,
+  type FocusedLinkedRecord,
+  type LinkedRecordType
+} from "@/components/inventory/receipt-intake-panel-fields";
+import { ReceiptIntakeScanStep } from "@/components/inventory/receipt-intake-scan-step";
+import { ReceiptIntakeFinalizeStep } from "@/components/inventory/receipt-intake-finalize-step";
+import { ReceiptIntakeReviewStep } from "@/components/inventory/receipt-intake-review-step";
+import { ReceiptIntakeMismatchStep } from "@/components/inventory/receipt-intake-mismatch-step";
+import {
+  clampNormalized,
+  formatFieldSource,
+  formatQrContentType,
+  formatQrDecodeStatus,
+  formatQrLookupStatus,
+  formatQrParseStatus,
+  formatReadability,
+  formatScanFailureStage,
+  normalizeQrContentType,
+  normalizeQrDecodeStatus,
+  normalizeQrLookupStatus,
+  normalizeQrParseDetailStatus,
+  normalizeQrParseStatus,
+  normalizeReceiptType,
+  normalizeScanStatus,
+  readabilityBadgeClass,
+  readDebugCandidates,
+  toFieldSource,
+  toFieldSourceMap,
+  toReadability,
+  toReadabilityMap
+} from "@/components/inventory/receipt-intake-scan-utils";
 import { inventoryCategoryOptions, formatInventoryCategory } from "@/lib/inventory";
 import { formatCurrency } from "@/lib/utils";
 
@@ -17,6 +55,9 @@ type QrDecodeStatus = "DECODED" | "NOT_DETECTED" | "DECODE_FAILED";
 type QrParseStatus = "PARSED" | "PARTIAL" | "UNPARSED";
 type QrLookupStatus = "NOT_ATTEMPTED" | "SUCCESS" | "FAILED";
 type QrParseDetailStatus = "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED";
+const RECEIPT_INTAKE_DEBUG_ENABLED =
+  process.env.NEXT_PUBLIC_RECEIPT_INTAKE_DEBUG_UI === "1" &&
+  process.env.NODE_ENV !== "production";
 
 interface ReceiptIntakePanelProps {
   canManage: boolean;
@@ -139,10 +180,12 @@ interface ReceiptIntakePanelProps {
   } | null;
   preferredInputMethod?: ReceiptInputMethod;
   renderCard?: boolean;
+  onFollowUpStageChange?: (stage: ReceiptFollowUpStage) => void;
+  onGuidedStepChange?: (step: 1 | 2 | 3 | 4) => void;
   onCompleted: () => Promise<void> | void;
 }
 
-interface ReviewLineState {
+export interface ReviewLineState {
   id: string;
   description: string;
   quantity: string;
@@ -221,7 +264,7 @@ interface ScanDiagnosticsState {
   imageLoaded: boolean;
 }
 
-interface ReviewState {
+export interface ReviewState {
   requisitionId: string;
   requisitionCode: string;
   requisitionType: "LIVE_PROJECT_PURCHASE" | "INVENTORY_STOCK_UP" | "MAINTENANCE_PURCHASE" | "";
@@ -304,7 +347,7 @@ interface ReviewState {
   lines: ReviewLineState[];
 }
 
-type ExtractState = "IDLE" | "UPLOADING" | "PROCESSING" | "SUCCESS" | "FAILED";
+export type ExtractState = "IDLE" | "UPLOADING" | "PROCESSING" | "SUCCESS" | "FAILED";
 type NoticeTone = "SUCCESS" | "WARNING";
 type RequisitionComparisonStatus =
   | "MATCHED"
@@ -312,13 +355,6 @@ type RequisitionComparisonStatus =
   | "MISMATCH"
   | "SCAN_FAILED"
   | "MANUAL_ENTRY";
-type WorkflowStage =
-  | "READY_TO_SCAN"
-  | "CAPTURING"
-  | "CAPTURED_QR_TRA"
-  | "REVIEW_RECOMMENDED"
-  | "READY_TO_SAVE"
-  | "SAVED_SUCCESSFULLY";
 
 type ReceiptPurpose =
   | "INVENTORY_PURCHASE"
@@ -327,23 +363,24 @@ type ReceiptPurpose =
   | "EVIDENCE_ONLY"
   | "OTHER_MANUAL";
 
-type ReceiptClassification =
+export type ReceiptClassification =
   | "INVENTORY_PURCHASE"
   | "MAINTENANCE_LINKED_PURCHASE"
   | "EXPENSE_ONLY"
   | "INTERNAL_TRANSFER";
 
-type ReceiptWorkflowChoice =
+export type ReceiptWorkflowChoice =
   | "PROJECT_PURCHASE"
   | "MAINTENANCE_PURCHASE"
   | "STOCK_PURCHASE"
   | "INTERNAL_TRANSFER";
 type ReceiptInputMethod = "SCAN" | "MANUAL";
-type ReceiptFollowUpStage = "SCAN" | "REVIEW" | "FINALIZE";
+export type ReceiptFollowUpStage = "SCAN" | "REVIEW" | "FINALIZE";
+export type ReceiptCaptureMode = "SCAN" | "MANUAL";
 
 const SCAN_FALLBACK_MESSAGE = "Scan could not extract receipt data. Please complete manually.";
 
-interface QrCropSelection {
+export interface QrCropSelection {
   x: number;
   y: number;
   width: number;
@@ -355,13 +392,18 @@ interface SaveReadiness {
   reasons: string[];
 }
 
-interface RequisitionComparisonResult {
+export interface RequisitionComparisonResult {
   status: RequisitionComparisonStatus;
   label: string;
   message: string;
   canInspectScannedDetails: boolean;
   scanTrustLabel: string;
   scanTrustMessage: string;
+  differenceRows: Array<{
+    label: string;
+    approved: string;
+    scanned: string;
+  }>;
   headerRows: Array<{
     label: string;
     approved: string;
@@ -372,21 +414,12 @@ interface RequisitionComparisonResult {
   scannedLines: ReceiptSnapshotLine[];
 }
 
-type LinkedRecordType = "RECEIPT_INTAKE" | "INVENTORY_ITEM" | "STOCK_MOVEMENT" | "EXPENSE";
-
-interface FocusedLinkedRecord {
-  id: string;
-  label: string;
-  type: LinkedRecordType;
-  url: string;
-}
-
 interface FocusedRecordPayload {
   record: FocusedLinkedRecord;
   details: Record<string, unknown>;
 }
 
-type IntakeAllocationStatus = "ALLOCATED" | "PARTIALLY_ALLOCATED" | "UNALLOCATED";
+export type IntakeAllocationStatus = "ALLOCATED" | "PARTIALLY_ALLOCATED" | "UNALLOCATED";
 
 interface DuplicatePromptState {
   message: string;
@@ -444,6 +477,8 @@ export function ReceiptIntakePanel({
   activeSubmission = null,
   preferredInputMethod = "SCAN",
   renderCard = true,
+  onFollowUpStageChange,
+  onGuidedStepChange,
   onCompleted
 }: ReceiptIntakePanelProps) {
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
@@ -472,6 +507,8 @@ export function ReceiptIntakePanel({
   const [debugMode, setDebugMode] = useState(false);
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false);
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [inventoryActionEditorByLine, setInventoryActionEditorByLine] = useState<Record<string, boolean>>({});
+  const [showMismatchInventoryHandling, setShowMismatchInventoryHandling] = useState(false);
   const [receiptClassification, setReceiptClassification] = useState<ReceiptClassification | "">("");
   const [receiptWorkflowChoice, setReceiptWorkflowChoice] = useState<ReceiptWorkflowChoice | "">("");
   const [duplicateOverrideConfirmed, setDuplicateOverrideConfirmed] = useState(false);
@@ -479,23 +516,40 @@ export function ReceiptIntakePanel({
   const [qrAssistSelection, setQrAssistSelection] = useState<QrCropSelection | null>(null);
   const [drawingQrSelection, setDrawingQrSelection] = useState(false);
   const [followUpStage, setFollowUpStage] = useState<ReceiptFollowUpStage>("SCAN");
+  const [receiptCaptureMode, setReceiptCaptureMode] = useState<ReceiptCaptureMode>(
+    preferredInputMethod === "MANUAL" ? "MANUAL" : "SCAN"
+  );
+  const [showMismatchFinalizeConfirm, setShowMismatchFinalizeConfirm] = useState(false);
   const [showScannedDetails, setShowScannedDetails] = useState(false);
+  const [showFinalizePostingOptions, setShowFinalizePostingOptions] = useState(false);
+  const [finalizeSuccess, setFinalizeSuccess] = useState<{
+    projectName: string;
+    totalAmount: string;
+  } | null>(null);
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<ScanDiagnosticsState | null>(null);
   const [hasScanAttempted, setHasScanAttempted] = useState(false);
+  const showDeveloperDebugUi = process.env.NEXT_PUBLIC_RECEIPT_INTAKE_DEBUG_UI === "1";
   const panelRenderTimestamp = new Date().toISOString();
-  console.info("RECEIPT INTAKE PANEL RENDERED", {
-    component: "ReceiptIntakePanel",
-    pagePath: "/purchasing/receipt-follow-up",
-    timestamp: panelRenderTimestamp,
-    version: "receipt-follow-up-debug-v1"
-  });
+  if (RECEIPT_INTAKE_DEBUG_ENABLED) {
+    console.info("RECEIPT INTAKE PANEL RENDERED", {
+      component: "ReceiptIntakePanel",
+      pagePath: "/purchasing/receipt-follow-up",
+      timestamp: panelRenderTimestamp,
+      version: "receipt-follow-up-debug-v1"
+    });
+  }
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
+  const clearQrAssistSelection = useCallback(() => {
+    setQrAssistSelection(null);
+    setDrawingQrSelection(false);
+    qrSelectionStartRef.current = null;
+  }, []);
   const extracting = extractState === "UPLOADING" || extractState === "PROCESSING";
   const canPreviewReceiptImage = Boolean(
     receiptPreviewUrl && receiptFile?.type.toLowerCase().startsWith("image/")
   );
-  const manualInputSelected = preferredInputMethod === "MANUAL";
+  const manualInputSelected = receiptCaptureMode === "MANUAL";
   const requisitionLocked = Boolean(initialRequisition);
   const requisitionClassification = useMemo(
     () =>
@@ -546,6 +600,16 @@ export function ReceiptIntakePanel({
   ]);
 
   useEffect(() => {
+    if (preferredInputMethod === "MANUAL") {
+      setReceiptCaptureMode("MANUAL");
+      return;
+    }
+    if (preferredInputMethod === "SCAN") {
+      setReceiptCaptureMode("SCAN");
+    }
+  }, [preferredInputMethod]);
+
+  useEffect(() => {
     if (!manualInputSelected || review || activeSubmission) {
       return;
     }
@@ -580,10 +644,11 @@ export function ReceiptIntakePanel({
       initialRequisition
     });
     setReview(seededReview);
+    setFinalizeSuccess(null);
     setNoticeTone("WARNING");
     setNotice("Manual receipt mode started. Fill details directly, then finalize posting.");
     setError(null);
-    setFollowUpStage("REVIEW");
+    setFollowUpStage("SCAN");
   }, [
     activeSubmission,
     defaultClientId,
@@ -613,6 +678,7 @@ export function ReceiptIntakePanel({
       initialRequisition
     });
     setReview(hydrated);
+    setFinalizeSuccess(null);
     setReceiptClassification(hydrated.receiptClassification);
     setReceiptWorkflowChoice(resolveWorkflowChoiceFromReview(hydrated));
     setActiveSubmissionId(activeSubmission.id);
@@ -624,7 +690,7 @@ export function ReceiptIntakePanel({
     setDuplicatePrompt(null);
     setShowDuplicateReview(false);
     setFollowUpStage("REVIEW");
-  }, [activeSubmission, defaultClientId, defaultRigId]);
+  }, [activeSubmission, defaultClientId, defaultRigId, initialRequisition]);
 
   useEffect(() => {
     if (!notice) {
@@ -676,17 +742,11 @@ export function ReceiptIntakePanel({
     return projects.filter((project) => project.clientId === review.clientId);
   }, [projects, review?.clientId]);
 
-  const saveReadiness = useMemo(() => {
+  const _saveReadiness = useMemo(() => {
     if (!review) {
       return null;
     }
     return evaluateSaveReadiness(review);
-  }, [review]);
-  const autoSaveReadiness = useMemo(() => {
-    if (!review) {
-      return null;
-    }
-    return evaluateAutoSaveEligibility(review);
   }, [review]);
   const unmatchedLines = useMemo(() => {
     if (!review) {
@@ -700,40 +760,22 @@ export function ReceiptIntakePanel({
     }
     return deriveAllocationStatus(review.clientId, review.projectId);
   }, [review]);
-  const manualFieldHints = useMemo(() => {
+  const _manualFieldHints = useMemo(() => {
     if (!review) {
       return [];
     }
     return deriveManualFieldHints(review);
   }, [review]);
-  const criticalManualFieldHints = useMemo(() => {
+  const _criticalManualFieldHints = useMemo(() => {
     if (!review) {
       return [];
     }
     return deriveCriticalManualFieldHints(review);
   }, [review]);
-  const needsManualReview = useMemo(() => {
-    if (!review) {
-      return false;
-    }
-    return (
-      review.scanStatus !== "COMPLETE" ||
-      manualFieldHints.length > 0 ||
-      criticalManualFieldHints.length > 0
-    );
-  }, [criticalManualFieldHints.length, manualFieldHints.length, review]);
   const requisitionComparison = useMemo(
     () => evaluateRequisitionComparison(review, initialRequisition),
     [initialRequisition, review]
   );
-
-  const workflowStage = resolveWorkflowStage({
-    extractState,
-    saving,
-    notice,
-    review,
-    saveReadiness
-  });
 
   const activeWorkflowChoice = useMemo<ReceiptWorkflowChoice | "">(() => {
     if (review) {
@@ -751,12 +793,22 @@ export function ReceiptIntakePanel({
       setFollowUpStage("SCAN");
       return;
     }
-    setFollowUpStage((current) => (current === "FINALIZE" ? "FINALIZE" : "REVIEW"));
+    setFollowUpStage((current) => (current === "FINALIZE" || current === "REVIEW" ? current : "SCAN"));
   }, [manualInputSelected, review]);
 
   useEffect(() => {
     setShowScannedDetails(false);
   }, [review?.receiptFileName, review?.requisitionId, review?.scanFallbackMode]);
+
+  useEffect(() => {
+    onFollowUpStageChange?.(followUpStage);
+  }, [followUpStage, onFollowUpStageChange]);
+
+  useEffect(() => {
+    if (followUpStage !== "FINALIZE") {
+      setShowFinalizePostingOptions(false);
+    }
+  }, [followUpStage]);
 
   function applyWorkflowChoice(choice: ReceiptWorkflowChoice) {
     const workflowConfig = resolveWorkflowSelectionConfig(choice);
@@ -767,10 +819,58 @@ export function ReceiptIntakePanel({
     );
   }
 
+  function handleReceiptCaptureModeChange(mode: ReceiptCaptureMode) {
+    setReceiptCaptureMode(mode);
+    if (mode !== "MANUAL" || review || activeSubmission) {
+      return;
+    }
+    const workflowChoice = initialRequisition
+      ? mapRequisitionTypeToWorkflowChoice(initialRequisition.type)
+      : receiptWorkflowChoice;
+    if (!workflowChoice) {
+      return;
+    }
+    const workflowConfig = resolveWorkflowSelectionConfig(workflowChoice);
+    const effectiveClassification =
+      receiptClassification ||
+      (initialRequisition
+        ? mapRequisitionTypeToReceiptClassification(initialRequisition.type)
+        : workflowConfig.classification);
+    const seededReview = buildManualAssistReview({
+      payload: {},
+      receiptFileName: "",
+      defaultClientId,
+      defaultRigId,
+      warning: "Manual entry selected. Complete receipt details directly and finalize when ready.",
+      fallbackMode: "MANUAL_ENTRY",
+      receiptClassification: effectiveClassification,
+      receiptWorkflowChoice: workflowChoice,
+      initialRequisition
+    });
+    setReview(seededReview);
+    setFinalizeSuccess(null);
+    setNoticeTone("WARNING");
+    setNotice("Manual receipt mode started. Fill details directly, then finalize posting.");
+    setError(null);
+    setFollowUpStage("SCAN");
+  }
+
   function closeFocusedRecordOverlay() {
     setFocusedRecordPayload(null);
     setFocusedRecordError(null);
     setFocusedRecordLoading(false);
+  }
+
+  function resetScanSessionState() {
+    setHasScanAttempted(false);
+    setLastScanDiagnostics(null);
+    setExtractState("IDLE");
+    setInventoryActionEditorByLine({});
+    setShowMismatchInventoryHandling(false);
+    setShowFinalizePostingOptions(false);
+    setShowTechnicalDetails(false);
+    setShowMismatchFinalizeConfirm(false);
+    setShowScannedDetails(false);
   }
 
   function handleReceiptFileChange(file: File | null) {
@@ -779,14 +879,14 @@ export function ReceiptIntakePanel({
     }
     setReceiptFile(file);
     setReceiptPreviewUrl(file ? URL.createObjectURL(file) : "");
-    setExtractState("IDLE");
+    setFinalizeSuccess(null);
+    resetScanSessionState();
     setError(null);
     setNotice(null);
     setNoticeTone("SUCCESS");
     setDuplicatePrompt(null);
     setShowDuplicateReview(false);
     setDuplicateOverrideConfirmed(false);
-    setLastScanDiagnostics(null);
     setFocusedRecordPayload(null);
     setFocusedRecordError(null);
     setLastSavedAllocationStatus(null);
@@ -874,7 +974,10 @@ export function ReceiptIntakePanel({
     }
   }
 
-  async function handleExtract() {
+  async function handleExtract(options?: { userInitiated?: boolean }) {
+    if (!options?.userInitiated) {
+      return;
+    }
     if (!receiptFile) {
       setError("Please choose a receipt image or PDF first.");
       setExtractState("FAILED");
@@ -888,6 +991,8 @@ export function ReceiptIntakePanel({
     const selectedWorkflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
 
     setHasScanAttempted(true);
+    setFinalizeSuccess(null);
+    setShowScannedDetails(false);
     setExtractState("UPLOADING");
     setError(null);
     setNotice(null);
@@ -898,6 +1003,8 @@ export function ReceiptIntakePanel({
     setFocusedRecordPayload(null);
     setFocusedRecordError(null);
     setLastSavedAllocationStatus(null);
+    setInventoryActionEditorByLine({});
+    setShowMismatchInventoryHandling(false);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 45000);
     try {
@@ -952,12 +1059,27 @@ export function ReceiptIntakePanel({
           setNotice(resolveScanFailureNotice(fallbackReview));
           setError(null);
           setExtractState("FAILED");
-          setFollowUpStage("REVIEW");
+          setFollowUpStage("SCAN");
           return;
         }
         const effectiveReview = !mappedReviewHasUsableData && qrDecodeSucceeded
           ? markFrontendMappingGap(nextReview)
           : nextReview;
+        const requisitionComparison = evaluateRequisitionComparison(effectiveReview, initialRequisition);
+        if (requisitionComparison?.status === "MISMATCH") {
+          const mismatchReview = buildRequisitionMismatchReview({
+            scannedReview: effectiveReview,
+            initialRequisition
+          });
+          setReview(mismatchReview);
+          setLastScanDiagnostics(mismatchReview.scanDiagnostics);
+          setNoticeTone("WARNING");
+          setNotice(null);
+          setError(null);
+          setExtractState("SUCCESS");
+          setFollowUpStage("SCAN");
+          return;
+        }
         setReview(effectiveReview);
         setLastScanDiagnostics(effectiveReview.scanDiagnostics);
         const intakeMessage = calmMessage(
@@ -984,7 +1106,7 @@ export function ReceiptIntakePanel({
           );
         }
         setExtractState("SUCCESS");
-        setFollowUpStage("REVIEW");
+        setFollowUpStage("SCAN");
         if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
           await commitReview(effectiveReview, { auto: true });
         }
@@ -1011,7 +1133,7 @@ export function ReceiptIntakePanel({
       setNotice(resolveScanFailureNotice(fallbackReview));
       setError(null);
       setExtractState("FAILED");
-      setFollowUpStage("REVIEW");
+      setFollowUpStage("SCAN");
     } catch (scanError) {
       const timeoutMessage =
         scanError instanceof DOMException && scanError.name === "AbortError"
@@ -1038,7 +1160,7 @@ export function ReceiptIntakePanel({
       setNotice(resolveScanFailureNotice(fallbackReview));
       setError(null);
       setExtractState("FAILED");
-      setFollowUpStage("REVIEW");
+      setFollowUpStage("SCAN");
     } finally {
       clearTimeout(timeoutId);
       setExtractState((current) =>
@@ -1200,6 +1322,9 @@ export function ReceiptIntakePanel({
       }
       const submissionStatus = asString(payload?.data?.submissionStatus);
       const submissionReference = asString(payload?.data?.submissionId);
+      const projectName =
+        projects.find((project) => project.id === nextReview.projectId)?.name || "No linked project";
+      const totalAmount = formatMoneyText(nextReview.total, nextReview.currency);
       if (submissionStatus === "PENDING_REVIEW") {
         setNoticeTone("SUCCESS");
         setNotice(
@@ -1208,6 +1333,10 @@ export function ReceiptIntakePanel({
             : "Submitted for review. A manager/admin will verify and finalize posting."
         );
         setLastSavedAllocationStatus(normalizeAllocationStatus(payload?.data?.allocationStatus));
+        setFinalizeSuccess({
+          projectName,
+          totalAmount
+        });
         setReview(null);
         setActiveSubmissionId(null);
         setReceiptFile(null);
@@ -1218,6 +1347,7 @@ export function ReceiptIntakePanel({
         setQrAssistSelection(null);
         setDrawingQrSelection(false);
         qrSelectionStartRef.current = null;
+        resetScanSessionState();
         setFollowUpStage("SCAN");
         await onCompleted();
         return;
@@ -1233,7 +1363,7 @@ export function ReceiptIntakePanel({
         ? payload.data.outcomeReasons.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
         : [];
 
-      if (process.env.NODE_ENV !== "production") {
+      if (RECEIPT_INTAKE_DEBUG_ENABLED) {
         console.info("[inventory][receipt-intake][frontend-save-outcome]", {
           receiptSaved: true,
           itemsCreatedCount,
@@ -1270,6 +1400,10 @@ export function ReceiptIntakePanel({
         }
       }
       setLastSavedAllocationStatus(allocationStatus);
+      setFinalizeSuccess({
+        projectName,
+        totalAmount
+      });
       setReview(null);
       setActiveSubmissionId(null);
       setReceiptFile(null);
@@ -1280,6 +1414,7 @@ export function ReceiptIntakePanel({
       setQrAssistSelection(null);
       setDrawingQrSelection(false);
       qrSelectionStartRef.current = null;
+      resetScanSessionState();
       setFollowUpStage("SCAN");
       await onCompleted();
     } catch (commitError) {
@@ -1297,55 +1432,6 @@ export function ReceiptIntakePanel({
       return {
         ...current,
         lines: current.lines.map((line) => (line.id === lineId ? { ...line, ...patch } : line))
-      };
-    });
-  }
-
-  function addManualLine() {
-    setReview((current) => {
-      if (!current) {
-        return current;
-      }
-      return {
-        ...current,
-        lines: [
-          ...current.lines,
-          {
-            id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            description: "New receipt line item",
-            quantity: "1",
-            unitPrice: "0",
-            lineTotal: "0",
-            extractionConfidence: "LOW",
-            selectedCategory: "OTHER",
-            suggestedCategory: null,
-            categoryReason: "Manual line",
-            mode:
-              current.receiptClassification === "EXPENSE_ONLY"
-                ? "EXPENSE_ONLY"
-                : current.receiptClassification === "INTERNAL_TRANSFER"
-                  ? "MATCH"
-                  : "NEW",
-            selectedItemId: "",
-            matchConfidence: "NONE",
-            matchScore: 0,
-            newItemName: "New receipt line item",
-            newItemSku: "",
-            newItemMinimumStockLevel: "0"
-          }
-        ]
-      };
-    });
-  }
-
-  function removeLine(lineId: string) {
-    setReview((current) => {
-      if (!current) {
-        return current;
-      }
-      return {
-        ...current,
-        lines: current.lines.filter((line) => line.id !== lineId)
       };
     });
   }
@@ -1392,7 +1478,41 @@ export function ReceiptIntakePanel({
   const duplicateIsHighConfidence = duplicateConfidence === "HIGH";
   const canOverrideDuplicate = duplicateOverrideConfirmed && (!duplicateIsHighConfidence || canManage);
   const activeScanDiagnostics = review?.scanDiagnostics || lastScanDiagnostics;
-  const forcedScanDiagnostics = activeScanDiagnostics || buildEmptyScanDiagnostics();
+  const visibleScanDiagnostics =
+    hasScanAttempted || Boolean(activeScanDiagnostics)
+      ? activeScanDiagnostics || buildEmptyScanDiagnostics()
+      : null;
+  const mismatchDetected = requisitionComparison?.status === "MISMATCH";
+  const inventoryActionNeeded = useMemo(() => {
+    if (!review) {
+      return false;
+    }
+    return review.lines.some(
+      (line) =>
+        line.mode === "NEW" ||
+        (line.mode === "MATCH" && !line.selectedItemId.trim())
+    );
+  }, [review]);
+  const showAdvancedLineItemEditor = followUpStage === "REVIEW" && showMismatchInventoryHandling;
+  const guidedStep = useMemo<1 | 2 | 3 | 4>(() => {
+    if (finalizeSuccess) {
+      return 4;
+    }
+    if (followUpStage === "FINALIZE") {
+      return 4;
+    }
+    if (followUpStage === "REVIEW" && showMismatchInventoryHandling && inventoryActionNeeded) {
+      return 3;
+    }
+    if (followUpStage === "REVIEW") {
+      return 2;
+    }
+    return 1;
+  }, [finalizeSuccess, followUpStage, inventoryActionNeeded, showMismatchInventoryHandling]);
+
+  useEffect(() => {
+    onGuidedStepChange?.(guidedStep);
+  }, [guidedStep, onGuidedStepChange]);
 
   const content = (
     <div className="space-y-4">
@@ -1430,7 +1550,8 @@ export function ReceiptIntakePanel({
             {error || notice}
           </p>
         )}
-        <section className="rounded-xl border-2 border-fuchsia-600 bg-fuchsia-100 px-3 py-3 text-sm text-fuchsia-950 shadow-sm">
+        {showDeveloperDebugUi && (
+          <section className="rounded-xl border-2 border-fuchsia-600 bg-fuchsia-100 px-3 py-3 text-sm text-fuchsia-950 shadow-sm">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-fuchsia-900">
             receipt-follow-up debug build active
           </p>
@@ -1459,32 +1580,35 @@ export function ReceiptIntakePanel({
               </p>
               <p>
                 qrDetected:{" "}
-                <span className="font-medium">{forcedScanDiagnostics.qrDetected ? "true" : "false"}</span>
+                <span className="font-medium">
+                  {visibleScanDiagnostics ? (visibleScanDiagnostics.qrDetected ? "true" : "false") : "not attempted"}
+                </span>
               </p>
               <p>
                 qrDecodeStatus:{" "}
-                <span className="font-medium">{forcedScanDiagnostics.qrDecodeStatus}</span>
+                <span className="font-medium">{visibleScanDiagnostics?.qrDecodeStatus || "NOT_ATTEMPTED"}</span>
               </p>
               <p>
-                qrRawLength: <span className="font-medium">{forcedScanDiagnostics.qrRawLength}</span>
+                qrRawLength: <span className="font-medium">{visibleScanDiagnostics?.qrRawLength ?? 0}</span>
               </p>
               <p>
                 qrRawPayloadFormat:{" "}
-                <span className="font-medium">{forcedScanDiagnostics.qrRawPayloadFormat}</span>
+                <span className="font-medium">{visibleScanDiagnostics?.qrRawPayloadFormat || "NOT_ATTEMPTED"}</span>
               </p>
               <p>
                 qrRawPreview:{" "}
-                <span className="font-medium">{forcedScanDiagnostics.qrRawPreview || "(empty)"}</span>
+                <span className="font-medium">{visibleScanDiagnostics?.qrRawPreview || "(not attempted)"}</span>
               </p>
             </div>
             <div className="mt-2 rounded border-2 border-fuchsia-300 bg-slate-50 p-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-fuchsia-900">full raw qrRawValue</p>
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-white p-2 text-xs text-slate-900">
-                {forcedScanDiagnostics.qrRawValue || "(empty)"}
+                {visibleScanDiagnostics?.qrRawValue || "(not attempted)"}
               </pre>
             </div>
           </div>
-        </section>
+          </section>
+        )}
         {duplicatePrompt && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1651,646 +1775,132 @@ export function ReceiptIntakePanel({
           </div>
         )}
 
-        {followUpStage === "SCAN" && (
-          <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 2 — Scan receipt</p>
-              <span className={workflowBadgeClass(workflowStage)}>{formatWorkflowStage(workflowStage)}</span>
+        <ReceiptIntakeMismatchStep
+          showMismatchFinalizeConfirm={showMismatchFinalizeConfirm}
+          setShowMismatchFinalizeConfirm={setShowMismatchFinalizeConfirm}
+          setFollowUpStage={setFollowUpStage}
+          showScannedDetails={showScannedDetails}
+          setShowScannedDetails={setShowScannedDetails}
+          requisitionComparison={requisitionComparison}
+        />
+
+        {finalizeSuccess && (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+            <p className="text-base font-semibold text-emerald-900">Receipt posted successfully</p>
+            <div className="mt-2 grid gap-1 text-sm text-emerald-900 sm:grid-cols-2">
+              <p><span className="font-medium">Project:</span> {finalizeSuccess.projectName}</p>
+              <p><span className="font-medium">Total:</span> {finalizeSuccess.totalAmount}</p>
             </div>
-            <p className="text-xs text-slate-600">{workflowHelpText(workflowStage)}</p>
-            {lastSavedAllocationStatus && lastSavedAllocationStatus !== "ALLOCATED" && (
-              <div className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
-                <span className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 font-semibold">
-                  Context link incomplete
-                </span>
-                <span>
-                  Saved with incomplete project/client linkage. You can complete context later.
-                </span>
-                <Link href="/inventory" className="rounded border border-amber-400 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
-                  Open inventory
-                </Link>
-              </div>
-            )}
-            {requisitionContextLocked ? (
-              <p className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-900">
-                Approved requisition{" "}
-                <span className="font-semibold">
-                  {initialRequisition?.requisitionCode || initialRequisition?.id.slice(-8)}
-                </span>{" "}
-                is already linked.
-              </p>
-            ) : (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Receipt workflow type</p>
-                <div className="mt-2 grid gap-2 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => applyWorkflowChoice("PROJECT_PURCHASE")}
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      activeWorkflowChoice === "PROJECT_PURCHASE"
-                        ? "border-brand-300 bg-brand-50 text-brand-800"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    Project Purchase (Live Work)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyWorkflowChoice("MAINTENANCE_PURCHASE")}
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      activeWorkflowChoice === "MAINTENANCE_PURCHASE"
-                        ? "border-brand-300 bg-brand-50 text-brand-800"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    Maintenance Purchase (Rig Repair)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyWorkflowChoice("STOCK_PURCHASE")}
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      activeWorkflowChoice === "STOCK_PURCHASE"
-                        ? "border-brand-300 bg-brand-50 text-brand-800"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    Stock Purchase (Inventory)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyWorkflowChoice("INTERNAL_TRANSFER")}
-                    className={`rounded-lg border px-3 py-2 text-sm font-semibold ${
-                      activeWorkflowChoice === "INTERNAL_TRANSFER"
-                        ? "border-brand-300 bg-brand-50 text-brand-800"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    Internal Transfer
-                  </button>
-                </div>
-              </div>
-            )}
-            <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-              <label className="text-xs text-ink-700">
-                <span className="mb-1 block uppercase tracking-wide text-slate-500">Receipt File (Image or PDF)</span>
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  capture="environment"
-                  onChange={(event) =>
-                    handleReceiptFileChange(
-                      event.target.files && event.target.files.length > 0 ? event.target.files[0] : null
-                    )
-                  }
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
-              </label>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                href="/cost-tracking"
+                className="rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-sm font-medium text-emerald-900 hover:bg-emerald-100/60"
+              >
+                Go to cost tracking
+              </Link>
               <button
                 type="button"
-                onClick={() => void handleExtract()}
-                disabled={!receiptFile || extracting || !receiptWorkflowChoice}
-                className="gf-btn-primary"
+                onClick={() => {
+                  setFinalizeSuccess(null);
+                  resetScanSessionState();
+                  setFollowUpStage("SCAN");
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
               >
-                {extractState === "UPLOADING"
-                  ? "Capturing..."
-                  : extractState === "PROCESSING"
-                    ? "Reading..."
-                    : manualInputSelected
-                      ? "Use File Assist"
-                      : "Scan Receipt"}
+                Create another receipt
               </button>
             </div>
-            {canManage ? (
-              <label className="inline-flex items-center gap-2 text-xs text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={autoSaveEnabled}
-                  onChange={(event) => setAutoSaveEnabled(event.target.checked)}
-                />
-                Auto-save when confidence is high
-              </label>
-            ) : (
-              <p className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                Your submission stays pending review until manager/admin finalizes posting.
-              </p>
-            )}
-            <details className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">
-                Advanced scan tools
-              </summary>
-          <div className="mt-2 space-y-2">
-            <label className="inline-flex items-center gap-2 text-xs text-slate-700">
-              <input
-                type="checkbox"
-                checked={manualQrAssistEnabled}
-                onChange={(event) => {
-                  setManualQrAssistEnabled(event.target.checked);
-                  if (!event.target.checked) {
-                    setQrAssistSelection(null);
-                    setDrawingQrSelection(false);
-                    qrSelectionStartRef.current = null;
-                  }
-                }}
-              />
-              Manual QR assist: select the QR area and retry scan if automatic detection misses it.
-            </label>
-
-            {manualQrAssistEnabled && receiptFile && !canPreviewReceiptImage && (
-              <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Manual QR selection currently works with receipt images. For PDFs, we still run QR/OCR automatically.
-              </p>
-            )}
-
-            {manualQrAssistEnabled && canPreviewReceiptImage && (
-              <div className="space-y-2 rounded-lg border border-slate-200 bg-white p-3">
-                <p className="text-xs text-slate-700">
-                  Drag on the receipt preview to mark the QR area. We prioritize this region, then fall back to OCR.
-                </p>
-                <div
-                  ref={qrPreviewContainerRef}
-                  onPointerDown={handleQrPointerDown}
-                  onPointerMove={handleQrPointerMove}
-                  onPointerUp={handleQrPointerUp}
-                  onPointerCancel={handleQrPointerUp}
-                  className="relative overflow-hidden rounded-lg border border-slate-300 bg-white"
-                  style={{ touchAction: "none" }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={receiptPreviewUrl}
-                    alt="Receipt preview"
-                    className="max-h-[320px] w-full select-none object-contain"
-                    draggable={false}
-                  />
-                  {qrAssistSelection && (
-                    <div
-                      className="pointer-events-none absolute border-2 border-brand-500 bg-brand-500/15"
-                      style={{
-                        left: `${qrAssistSelection.x * 100}%`,
-                        top: `${qrAssistSelection.y * 100}%`,
-                        width: `${qrAssistSelection.width * 100}%`,
-                        height: `${qrAssistSelection.height * 100}%`
-                      }}
-                    />
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-700">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQrAssistSelection(null);
-                      setDrawingQrSelection(false);
-                      qrSelectionStartRef.current = null;
-                    }}
-                    className="rounded border border-slate-300 bg-white px-2 py-1 text-slate-700 hover:bg-slate-100"
-                  >
-                    Clear QR Area
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleExtract()}
-                    disabled={!receiptFile || !qrAssistSelection || extracting || !receiptWorkflowChoice}
-                    className="rounded border border-brand-300 bg-brand-50 px-2 py-1 font-semibold text-brand-800 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Retry With Selected QR Area
-                  </button>
-                  <span>
-                    {qrAssistSelection
-                      ? `Selected area: x ${formatPercent(qrAssistSelection.x)}, y ${formatPercent(qrAssistSelection.y)}, w ${formatPercent(qrAssistSelection.width)}, h ${formatPercent(qrAssistSelection.height)}`
-                      : "No manual QR area selected yet."}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {process.env.NODE_ENV !== "production" && (
-              <label className="inline-flex items-center gap-2 text-xs text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={debugMode}
-                  onChange={(event) => setDebugMode(event.target.checked)}
-                />
-                Include OCR debug candidates (development only)
-              </label>
-            )}
-          </div>
-            </details>
           </div>
         )}
 
-        {!review ? null : (
-          <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4">
-            {activeSubmissionId && canManage && (
-              <div className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                Reviewing submission <span className="font-semibold">{activeSubmissionId.slice(-8)}</span>. Saving will finalize posting.
-              </div>
-            )}
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {followUpStage === "REVIEW" ? "Step 3 — Review receipt data" : "Step 4 — Finalize posting"}
-              </p>
-              <p className="mt-1 text-xs text-slate-600">
-                {followUpStage === "REVIEW"
-                  ? "Check captured values, then continue to posting."
-                  : "Confirm business context and finish posting."}
-              </p>
-            </div>
-            {needsManualReview && (
-              <p className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Some fields need manual review.
-                {criticalManualFieldHints.length > 0 ? ` ${criticalManualFieldHints.join(", ")}.` : ""}
-                {manualFieldHints.length > 0 ? ` ${manualFieldHints.join(", ")}.` : ""}
-              </p>
-            )}
-            {requisitionComparison && (
-              <div
-                className={`rounded-lg border px-3 py-2 text-xs ${
-                  requisitionComparison.status === "MATCHED"
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                    : requisitionComparison.status === "MISMATCH"
-                      ? "border-red-300 bg-red-50 text-red-900"
-                      : requisitionComparison.status === "SCAN_FAILED"
-                        ? "border-amber-300 bg-amber-50 text-amber-900"
-                        : requisitionComparison.status === "MANUAL_ENTRY"
-                          ? "border-slate-300 bg-slate-50 text-slate-800"
-                          : "border-amber-300 bg-amber-50 text-amber-900"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold">{requisitionComparison.label}</span>
-                  {requisitionComparison.canInspectScannedDetails && (
-                    <button
-                      type="button"
-                      onClick={() => setShowScannedDetails((current) => !current)}
-                      className="rounded border border-current bg-white/70 px-2 py-1 text-[11px] font-semibold"
-                    >
-                      {showScannedDetails ? "Hide scanned receipt details" : "View scanned receipt details"}
-                    </button>
-                  )}
-                </div>
-                <p className="mt-1">{requisitionComparison.message}</p>
-                <p className="mt-1 text-[11px] opacity-90">
-                  <span className="font-semibold">{requisitionComparison.scanTrustLabel}:</span>{" "}
-                  {requisitionComparison.scanTrustMessage}
-                </p>
-              </div>
-            )}
-            {showScannedDetails && requisitionComparison && (
-              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-                  Approved vs Scanned Comparison
-                </p>
-                <p className="text-[11px] text-slate-600">
-                  Scanned values below come from the uploaded receipt/QR extraction, so you can confirm whether the
-                  correct receipt was scanned.
-                </p>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-xs text-slate-800">
-                    <thead>
-                      <tr className="text-left text-slate-500">
-                        <th className="px-2 py-1 font-semibold">Field</th>
-                        <th className="px-2 py-1 font-semibold">Approved Requisition</th>
-                        <th className="px-2 py-1 font-semibold">Scanned Receipt</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {requisitionComparison.headerRows.map((row) => (
-                        <tr
-                          key={row.label}
-                          className={row.mismatch ? "bg-red-50/70 text-red-900" : "border-t border-slate-200"}
-                        >
-                          <td className="px-2 py-1 font-medium">{row.label}</td>
-                          <td className="px-2 py-1">{row.approved || "-"}</td>
-                          <td className="px-2 py-1">{row.scanned || "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="rounded border border-slate-200 bg-white p-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Approved Requisition Lines
-                    </p>
-                    {requisitionComparison.approvedLines.length === 0 ? (
-                      <p className="mt-1 text-xs text-slate-600">No requisition line items available.</p>
-                    ) : (
-                      <div className="mt-1 space-y-1 text-xs text-slate-700">
-                        {requisitionComparison.approvedLines.map((line) => (
-                          <p key={`approved-${line.id}`}>
-                            {line.description} • qty {line.quantity || "0"} • unit {line.unitPrice || "0"} • total {line.lineTotal || "0"}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="rounded border border-slate-200 bg-white p-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                      Scanned Receipt Lines
-                    </p>
-                    {requisitionComparison.scannedLines.length === 0 ? (
-                      <p className="mt-1 text-xs text-slate-600">No line items extracted from scan.</p>
-                    ) : (
-                      <div className="mt-1 space-y-1 text-xs text-slate-700">
-                        {requisitionComparison.scannedLines.map((line) => (
-                          <p key={`scanned-${line.id}`}>
-                            {line.description} • qty {line.quantity || "0"} • unit {line.unitPrice || "0"} • total {line.lineTotal || "0"}
-                          </p>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-slate-800">Receipt Review</p>
-                <span
-                  className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
-                    saveReadiness?.ready
-                      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-                      : "border-amber-300 bg-amber-100 text-amber-800"
-                  }`}
-                >
-                  {saveReadiness?.ready ? "Ready to save" : "Review recommended"}
-                </span>
-              </div>
-              <div className="mt-1 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
-                <p><span className="font-semibold">File:</span> {review.receiptFileName}</p>
-                <p><span className="font-semibold">Supplier:</span> {review.supplierName || "-"}</p>
-                <p><span className="font-semibold">Receipt #:</span> {review.receiptNumber || "-"}</p>
-                <p><span className="font-semibold">Receipt Date:</span> {review.receiptDate || "-"}</p>
-                <p><span className="font-semibold">Total:</span> {formatMoneyText(review.total, review.currency)}</p>
-                <p><span className="font-semibold">Verification:</span> {review.verificationCode || "-"}</p>
-              </div>
-              <div className="mt-2 rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700">
-                <p>
-                  {review.scanFallbackMode === "SCAN_FAILURE" ? (
-                    <>
-                      <span className="font-semibold">Auto-filled from approved requisition:</span> context, vendor, line items, and estimated totals.
-                    </>
-                  ) : review.scanFallbackMode === "MANUAL_ENTRY" ? (
-                    <>
-                      <span className="font-semibold">Manual receipt entry:</span> complete fields directly, then review and finalize posting.
-                    </>
-                  ) : (
-                    <>
-                      <span className="font-semibold">Auto-filled from scan:</span> supplier, receipt number, date, and totals.
-                    </>
-                  )}
-                </p>
-              </div>
-              {review.receiptUrl && (
-                <a
-                  href={review.receiptUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-2 inline-flex rounded-lg border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100"
-                >
-                  Open Receipt
-                </a>
-              )}
-            </div>
+        {!finalizeSuccess && followUpStage === "SCAN" && (
+          <ReceiptIntakeScanStep
+            manualInputSelected={manualInputSelected}
+            handleReceiptCaptureModeChange={handleReceiptCaptureModeChange}
+            lastSavedAllocationStatus={lastSavedAllocationStatus}
+            requisitionContextLocked={requisitionContextLocked}
+            initialRequisition={initialRequisition}
+            activeWorkflowChoice={activeWorkflowChoice}
+            applyWorkflowChoice={applyWorkflowChoice}
+            receiptFile={receiptFile}
+            extracting={extracting}
+            receiptWorkflowChoice={receiptWorkflowChoice}
+            extractState={extractState}
+            handleReceiptFileChange={handleReceiptFileChange}
+            handleExtract={handleExtract}
+            canManage={canManage}
+            autoSaveEnabled={autoSaveEnabled}
+            setAutoSaveEnabled={setAutoSaveEnabled}
+            manualQrAssistEnabled={manualQrAssistEnabled}
+            setManualQrAssistEnabled={setManualQrAssistEnabled}
+            clearQrAssistSelection={clearQrAssistSelection}
+            canPreviewReceiptImage={canPreviewReceiptImage}
+            receiptPreviewUrl={receiptPreviewUrl}
+            qrPreviewContainerRef={qrPreviewContainerRef}
+            handleQrPointerDown={handleQrPointerDown}
+            handleQrPointerMove={handleQrPointerMove}
+            handleQrPointerUp={handleQrPointerUp}
+            qrAssistSelection={qrAssistSelection}
+            debugMode={debugMode}
+            setDebugMode={setDebugMode}
+            review={review}
+            mismatchDetected={mismatchDetected}
+            showScannedDetails={showScannedDetails}
+            setShowScannedDetails={setShowScannedDetails}
+            setReview={setReview}
+            setFollowUpStage={setFollowUpStage}
+            resetScanSessionState={resetScanSessionState}
+          />
+        )}
 
+        {finalizeSuccess || !review ? null : (
+          <div className="space-y-2.5 rounded-xl border border-slate-200/60 bg-white p-2.5">
             {followUpStage === "REVIEW" && (
-              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold text-ink-900">Line Items</p>
-                <button
-                  type="button"
-                  onClick={addManualLine}
-                  className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-ink-700 hover:bg-slate-100"
-                >
-                  Add Line
-                </button>
-              </div>
-              {unmatchedLines.length > 0 && (
-                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  <p className="font-semibold">Unmatched items need inventory action</p>
-                  <div className="mt-1 space-y-1">
-                    {unmatchedLines.map((line) => (
-                      <p key={`unmatched-${line.id}`}>
-                        {line.description} • qty {line.quantity || "0"} • unit {line.unitPrice || "0"} • total{" "}
-                        {line.lineTotal || "0"} • category {line.suggestedCategory ? formatInventoryCategory(line.suggestedCategory) : "Other"} • action{" "}
-                        {line.mode === "EXPENSE_ONLY" ? "Receipt/expense evidence only" : line.mode === "NEW" ? "Create new item" : "Link to existing item"}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {review.lines.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-4 text-xs text-slate-700">
-                  No line items detected automatically yet. Add line items manually or keep this as evidence only.
-                </div>
-              ) : (
-                review.lines.map((line) => (
-                  <div
-                    key={line.id}
-                    className={`space-y-2 rounded-lg border p-3 ${
-                      line.extractionConfidence === "LOW" ? "border-amber-300 bg-amber-50" : "border-slate-200 bg-white"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs text-slate-600">
-                        {line.mode === "MATCH"
-                          ? "Linked to existing inventory item"
-                          : line.mode === "NEW"
-                            ? "Create as new inventory item"
-                            : "Receipt evidence only"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removeLine(line.id)}
-                        className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700 hover:bg-red-100"
-                      >
-                        Remove
-                      </button>
-                    </div>
-
-                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
-                      <InputField
-                        label="Description"
-                        value={line.description}
-                        onChange={(value) => updateLine(line.id, { description: value, newItemName: value })}
-                      />
-                      <InputField
-                        label="Quantity"
-                        type="number"
-                        value={line.quantity}
-                        onChange={(value) => updateLine(line.id, { quantity: value })}
-                      />
-                      <InputField
-                        label="Unit Price"
-                        type="number"
-                        value={line.unitPrice}
-                        onChange={(value) => updateLine(line.id, { unitPrice: value })}
-                      />
-                      <InputField
-                        label="Line Total"
-                        type="number"
-                        value={line.lineTotal}
-                        onChange={(value) => updateLine(line.id, { lineTotal: value })}
-                      />
-                      <SelectField
-                        label="Category"
-                        value={line.selectedCategory}
-                        onChange={(value) => updateLine(line.id, { selectedCategory: value })}
-                        options={inventoryCategoryOptions.map((entry) => ({ value: entry.value, label: entry.label }))}
-                      />
-                    </div>
-
-                    <div className="rounded border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
-                      Suggested category:{" "}
-                      <span className="font-semibold">
-                        {line.suggestedCategory ? formatInventoryCategory(line.suggestedCategory) : "No strong match"}
-                      </span>
-                      . {line.categoryReason}
-                      {line.suggestedCategory && line.suggestedCategory !== line.selectedCategory && (
-                        <button
-                          type="button"
-                          onClick={() => updateLine(line.id, { selectedCategory: line.suggestedCategory || line.selectedCategory })}
-                          className="ml-2 rounded border border-brand-300 bg-brand-50 px-2 py-0.5 text-[11px] text-brand-800 hover:bg-brand-100"
-                        >
-                          Use suggested
-                        </button>
-                      )}
-                    </div>
-
-                    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      <SelectField
-                        label="Inventory Action"
-                        value={line.mode}
-                        onChange={(value) =>
-                          updateLine(line.id, {
-                            mode:
-                              review.receiptClassification === "EXPENSE_ONLY"
-                                ? "EXPENSE_ONLY"
-                                : review.receiptClassification === "INTERNAL_TRANSFER"
-                                  ? "MATCH"
-                                  : value === "NEW"
-                                    ? "NEW"
-                                    : value === "EXPENSE_ONLY"
-                                      ? "EXPENSE_ONLY"
-                                      : "MATCH",
-                            selectedItemId:
-                              review.receiptClassification === "INTERNAL_TRANSFER" || value === "MATCH"
-                                ? line.selectedItemId
-                                : ""
-                          })
-                        }
-                        options={
-                          review.receiptClassification === "EXPENSE_ONLY"
-                            ? [{ value: "EXPENSE_ONLY", label: "Expense evidence only (no stock item)" }]
-                            : review.receiptClassification === "INTERNAL_TRANSFER"
-                              ? [{ value: "MATCH", label: "Match existing item (required for transfer)" }]
-                              : [
-                                  { value: "MATCH", label: "Match existing item" },
-                                  { value: "NEW", label: "Create new item" },
-                                  { value: "EXPENSE_ONLY", label: "Expense evidence only (no stock item)" }
-                                ]
-                        }
-                      />
-                      {line.mode === "MATCH" ? (
-                        <>
-                          <SelectField
-                            label="Matched Inventory Item"
-                            value={line.selectedItemId}
-                            onChange={(value) => updateLine(line.id, { selectedItemId: value })}
-                            options={[
-                              { value: "", label: "No match selected" },
-                              ...items.map((item) => ({
-                                value: item.id,
-                                label: `${item.name} (${item.sku})`
-                              }))
-                            ]}
-                          />
-                          {!line.selectedItemId && (
-                            <div className="col-span-full rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                              {review.receiptClassification === "INTERNAL_TRANSFER"
-                                ? "Select an existing item. Internal transfers can only move stock for existing inventory items."
-                                : "No existing item selected. This line will be auto-created as a new inventory item when you save."}
-                            </div>
-                          )}
-                        </>
-                      ) : line.mode === "NEW" ? (
-                        <>
-                          <InputField
-                            label="New Item Name"
-                            value={line.newItemName}
-                            onChange={(value) => updateLine(line.id, { newItemName: value })}
-                          />
-                          <InputField
-                            label="New Item SKU (optional)"
-                            value={line.newItemSku}
-                            onChange={(value) => updateLine(line.id, { newItemSku: value.toUpperCase() })}
-                          />
-                        </>
-                      ) : (
-                        <div className="col-span-full rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                          This line will be kept as receipt/expense evidence only. No inventory item or stock movement will be created.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-              </div>
+              <ReceiptIntakeReviewStep
+                showMismatchInventoryHandling={showMismatchInventoryHandling}
+                requisitionComparison={requisitionComparison}
+                showScannedDetails={showScannedDetails}
+                setShowScannedDetails={setShowScannedDetails}
+                inventoryActionNeeded={inventoryActionNeeded}
+                setShowMismatchInventoryHandling={setShowMismatchInventoryHandling}
+                unmatchedLines={unmatchedLines}
+                showAdvancedLineItemEditor={showAdvancedLineItemEditor}
+                review={review}
+                mismatchDetected={mismatchDetected}
+                items={items}
+                updateLine={updateLine}
+                inventoryActionEditorByLine={inventoryActionEditorByLine}
+                setInventoryActionEditorByLine={setInventoryActionEditorByLine}
+                inventoryCategoryOptions={inventoryCategoryOptions}
+                formatInventoryCategory={formatInventoryCategory}
+                setShowMismatchFinalizeConfirm={setShowMismatchFinalizeConfirm}
+                setFollowUpStage={setFollowUpStage}
+                manualInputSelected={manualInputSelected}
+                setReview={setReview}
+                resetScanSessionState={resetScanSessionState}
+              />
             )}
 
             {followUpStage === "FINALIZE" && (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {requisitionContextLocked ? "Step 4 — Context linked from requisition" : "Step 4 — Link context (required)"}
-                </p>
-                <p className="mt-1 text-xs text-slate-600">
-                  {requisitionContextLocked
-                    ? "Context is prefilled from the approved requisition and locked to prevent posting mismatches."
-                    : "Link this receipt to the right project, rig, or inventory context before posting."}
-                </p>
-                {review.requisitionId && (
-                  <p className="mt-1 rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs text-indigo-900">
-                    Linked requisition:{" "}
-                    <span className="font-semibold">
-                      {review.requisitionCode || review.requisitionId.slice(-8)}
-                    </span>
-                    . This purchase will post back to the requisition workflow when saved.
-                  </p>
-                )}
-              </div>
+              <ReceiptIntakeFinalizeStep
+                review={review}
+                mismatchDetected={mismatchDetected}
+                canInspectScannedDetails={Boolean(requisitionComparison?.canInspectScannedDetails)}
+                showScannedDetails={showScannedDetails}
+                setShowScannedDetails={setShowScannedDetails}
+                setReview={setReview}
+                showFinalizePostingOptions={showFinalizePostingOptions}
+                setShowFinalizePostingOptions={setShowFinalizePostingOptions}
+                formatMoneyText={formatMoneyText}
+              />
             )}
-            {followUpStage === "REVIEW" && (
-              <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setFollowUpStage("FINALIZE")}
-                  className="gf-btn-primary"
-                >
-                  Continue to finalize
-                </button>
-                {!manualInputSelected && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReview(null);
-                      setFollowUpStage("SCAN");
-                    }}
-                    className="gf-btn-secondary"
-                  >
-                    Rescan receipt
-                  </button>
-                )}
-              </div>
-            )}
-
             {followUpStage === "FINALIZE" && (
               <>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p className="text-sm font-semibold text-slate-800">Context Linking</p>
-              <p className="mt-1 text-xs text-slate-600">
-                Required mapping rules: Project Purchase must link a project, Maintenance Purchase must link a rig, Stock Purchase stays inventory-only, and Internal Transfer requires both locations.
-              </p>
-              <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                {(!mismatchDetected || showFinalizePostingOptions) && (
+                  <>
+            <div className="rounded-lg border border-slate-200/55 bg-white px-2.5 py-1.5">
+              <p className="text-sm font-semibold text-slate-800">Posting Details</p>
+              <div className="mt-1.5 grid gap-1.5 md:grid-cols-2 xl:grid-cols-4">
                 <label className="text-xs text-ink-700">
                   <span className="mb-1 block uppercase tracking-wide text-slate-500">Supplier (existing)</span>
                   <select
@@ -2307,7 +1917,7 @@ export function ReceiptIntakePanel({
                           : current
                       )
                     }
-                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    className="w-full rounded-lg border border-slate-200/70 px-3 py-1.5 text-sm"
                   >
                     <option value="">No supplier match</option>
                     {suppliers.map((supplier) => (
@@ -2324,17 +1934,21 @@ export function ReceiptIntakePanel({
                     setReview((current) => (current ? { ...current, supplierName: value, supplierId: "" } : current))
                   }
                 />
-                <InputField
-                  label="Receipt Number"
-                  value={review.receiptNumber}
-                  onChange={(value) => setReview((current) => (current ? { ...current, receiptNumber: value } : current))}
-                />
-                <InputField
-                  label="Receipt Date"
-                  type="date"
-                  value={review.receiptDate}
-                  onChange={(value) => setReview((current) => (current ? { ...current, receiptDate: value } : current))}
-                />
+                {!mismatchDetected && (
+                  <InputField
+                    label="Receipt Number"
+                    value={review.receiptNumber}
+                    onChange={(value) => setReview((current) => (current ? { ...current, receiptNumber: value } : current))}
+                  />
+                )}
+                {!mismatchDetected && (
+                  <InputField
+                    label="Receipt Date"
+                    type="date"
+                    value={review.receiptDate}
+                    onChange={(value) => setReview((current) => (current ? { ...current, receiptDate: value } : current))}
+                  />
+                )}
                 <InputField
                   label="Subtotal"
                   type="number"
@@ -2370,14 +1984,18 @@ export function ReceiptIntakePanel({
                   }}
                   disabled={requisitionContextLocked}
                   options={[
-                    { value: "PROJECT_PURCHASE", label: "Project Purchase (Live Work)" },
-                    { value: "MAINTENANCE_PURCHASE", label: "Maintenance Purchase (Rig Repair)" },
+                    { value: "PROJECT_PURCHASE", label: "Project Purchase" },
+                    { value: "MAINTENANCE_PURCHASE", label: "Maintenance Purchase" },
                     { value: "STOCK_PURCHASE", label: "Stock Purchase (Inventory)" },
                     { value: "INTERNAL_TRANSFER", label: "Internal Transfer" }
                   ]}
                 />
                 <SelectField
-                  label="Link Client"
+                  label={
+                    activeWorkflowChoice === "PROJECT_PURCHASE"
+                      ? "Client Context"
+                      : "Link Client"
+                  }
                   value={review.clientId}
                   onChange={(value) =>
                     setReview((current) =>
@@ -2429,7 +2047,11 @@ export function ReceiptIntakePanel({
                   ]}
                 />
                 <SelectField
-                  label="Link Rig"
+                  label={
+                    activeWorkflowChoice === "PROJECT_PURCHASE"
+                      ? "Rig Context"
+                      : "Link Rig"
+                  }
                   value={review.rigId}
                   onChange={(value) => setReview((current) => (current ? { ...current, rigId: value } : current))}
                   disabled={
@@ -2443,7 +2065,9 @@ export function ReceiptIntakePanel({
                       label:
                         activeWorkflowChoice === "MAINTENANCE_PURCHASE"
                           ? "Select rig (required)"
-                          : "No rig"
+                          : activeWorkflowChoice === "PROJECT_PURCHASE"
+                            ? "No rig context"
+                            : "No rig"
                     },
                     ...rigs.map((rig) => ({ value: rig.id, label: rig.rigCode }))
                   ]}
@@ -2510,292 +2134,286 @@ export function ReceiptIntakePanel({
                   ]}
                 />
               </div>
-              <p className="mt-2 text-xs text-slate-700">
-                {activeWorkflowChoice === "PROJECT_PURCHASE"
-                  ? "Project purchase: posted costs will flow into the selected project profitability."
-                  : activeWorkflowChoice === "MAINTENANCE_PURCHASE"
-                    ? "Maintenance purchase: posted costs are tied to the selected rig and maintenance context."
-                    : activeWorkflowChoice === "STOCK_PURCHASE"
-                      ? "Stock purchase: this remains inventory-only and will not be posted as project cost."
-                      : "Internal transfer: this creates transfer stock movements only and does not create an expense record."}
-              </p>
               {requiresAllocation && allocationPreview !== "ALLOCATED" && (
-                <p className="mt-2 rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                  Context link incomplete: project/client are not fully assigned yet. You can save now and complete linkage later.
+                <p className="mt-1.5 rounded border border-amber-200/80 bg-amber-50/60 px-2 py-1 text-xs text-amber-900">
+                  Project/client link is incomplete. You can finalize now and complete linkage later.
                 </p>
               )}
               {review.requisitionType === "INVENTORY_STOCK_UP" && (
-                <p className="mt-2 rounded border border-sky-200 bg-sky-50 px-2 py-1.5 text-xs text-sky-900">
-                  Stock-up requisition linked: this receipt is treated as inventory replenishment and not as live project spend.
+                <p className="mt-1.5 rounded border border-sky-200/80 bg-sky-50/55 px-2 py-1 text-xs text-sky-900">
+                  Stock-up requisition linked. Posting as inventory replenishment.
                 </p>
               )}
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-              <button
-                type="button"
-                onClick={() => setShowTechnicalDetails((current) => !current)}
-                className="flex w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-wide text-slate-600"
-              >
-                  <span>{showTechnicalDetails ? "Hide debug details" : "Show debug details"}</span>
-                <span>{showTechnicalDetails ? "▾" : "▸"}</span>
-              </button>
-              {showTechnicalDetails && (
-                <div className="mt-2 space-y-3">
-                  {review.warnings.length > 0 && (
-                    <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                      {review.warnings.map((warning) => (
-                        <p key={warning}>• {calmMessage(warning)}</p>
-                      ))}
+            {showDeveloperDebugUi && (
+              <>
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowTechnicalDetails((current) => !current)}
+                    className="flex w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-wide text-slate-600"
+                  >
+                      <span>{showTechnicalDetails ? "Hide debug details" : "Show debug details"}</span>
+                    <span>{showTechnicalDetails ? "▾" : "▸"}</span>
+                  </button>
+                  {showTechnicalDetails && (
+                    <div className="mt-2 space-y-3">
+                      {review.warnings.length > 0 && (
+                        <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                          {review.warnings.map((warning) => (
+                            <p key={warning}>• {calmMessage(warning)}</p>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                        <p className="font-semibold uppercase tracking-wide text-sky-700">Scan Diagnostics</p>
+                        <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                          <p>
+                            Stage:{" "}
+                            <span className="font-medium">
+                              {formatScanFailureStage(review.scanDiagnostics.failureStage)}
+                            </span>
+                          </p>
+                          <p>
+                            Content type:{" "}
+                            <span className="font-medium">
+                              {formatQrContentType(review.scanDiagnostics.qrContentType)}
+                            </span>
+                          </p>
+                          <p>
+                            QR detected:{" "}
+                            <span className="font-medium">{review.scanDiagnostics.qrDetected ? "Yes" : "No"}</span>
+                          </p>
+                          <p>
+                            Decode:{" "}
+                            <span className="font-medium">
+                              {formatQrDecodeStatus(review.scanDiagnostics.qrDecodeStatus)}
+                              {review.scanDiagnostics.qrDecodePass
+                                ? ` (${review.scanDiagnostics.qrDecodePass})`
+                                : ""}
+                            </span>
+                          </p>
+                          <p>
+                            Parse:{" "}
+                            <span className="font-medium">
+                              {formatQrParseStatus(review.scanDiagnostics.qrParseStatus)}
+                            </span>
+                          </p>
+                          <p>
+                            Lookup:{" "}
+                            <span className="font-medium">
+                              {formatQrLookupStatus(review.scanDiagnostics.qrLookupStatus)}
+                            </span>
+                          </p>
+                          <p>
+                            OCR fallback:{" "}
+                            <span className="font-medium">
+                              {review.scanDiagnostics.ocrAttempted
+                                ? review.scanDiagnostics.ocrSucceeded
+                                  ? "Attempted and succeeded"
+                                  : "Attempted with limited results"
+                                : "Not attempted"}
+                            </span>
+                          </p>
+                          <p>
+                            Parsed fields:{" "}
+                            <span className="font-medium">{review.scanDiagnostics.qrParsedFieldCount}</span>
+                          </p>
+                          <p>
+                            Parsed lines:{" "}
+                            <span className="font-medium">{review.scanDiagnostics.qrParsedLineItemsCount}</span>
+                          </p>
+                        </div>
+                        <p className="mt-2 text-[11px] text-sky-800">{review.scanDiagnostics.failureMessage}</p>
+                        {review.scanDiagnostics.qrLookupReason && (
+                          <p className="mt-1 text-[11px] text-sky-800">
+                            Lookup reason: {review.scanDiagnostics.qrLookupReason}
+                          </p>
+                        )}
+                        {review.scanDiagnostics.ocrError && (
+                          <p className="mt-1 text-[11px] text-sky-800">OCR note: {review.scanDiagnostics.ocrError}</p>
+                        )}
+                        {review.scanDiagnostics.qrVerificationUrl && (
+                          <p className="mt-2">
+                            Verification Link:{" "}
+                            <a
+                              href={review.scanDiagnostics.qrVerificationUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-medium text-sky-800 underline"
+                            >
+                              Open verification URL
+                            </a>
+                          </p>
+                        )}
+                        {(review.scanDiagnostics.qrRawValue || review.scanDiagnostics.qrNormalizedRawValue) && (
+                          <details className="mt-2 rounded border border-sky-300 bg-white/70 px-2 py-1.5">
+                            <summary className="cursor-pointer text-[11px] font-semibold text-sky-800">
+                              View raw scanned QR details
+                            </summary>
+                            <div className="mt-2 space-y-2 text-[11px] text-slate-800">
+                              <p>
+                                Raw length:{" "}
+                                <span className="font-medium">{review.scanDiagnostics.qrRawValue.length}</span>
+                              </p>
+                              <p>
+                                Normalized length:{" "}
+                                <span className="font-medium">{review.scanDiagnostics.qrNormalizedRawValue.length}</span>
+                              </p>
+                              <div>
+                                <p className="font-semibold text-slate-700">Raw payload</p>
+                                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
+                                  {review.scanDiagnostics.qrRawValue || "(empty)"}
+                                </pre>
+                              </div>
+                              <div>
+                                <p className="font-semibold text-slate-700">Normalized payload</p>
+                                <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
+                                  {review.scanDiagnostics.qrNormalizedRawValue || "(empty)"}
+                                </pre>
+                              </div>
+                              {review.scanDiagnostics.attemptedPassCount > 0 && (
+                                <div>
+                                  <p className="font-semibold text-slate-700">
+                                    Decode attempts: {review.scanDiagnostics.attemptedPassCount}
+                                  </p>
+                                  <p className="mt-1 text-slate-600">
+                                    {review.scanDiagnostics.attemptedPassSample.join(", ")}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                        <InputField
+                          label="TIN"
+                          value={review.tin}
+                          onChange={(value) => setReview((current) => (current ? { ...current, tin: value } : current))}
+                        />
+                        <InputField
+                          label="VRN"
+                          value={review.vrn}
+                          onChange={(value) => setReview((current) => (current ? { ...current, vrn: value } : current))}
+                        />
+                        <InputField
+                          label="Serial Number"
+                          value={review.serialNumber}
+                          onChange={(value) => setReview((current) => (current ? { ...current, serialNumber: value } : current))}
+                        />
+                        <InputField
+                          label="Verification Code"
+                          value={review.verificationCode}
+                          onChange={(value) => setReview((current) => (current ? { ...current, verificationCode: value } : current))}
+                        />
+                        <InputField
+                          label="Verification URL"
+                          value={review.verificationUrl}
+                          onChange={(value) => setReview((current) => (current ? { ...current, verificationUrl: value } : current))}
+                        />
+                        <InputField
+                          label="Receipt Time"
+                          value={review.receiptTime}
+                          onChange={(value) => setReview((current) => (current ? { ...current, receiptTime: value } : current))}
+                        />
+                        <InputField
+                          label="TRA Receipt #"
+                          value={review.traReceiptNumber}
+                          onChange={(value) => setReview((current) => (current ? { ...current, traReceiptNumber: value } : current))}
+                        />
+                        <InputField
+                          label="Invoice / Ref #"
+                          value={review.invoiceReference}
+                          onChange={(value) => setReview((current) => (current ? { ...current, invoiceReference: value } : current))}
+                        />
+                        <InputField
+                          label="Payment Method"
+                          value={review.paymentMethod}
+                          onChange={(value) => setReview((current) => (current ? { ...current, paymentMethod: value } : current))}
+                        />
+                        <InputField
+                          label="Tax Office"
+                          value={review.taxOffice}
+                          onChange={(value) => setReview((current) => (current ? { ...current, taxOffice: value } : current))}
+                        />
+                      </div>
+
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Field Confidence</p>
+                        <div className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
+                          {receiptFieldLabels.map((entry) => (
+                            <div key={entry.key} className="flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1">
+                              <span>{entry.label}</span>
+                              <span className={readabilityBadgeClass(review.fieldConfidence[entry.key])}>
+                                {formatReadability(review.fieldConfidence[entry.key])} • {formatFieldSource(review.fieldSource[entry.key])}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
+                </div>
 
-                  <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
-                    <p className="font-semibold uppercase tracking-wide text-sky-700">Scan Diagnostics</p>
-                    <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                      <p>
-                        Stage:{" "}
-                        <span className="font-medium">
-                          {formatScanFailureStage(review.scanDiagnostics.failureStage)}
-                        </span>
-                      </p>
-                      <p>
-                        Content type:{" "}
-                        <span className="font-medium">
-                          {formatQrContentType(review.scanDiagnostics.qrContentType)}
-                        </span>
-                      </p>
-                      <p>
-                        QR detected:{" "}
-                        <span className="font-medium">{review.scanDiagnostics.qrDetected ? "Yes" : "No"}</span>
-                      </p>
-                      <p>
-                        Decode:{" "}
-                        <span className="font-medium">
-                          {formatQrDecodeStatus(review.scanDiagnostics.qrDecodeStatus)}
-                          {review.scanDiagnostics.qrDecodePass
-                            ? ` (${review.scanDiagnostics.qrDecodePass})`
-                            : ""}
-                        </span>
-                      </p>
-                      <p>
-                        Parse:{" "}
-                        <span className="font-medium">
-                          {formatQrParseStatus(review.scanDiagnostics.qrParseStatus)}
-                        </span>
-                      </p>
-                      <p>
-                        Lookup:{" "}
-                        <span className="font-medium">
-                          {formatQrLookupStatus(review.scanDiagnostics.qrLookupStatus)}
-                        </span>
-                      </p>
-                      <p>
-                        OCR fallback:{" "}
-                        <span className="font-medium">
-                          {review.scanDiagnostics.ocrAttempted
-                            ? review.scanDiagnostics.ocrSucceeded
-                              ? "Attempted and succeeded"
-                              : "Attempted with limited results"
-                            : "Not attempted"}
-                        </span>
-                      </p>
-                      <p>
-                        Parsed fields:{" "}
-                        <span className="font-medium">{review.scanDiagnostics.qrParsedFieldCount}</span>
-                      </p>
-                      <p>
-                        Parsed lines:{" "}
-                        <span className="font-medium">{review.scanDiagnostics.qrParsedLineItemsCount}</span>
-                      </p>
-                    </div>
-                    <p className="mt-2 text-[11px] text-sky-800">{review.scanDiagnostics.failureMessage}</p>
-                    {review.scanDiagnostics.qrLookupReason && (
-                      <p className="mt-1 text-[11px] text-sky-800">
-                        Lookup reason: {review.scanDiagnostics.qrLookupReason}
-                      </p>
-                    )}
-                    {review.scanDiagnostics.ocrError && (
-                      <p className="mt-1 text-[11px] text-sky-800">OCR note: {review.scanDiagnostics.ocrError}</p>
-                    )}
-                    {review.scanDiagnostics.qrVerificationUrl && (
-                      <p className="mt-2">
-                        Verification Link:{" "}
-                        <a
-                          href={review.scanDiagnostics.qrVerificationUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="font-medium text-sky-800 underline"
-                        >
-                          Open verification URL
-                        </a>
-                      </p>
-                    )}
-                    {(review.scanDiagnostics.qrRawValue || review.scanDiagnostics.qrNormalizedRawValue) && (
-                      <details className="mt-2 rounded border border-sky-300 bg-white/70 px-2 py-1.5">
-                        <summary className="cursor-pointer text-[11px] font-semibold text-sky-800">
-                          View raw scanned QR details
-                        </summary>
-                        <div className="mt-2 space-y-2 text-[11px] text-slate-800">
-                          <p>
-                            Raw length:{" "}
-                            <span className="font-medium">{review.scanDiagnostics.qrRawValue.length}</span>
-                          </p>
-                          <p>
-                            Normalized length:{" "}
-                            <span className="font-medium">{review.scanDiagnostics.qrNormalizedRawValue.length}</span>
-                          </p>
-                          <div>
-                            <p className="font-semibold text-slate-700">Raw payload</p>
-                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
-                              {review.scanDiagnostics.qrRawValue || "(empty)"}
-                            </pre>
-                          </div>
-                          <div>
-                            <p className="font-semibold text-slate-700">Normalized payload</p>
-                            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap rounded border border-slate-200 bg-slate-50 p-2">
-                              {review.scanDiagnostics.qrNormalizedRawValue || "(empty)"}
-                            </pre>
-                          </div>
-                          {review.scanDiagnostics.attemptedPassCount > 0 && (
-                            <div>
-                              <p className="font-semibold text-slate-700">
-                                Decode attempts: {review.scanDiagnostics.attemptedPassCount}
-                              </p>
-                              <p className="mt-1 text-slate-600">
-                                {review.scanDiagnostics.attemptedPassSample.join(", ")}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-
-                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-                    <InputField
-                      label="TIN"
-                      value={review.tin}
-                      onChange={(value) => setReview((current) => (current ? { ...current, tin: value } : current))}
-                    />
-                    <InputField
-                      label="VRN"
-                      value={review.vrn}
-                      onChange={(value) => setReview((current) => (current ? { ...current, vrn: value } : current))}
-                    />
-                    <InputField
-                      label="Serial Number"
-                      value={review.serialNumber}
-                      onChange={(value) => setReview((current) => (current ? { ...current, serialNumber: value } : current))}
-                    />
-                    <InputField
-                      label="Verification Code"
-                      value={review.verificationCode}
-                      onChange={(value) => setReview((current) => (current ? { ...current, verificationCode: value } : current))}
-                    />
-                    <InputField
-                      label="Verification URL"
-                      value={review.verificationUrl}
-                      onChange={(value) => setReview((current) => (current ? { ...current, verificationUrl: value } : current))}
-                    />
-                    <InputField
-                      label="Receipt Time"
-                      value={review.receiptTime}
-                      onChange={(value) => setReview((current) => (current ? { ...current, receiptTime: value } : current))}
-                    />
-                    <InputField
-                      label="TRA Receipt #"
-                      value={review.traReceiptNumber}
-                      onChange={(value) => setReview((current) => (current ? { ...current, traReceiptNumber: value } : current))}
-                    />
-                    <InputField
-                      label="Invoice / Ref #"
-                      value={review.invoiceReference}
-                      onChange={(value) => setReview((current) => (current ? { ...current, invoiceReference: value } : current))}
-                    />
-                    <InputField
-                      label="Payment Method"
-                      value={review.paymentMethod}
-                      onChange={(value) => setReview((current) => (current ? { ...current, paymentMethod: value } : current))}
-                    />
-                    <InputField
-                      label="Tax Office"
-                      value={review.taxOffice}
-                      onChange={(value) => setReview((current) => (current ? { ...current, taxOffice: value } : current))}
-                    />
-                  </div>
-
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Field Confidence</p>
-                    <div className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
-                      {receiptFieldLabels.map((entry) => (
-                        <div key={entry.key} className="flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1">
-                          <span>{entry.label}</span>
-                          <span className={readabilityBadgeClass(review.fieldConfidence[entry.key])}>
-                            {formatReadability(review.fieldConfidence[entry.key])} • {formatFieldSource(review.fieldSource[entry.key])}
-                          </span>
-                        </div>
+                {process.env.NODE_ENV !== "production" &&
+                  debugMode &&
+                  showTechnicalDetails &&
+                  review.debugCandidates.length > 0 && (
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">OCR Debug (Dev)</p>
+                    <div className="mt-2 space-y-1 text-xs text-indigo-900">
+                      {review.debugCandidates.map((candidate) => (
+                        <p key={candidate.label}>
+                          {candidate.label}: score {candidate.score.toFixed(3)}, confidence {candidate.confidence.toFixed(1)}, text{" "}
+                          {candidate.textLength} chars
+                        </p>
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+                  </>
+                )}
+                  </>
+                )}
 
-            {process.env.NODE_ENV !== "production" &&
-              debugMode &&
-              showTechnicalDetails &&
-              review.debugCandidates.length > 0 && (
-              <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">OCR Debug (Dev)</p>
-                <div className="mt-2 space-y-1 text-xs text-indigo-900">
-                  {review.debugCandidates.map((candidate) => (
-                    <p key={candidate.label}>
-                      {candidate.label}: score {candidate.score.toFixed(3)}, confidence {candidate.confidence.toFixed(1)}, text{" "}
-                      {candidate.textLength} chars
-                    </p>
-                  ))}
-                </div>
+            {followUpStage === "FINALIZE" && (
+              <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setFollowUpStage("REVIEW")}
+                  className="gf-btn-secondary"
+                >
+                  {showMismatchInventoryHandling ? "Back to inventory" : "Back to items"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCommit()}
+                  disabled={saving}
+                  className="gf-btn-primary"
+                >
+                  {saving
+                    ? "Saving..."
+                    : !canManage
+                      ? "Submit for review"
+                      : "Finalize posting"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReview(null);
+                    resetScanSessionState();
+                    setFollowUpStage("SCAN");
+                  }}
+                  className="gf-btn-secondary"
+                >
+                  Start over
+                </button>
               </div>
             )}
-
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Step 5 — Submit</p>
-              <p className="mt-1 text-xs text-slate-600">
-                Submit for review (staff) or finalize posting (manager/admin) once context linking is complete.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setFollowUpStage("REVIEW")}
-                className="gf-btn-secondary"
-              >
-                Back to review
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleCommit()}
-                disabled={saving}
-                className="gf-btn-primary w-full px-6 py-3 text-base sm:w-auto"
-              >
-                {saving
-                  ? "Saving..."
-                  : !canManage
-                    ? "Submit for Review"
-                    : autoSaveEnabled && autoSaveReadiness?.ready
-                    ? "Save Automatically"
-                    : "Save to Inventory"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setReview(null)}
-                className="gf-btn-secondary"
-              >
-                Cancel Review
-              </button>
-            </div>
               </>
             )}
           </div>
@@ -2890,159 +2508,6 @@ export function ReceiptIntakePanel({
   );
 }
 
-function InputField({
-  label,
-  value,
-  onChange,
-  type = "text"
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-}) {
-  return (
-    <label className="text-xs text-ink-700">
-      <span className="mb-1 block uppercase tracking-wide text-slate-500">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-      />
-    </label>
-  );
-}
-
-function SelectField({
-  label,
-  value,
-  onChange,
-  options,
-  disabled = false
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="text-xs text-ink-700">
-      <span className="mb-1 block uppercase tracking-wide text-slate-500">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        disabled={disabled}
-        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:bg-slate-100"
-      >
-        {options.map((option) => (
-          <option key={`${label}-${option.value}`} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function DuplicateLinksGroup({
-  title,
-  emptyLabel,
-  links,
-  buttonLabel,
-  onOpen
-}: {
-  title: string;
-  emptyLabel: string;
-  links: Array<{ id: string; label: string; type: string; url: string }>;
-  buttonLabel: string;
-  onOpen: (record: FocusedLinkedRecord) => void;
-}) {
-  return (
-    <div className="rounded border border-slate-200 bg-slate-50 px-2 py-2">
-      <p className="font-semibold text-slate-800">{title}</p>
-      {links.length === 0 ? (
-        <p className="mt-1 text-slate-600">{emptyLabel}</p>
-      ) : (
-        <div className="mt-2 space-y-1.5">
-          {links.map((link) => (
-            <div
-              key={`${title}-${link.id}`}
-              className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-200 bg-white px-2 py-1.5"
-            >
-              <span>{link.label}</span>
-              <button
-                type="button"
-                onClick={() =>
-                  onOpen({
-                    id: link.id,
-                    label: link.label,
-                    type: normalizeLinkedRecordType(link.type),
-                    url: link.url
-                  })
-                }
-                className="rounded border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-800 hover:bg-slate-100"
-              >
-                {buttonLabel}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function normalizeLinkedRecordType(value: string): LinkedRecordType {
-  if (
-    value === "INVENTORY_ITEM" ||
-    value === "STOCK_MOVEMENT" ||
-    value === "EXPENSE" ||
-    value === "RECEIPT_INTAKE"
-  ) {
-    return value;
-  }
-  return "RECEIPT_INTAKE";
-}
-
-function normalizeLinkedRecordUrl(url: string, type: LinkedRecordType, id: string) {
-  const trimmed = typeof url === "string" ? url.trim() : "";
-  if (trimmed.startsWith("/inventory?section=items")) {
-    return `/inventory/items?itemId=${id}`;
-  }
-  if (trimmed.startsWith("/inventory?section=stock-movements")) {
-    return `/inventory/stock-movements?movementId=${id}`;
-  }
-  if (
-    trimmed.startsWith("/inventory/items") ||
-    trimmed.startsWith("/inventory/stock-movements") ||
-    trimmed.startsWith("/inventory/receipt-intake") ||
-    trimmed.startsWith("/purchasing/receipt-follow-up")
-  ) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("/expenses")) {
-    return trimmed;
-  }
-  if (type === "INVENTORY_ITEM") {
-    return `/inventory/items?itemId=${id}`;
-  }
-  if (type === "EXPENSE") {
-    return `/expenses?expenseId=${id}`;
-  }
-  if (type === "STOCK_MOVEMENT") {
-    return `/inventory/stock-movements?movementId=${id}`;
-  }
-  return `/purchasing/receipt-follow-up?movementId=${id}`;
-}
-
-function formatLinkedRecordType(value: LinkedRecordType) {
-  if (value === "INVENTORY_ITEM") return "Inventory Item";
-  if (value === "STOCK_MOVEMENT") return "Stock Movement";
-  if (value === "EXPENSE") return "Expense Record";
-  return "Purchase Follow-up";
-}
 
 function normalizeReceiptPurpose(value: string): ReceiptPurpose {
   if (
@@ -3227,24 +2692,6 @@ function resolveExpenseOnlyCategory(value: string): ExpenseOnlyCategory | null {
   return null;
 }
 
-function applyReceiptClassificationUpdate(
-  current: ReviewState,
-  classification: ReceiptClassification,
-  config: { receiptPurpose: ReceiptPurpose; createExpense: boolean }
-): ReviewState {
-  return {
-    ...current,
-    receiptClassification: classification,
-    receiptPurpose: config.receiptPurpose,
-    createExpense: config.createExpense,
-    maintenanceRequestId:
-      classification === "MAINTENANCE_LINKED_PURCHASE" ? current.maintenanceRequestId : "",
-    locationFromId: classification === "INTERNAL_TRANSFER" ? current.locationFromId : "",
-    expenseOnlyCategory: classification === "EXPENSE_ONLY" ? current.expenseOnlyCategory : "",
-    lines: applyReceiptClassificationLineDefaults(current.lines, classification)
-  };
-}
-
 function applyReceiptClassificationLineDefaults(
   lines: ReviewLineState[],
   classification: ReceiptClassification
@@ -3287,98 +2734,6 @@ function extractReceiptPurposeFromDetails(details: Record<string, unknown>) {
     }
   }
   return "-";
-}
-
-function RecordSummaryGrid({ details }: { details: Record<string, unknown> }) {
-  const data = asRecord(details.data) || details;
-  const rows = Object.entries(data)
-    .filter(([, value]) => value === null || ["string", "number", "boolean"].includes(typeof value))
-    .slice(0, 20);
-
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-        No summary fields available for this record.
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white">
-      <p className="border-b border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Summary
-      </p>
-      <div className="grid gap-0.5 px-3 py-2 text-xs text-slate-800 sm:grid-cols-2">
-        {rows.map(([key, value]) => (
-          <p key={`summary-${key}`} className="rounded bg-slate-50 px-2 py-1">
-            <span className="font-semibold">{humanizeKey(key)}:</span>{" "}
-            {typeof value === "number" ? formatNumberValue(value) : value === null ? "-" : String(value)}
-          </p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function RecordLinkedRows({ details }: { details: Record<string, unknown> }) {
-  const candidates: Array<{ label: string; value: string }> = [];
-  const roots = [details, asRecord(details.data)].filter(Boolean) as Array<Record<string, unknown>>;
-  for (const root of roots) {
-    for (const [key, raw] of Object.entries(root)) {
-      const entry = asRecord(raw);
-      if (!entry) continue;
-      const id = asString(entry.id);
-      if (!id) continue;
-      const labelCandidate =
-        asString(entry.name) ||
-        asString(entry.rigCode) ||
-        asString(entry.requestCode) ||
-        asString(entry.fullName) ||
-        asString(entry.label) ||
-        id;
-      candidates.push({
-        label: humanizeKey(key),
-        value: labelCandidate
-      });
-    }
-  }
-
-  if (candidates.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white">
-      <p className="border-b border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-        Linked Records
-      </p>
-      <div className="space-y-1 px-3 py-2 text-xs text-slate-800">
-        {candidates.slice(0, 16).map((candidate, index) => (
-          <p key={`linked-${candidate.label}-${index}`} className="rounded bg-slate-50 px-2 py-1">
-            <span className="font-semibold">{candidate.label}:</span> {candidate.value}
-          </p>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function humanizeKey(value: string) {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase())
-    .trim();
-}
-
-function formatNumberValue(value: number) {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
-  if (Math.abs(value) >= 1000) {
-    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  }
-  return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
 function asString(value: unknown) {
@@ -4094,7 +3449,7 @@ function buildReviewStateFromPayload({
     supplierConfidenceHint: payloadSupplierConfidence,
     supplierSourceHint: payloadSupplierSource
   });
-  if (process.env.NODE_ENV !== "production") {
+  if (RECEIPT_INTAKE_DEBUG_ENABLED) {
     console.info("[inventory][receipt-intake][frontend-supplier]", {
       fromHeader: asString(extractedHeader?.supplierName),
       fromQrParsed: fromQrParsedSupplier,
@@ -4353,7 +3708,7 @@ function buildManualAssistReview({
     supplierConfidenceHint: payloadSupplierConfidence,
     supplierSourceHint: payloadSupplierSource
   });
-  if (process.env.NODE_ENV !== "production") {
+  if (RECEIPT_INTAKE_DEBUG_ENABLED) {
     console.info("[inventory][receipt-intake][frontend-supplier]", {
       fromHeader: asString(extractedHeader?.supplierName),
       fromQrParsed: fromQrParsedSupplier,
@@ -4960,6 +4315,39 @@ function normalizeAllocationStatus(value: unknown): IntakeAllocationStatus {
   return "UNALLOCATED";
 }
 
+function buildRequisitionMismatchReview({
+  scannedReview,
+  initialRequisition
+}: {
+  scannedReview: ReviewState;
+  initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+}): ReviewState {
+  const requisitionSupplier = normalizeSupplierName(asString(initialRequisition?.requestedVendorName));
+  const requisitionEstimatedTotal = resolveRequisitionEstimatedTotal(initialRequisition);
+  const requisitionLines = mapRequisitionLineItems(initialRequisition, scannedReview.receiptClassification);
+  const hasRequisitionTotal = Number.isFinite(requisitionEstimatedTotal) && requisitionEstimatedTotal > 0;
+
+  return {
+    ...scannedReview,
+    supplierId: requisitionSupplier ? "" : scannedReview.supplierId,
+    supplierName: requisitionSupplier || scannedReview.supplierName,
+    subtotal: hasRequisitionTotal ? String(requisitionEstimatedTotal) : scannedReview.subtotal,
+    tax: hasRequisitionTotal ? "0" : scannedReview.tax,
+    total: hasRequisitionTotal ? String(requisitionEstimatedTotal) : scannedReview.total,
+    warnings: Array.from(
+      new Set([
+        ...scannedReview.warnings,
+        "Receipt does not match requisition. Complete receipt fields manually."
+      ])
+    ),
+    scanFallbackMode: "NONE",
+    lines:
+      requisitionLines.length > 0
+        ? applyReceiptClassificationLineDefaults(requisitionLines, scannedReview.receiptClassification)
+        : scannedReview.lines
+  };
+}
+
 function evaluateRequisitionComparison(
   review: ReviewState | null,
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"]
@@ -4990,6 +4378,8 @@ function evaluateRequisitionComparison(
     !review.scannedSnapshot.receiptDate ? "receipt date" : "",
     !review.scannedSnapshot.total ? "total amount" : ""
   ].filter(Boolean);
+  const approvedRequestedItem = approvedLines[0]?.description || "-";
+  const scannedRequestedItem = scannedLines[0]?.description || "-";
 
   const headerRows: RequisitionComparisonResult["headerRows"] = [
     {
@@ -5060,10 +4450,28 @@ function evaluateRequisitionComparison(
       review.rawQrValue.trim().length > 0 ||
       review.tin.trim().length > 0 ||
       Number(review.scannedSnapshot.total || 0) > 0);
+  const differenceRows: RequisitionComparisonResult["differenceRows"] = [
+    {
+      label: "Supplier",
+      approved: approvedSupplier || "-",
+      scanned: review.scannedSnapshot.supplierName || "-"
+    },
+    {
+      label: "Total amount",
+      approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
+      scanned: scannedTotalValue > 0 ? formatCurrency(scannedTotalValue) : "-"
+    },
+    {
+      label: "Requested item",
+      approved: approvedRequestedItem,
+      scanned: scannedRequestedItem
+    }
+  ];
 
   const baseResult = {
     scanTrustLabel: scanTrust.label,
     scanTrustMessage: scanTrust.message,
+    differenceRows: [],
     headerRows,
     approvedLines,
     scannedLines
@@ -5072,8 +4480,8 @@ function evaluateRequisitionComparison(
   if (review.scanFallbackMode === "SCAN_FAILURE") {
     return {
       status: "SCAN_FAILED",
-      label: "Scan failed — manual input required",
-      message: SCAN_FALLBACK_MESSAGE,
+      label: "Manual review needed",
+      message: "Receipt scan could not be completed confidently. Please review and complete required fields.",
       canInspectScannedDetails: false,
       ...baseResult
     };
@@ -5082,8 +4490,8 @@ function evaluateRequisitionComparison(
   if (review.scanFallbackMode === "MANUAL_ENTRY") {
     return {
       status: "MANUAL_ENTRY",
-      label: "Manual entry",
-      message: "Manual receipt entry selected. Complete receipt fields and review before posting.",
+      label: "Manual review needed",
+      message: "Manual receipt entry is active. Confirm key fields before continuing.",
       canInspectScannedDetails: false,
       ...baseResult
     };
@@ -5092,8 +4500,8 @@ function evaluateRequisitionComparison(
   if (!scanTrust.meaningfulData) {
     return {
       status: "SCAN_FAILED",
-      label: "Scan failed — manual input required",
-      message: SCAN_FALLBACK_MESSAGE,
+      label: "Manual review needed",
+      message: "Receipt scan data is incomplete. Please review and complete required fields.",
       canInspectScannedDetails: false,
       ...baseResult
     };
@@ -5107,11 +4515,11 @@ function evaluateRequisitionComparison(
   if (hardMismatch) {
     return {
       status: "MISMATCH",
-      label: "Does not match requisition",
-      message:
-        "Scanned receipt does not match the approved requisition. Review differences before posting.",
+      label: "Receipt does not match requisition",
+      message: "Review scanned receipt details or complete receipt fields manually.",
       canInspectScannedDetails,
-      ...baseResult
+      ...baseResult,
+      differenceRows
     };
   }
 
@@ -5129,7 +4537,7 @@ function evaluateRequisitionComparison(
         : "Scanned details are close to the approved requisition. Quick review is recommended.";
     return {
       status: "CLOSE_MATCH",
-      label: "Close match — review recommended",
+      label: "Manual review needed",
       message: missingFieldsMessage,
       canInspectScannedDetails,
       ...baseResult
@@ -5138,9 +4546,9 @@ function evaluateRequisitionComparison(
 
   return {
     status: "MATCHED",
-    label: "Matched",
+    label: "Receipt scanned successfully",
     message: "Scanned receipt details align with the approved requisition.",
-    canInspectScannedDetails: false,
+    canInspectScannedDetails,
     ...baseResult
   };
 }
@@ -5925,10 +5333,10 @@ function evaluateSaveReadiness(review: ReviewState): SaveReadiness {
   }
   if (review.receiptClassification !== "EXPENSE_ONLY") {
     if (workflowChoice === "PROJECT_PURCHASE" && !review.projectId) {
-      reasons.push("Select a project for Project Purchase (Live Work).");
+      reasons.push("Select a project for Project Purchase.");
     }
     if (workflowChoice === "MAINTENANCE_PURCHASE" && !review.rigId) {
-      reasons.push("Select a rig for Maintenance Purchase (Rig Repair).");
+      reasons.push("Select a rig for Maintenance Purchase.");
     }
     if (workflowChoice === "STOCK_PURCHASE" && review.projectId) {
       reasons.push("Stock Purchase should not be linked to a project.");
@@ -5998,71 +5406,6 @@ function hasConflictingParsedValues(review: ReviewState) {
   const expected = subtotal + Math.max(tax, 0);
   const tolerance = Math.max(1, total * 0.03);
   return Math.abs(expected - total) > tolerance;
-}
-
-function resolveWorkflowStage({
-  extractState,
-  saving,
-  notice,
-  review,
-  saveReadiness
-}: {
-  extractState: ExtractState;
-  saving: boolean;
-  notice: string | null;
-  review: ReviewState | null;
-  saveReadiness: SaveReadiness | null;
-}): WorkflowStage {
-  if (saving) {
-    return "READY_TO_SAVE";
-  }
-  if (notice && notice.toLowerCase().includes("saved successfully")) {
-    return "SAVED_SUCCESSFULLY";
-  }
-  if (extractState === "UPLOADING" || extractState === "PROCESSING") {
-    return "CAPTURING";
-  }
-  if (review) {
-    if (saveReadiness?.ready) {
-      return "READY_TO_SAVE";
-    }
-    if (review.qrLookupStatus === "SUCCESS" || review.debugFlags.traParseSucceeded) {
-      return "CAPTURED_QR_TRA";
-    }
-    return "REVIEW_RECOMMENDED";
-  }
-  if (extractState === "FAILED") {
-    return "REVIEW_RECOMMENDED";
-  }
-  return "READY_TO_SCAN";
-}
-
-function formatWorkflowStage(stage: WorkflowStage) {
-  if (stage === "CAPTURING") return "Capturing receipt";
-  if (stage === "CAPTURED_QR_TRA") return "Captured from QR/TRA";
-  if (stage === "REVIEW_RECOMMENDED") return "Review recommended";
-  if (stage === "READY_TO_SAVE") return "Ready to save";
-  if (stage === "SAVED_SUCCESSFULLY") return "Saved successfully";
-  return "Ready to scan";
-}
-
-function workflowHelpText(stage: WorkflowStage) {
-  if (stage === "CAPTURING") return "Scanning in progress. We are preparing receipt data and inventory actions.";
-  if (stage === "CAPTURED_QR_TRA") return "Core receipt fields were captured. Review optional details, then finalize.";
-  if (stage === "REVIEW_RECOMMENDED") return "Some fields still need confirmation. You can continue manually.";
-  if (stage === "READY_TO_SAVE") return "Receipt details are complete enough to finalize inventory updates.";
-  if (stage === "SAVED_SUCCESSFULLY") return "Inventory updates, receipt evidence, and linked records were saved.";
-  return "Upload a receipt image or PDF to begin.";
-}
-
-function workflowBadgeClass(stage: WorkflowStage) {
-  if (stage === "CAPTURED_QR_TRA" || stage === "READY_TO_SAVE" || stage === "SAVED_SUCCESSFULLY") {
-    return "rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800";
-  }
-  if (stage === "REVIEW_RECOMMENDED") {
-    return "rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800";
-  }
-  return "rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700";
 }
 
 function deriveManualFieldHints(review: ReviewState) {
@@ -6137,225 +5480,4 @@ function calmMessage(message: string) {
     return "QR was not detected automatically. OCR/manual review is still available.";
   }
   return value;
-}
-
-function formatReadability(confidence?: ReadabilityConfidence) {
-  if (!confidence) {
-    return "Needs review";
-  }
-  if (confidence === "UNREADABLE") {
-    return "Needs review";
-  }
-  return confidence.charAt(0) + confidence.slice(1).toLowerCase();
-}
-
-function formatFieldSource(source?: "QR" | "OCR" | "DERIVED" | "NONE") {
-  if (!source || source === "NONE") {
-    return "Manual";
-  }
-  if (source === "DERIVED") {
-    return "Derived";
-  }
-  return source;
-}
-
-function readabilityBadgeClass(confidence?: ReadabilityConfidence) {
-  if (confidence === "HIGH") {
-    return "rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800";
-  }
-  if (confidence === "MEDIUM") {
-    return "rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800";
-  }
-  if (confidence === "LOW") {
-    return "rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-800";
-  }
-  return "rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700";
-}
-
-function normalizeScanStatus(value: unknown): ReceiptScanStatus {
-  if (value === "COMPLETE" || value === "PARTIAL" || value === "UNREADABLE") {
-    return value;
-  }
-  return "PARTIAL";
-}
-
-function normalizeReceiptType(value: unknown): ReceiptType {
-  if (value === "INVENTORY_PURCHASE" || value === "GENERAL_EXPENSE" || value === "UNCLEAR") {
-    return value;
-  }
-  return "UNCLEAR";
-}
-
-function normalizeQrContentType(value: unknown): QrContentType {
-  if (value === "TRA_URL" || value === "URL" || value === "STRUCTURED_TEXT" || value === "UNKNOWN" || value === "NONE") {
-    return value;
-  }
-  return "UNKNOWN";
-}
-
-function normalizeQrDecodeStatus(value: unknown): QrDecodeStatus {
-  if (value === "DECODED" || value === "NOT_DETECTED" || value === "DECODE_FAILED") {
-    return value;
-  }
-  return "NOT_DETECTED";
-}
-
-function normalizeQrParseStatus(value: unknown): QrParseStatus {
-  if (value === "PARSED" || value === "PARTIAL" || value === "UNPARSED") {
-    return value;
-  }
-  return "UNPARSED";
-}
-
-function normalizeQrLookupStatus(value: unknown): QrLookupStatus {
-  if (value === "NOT_ATTEMPTED" || value === "SUCCESS" || value === "FAILED") {
-    return value;
-  }
-  return "NOT_ATTEMPTED";
-}
-
-function normalizeQrParseDetailStatus(value: unknown): QrParseDetailStatus {
-  if (value === "NOT_ATTEMPTED" || value === "SUCCESS" || value === "PARTIAL" || value === "FAILED") {
-    return value;
-  }
-  return "NOT_ATTEMPTED";
-}
-
-function formatQrContentType(type: QrContentType) {
-  if (type === "TRA_URL") {
-    return "TRA URL";
-  }
-  if (type === "STRUCTURED_TEXT") {
-    return "Structured Text";
-  }
-  if (type === "URL") {
-    return "URL";
-  }
-  if (type === "UNKNOWN") {
-    return "Unknown";
-  }
-  return "None";
-}
-
-function formatQrDecodeStatus(type: QrDecodeStatus) {
-  if (type === "DECODED") {
-    return "QR captured";
-  }
-  if (type === "DECODE_FAILED") {
-    return "QR detected, decode needs review";
-  }
-  return "QR not detected automatically";
-}
-
-function formatQrParseStatus(type: QrParseStatus) {
-  if (type === "PARSED") {
-    return "Parse success";
-  }
-  if (type === "PARTIAL") {
-    return "Partially parsed";
-  }
-  return "Parsed with review needed";
-}
-
-function formatQrLookupStatus(type: QrLookupStatus) {
-  if (type === "SUCCESS") {
-    return "Lookup captured";
-  }
-  if (type === "FAILED") {
-    return "Lookup needs review";
-  }
-  return "Not attempted";
-}
-
-function formatScanFailureStage(stage: ScanFailureStage) {
-  if (stage === "QR_NOT_DETECTED") {
-    return "QR not detected";
-  }
-  if (stage === "QR_DECODE_FAILED") {
-    return "QR detected but decode failed";
-  }
-  if (stage === "QR_PARSE_UNPARSED") {
-    return "QR decoded, parsing limited";
-  }
-  if (stage === "TRA_LOOKUP_FAILED") {
-    return "TRA lookup returned limited data";
-  }
-  if (stage === "FRONTEND_MAPPING_EMPTY") {
-    return "Mapping gap after scan";
-  }
-  return "No stage failure";
-}
-
-function toReadability(value: unknown): ReadabilityConfidence {
-  if (value === "HIGH" || value === "MEDIUM" || value === "LOW" || value === "UNREADABLE") {
-    return value;
-  }
-  return "UNREADABLE";
-}
-
-function toReadabilityMap(value: unknown): Record<string, ReadabilityConfidence> {
-  const candidate = asRecord(value);
-  if (!candidate) {
-    return {};
-  }
-  const normalized: Record<string, ReadabilityConfidence> = {};
-  for (const [key, raw] of Object.entries(candidate)) {
-    normalized[key] = toReadability(raw);
-  }
-  return normalized;
-}
-
-function toFieldSource(value: unknown): "QR" | "OCR" | "DERIVED" | "NONE" {
-  if (value === "QR" || value === "OCR" || value === "DERIVED" || value === "NONE") {
-    return value;
-  }
-  return "NONE";
-}
-
-function toFieldSourceMap(value: unknown): Record<string, "QR" | "OCR" | "DERIVED" | "NONE"> {
-  const candidate = asRecord(value);
-  if (!candidate) {
-    return {};
-  }
-  const normalized: Record<string, "QR" | "OCR" | "DERIVED" | "NONE"> = {};
-  for (const [key, raw] of Object.entries(candidate)) {
-    normalized[key] = toFieldSource(raw);
-  }
-  return normalized;
-}
-
-function readDebugCandidates(value: unknown) {
-  const debug = asRecord(value);
-  const candidates = Array.isArray(debug?.ocrCandidates) ? debug.ocrCandidates : [];
-  return candidates
-    .map((entry) => {
-      const candidate = asRecord(entry);
-      if (!candidate) {
-        return null;
-      }
-      return {
-        label: asString(candidate.label) || "variant",
-        confidence: Number(candidate.confidence || 0),
-        score: Number(candidate.score || 0),
-        textLength: Number(candidate.textLength || 0)
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-}
-
-function clampNormalized(value: number) {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  if (value < 0) {
-    return 0;
-  }
-  if (value > 1) {
-    return 1;
-  }
-  return value;
-}
-
-function formatPercent(value: number) {
-  return `${Math.round(clampNormalized(value) * 100)}%`;
 }

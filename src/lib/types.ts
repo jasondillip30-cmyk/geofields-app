@@ -4,10 +4,7 @@ export type RigStatus = "ACTIVE" | "IDLE" | "MAINTENANCE" | "BREAKDOWN";
 export type RigCondition = "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "CRITICAL";
 export type ProjectStatus = "PLANNED" | "ACTIVE" | "ON_HOLD" | "COMPLETED";
 export type MaintenanceStatus =
-  | "SUBMITTED"
-  | "UNDER_REVIEW"
-  | "APPROVED"
-  | "DENIED"
+  | "OPEN"
   | "WAITING_FOR_PARTS"
   | "IN_REPAIR"
   | "COMPLETED";

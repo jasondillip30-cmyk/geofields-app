@@ -42,6 +42,7 @@ interface NormalizedDraftLinkContext {
   projectId: string;
   rigId: string;
   maintenanceRequestId: string;
+  breakdownReportId: string;
   locationFromId: string;
   locationToId: string;
 }
@@ -99,6 +100,7 @@ export function parseReceiptSubmissionPayload(payloadJson: string | null): Parse
         projectId: asString(draftLinkContext.projectId),
         rigId: asString(draftLinkContext.rigId),
         maintenanceRequestId: asString(draftLinkContext.maintenanceRequestId),
+        breakdownReportId: asString(draftLinkContext.breakdownReportId),
         locationFromId: asString(draftLinkContext.locationFromId),
         locationToId: asString(draftLinkContext.locationToId)
       };

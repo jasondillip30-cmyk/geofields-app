@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialDrillReportApproval, withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 
 type ExpenseStatusKey = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
@@ -153,16 +154,18 @@ export async function GET(request: NextRequest) {
   const baselineForecast30Expenses = roundCurrency(dailyExpense * 30);
   const baselineForecast30Profit = roundCurrency(baselineForecast30Revenue - baselineForecast30Expenses);
 
-  if (process.env.NODE_ENV !== "production") {
-    console.info("[expense-visibility][forecasting]", {
+  debugLog(
+    "[expense-visibility][forecasting]",
+    {
       appliedFilters,
       reportRecordCount: reports.length,
       expenseRecordCount: expenses.length,
       totalExpenseAmount,
       approvedExpenseAmount,
       expenseStatusCounts
-    });
-  }
+    },
+    { channel: "finance" }
+  );
 
   return NextResponse.json({
     filters: { clientId, projectId, rigId, fromDate, toDate },

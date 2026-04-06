@@ -20,16 +20,13 @@ export async function GET(request: NextRequest) {
   const [
     pendingExpenses,
     pendingDrillingReports,
-    pendingMaintenance,
     pendingInventoryUsage,
     receiptSubmissionRows,
     rejectedExpensesThisWeek,
     rejectedDrillingReportsThisWeek,
-    rejectedMaintenanceThisWeek,
     rejectedInventoryUsageThisWeek,
     approvedExpensesToday,
     approvedDrillingReportsToday,
-    approvedMaintenanceToday,
     approvedInventoryUsageToday
   ] = await Promise.all([
     prisma.expense.count({
@@ -40,11 +37,6 @@ export async function GET(request: NextRequest) {
     prisma.drillReport.count({
       where: {
         approvalStatus: "SUBMITTED"
-      }
-    }),
-    prisma.maintenanceRequest.count({
-      where: {
-        status: "SUBMITTED"
       }
     }),
     prisma.inventoryUsageRequest.count({
@@ -75,12 +67,6 @@ export async function GET(request: NextRequest) {
         approvedAt: { gte: startWeek, lte: now }
       }
     }),
-    prisma.maintenanceRequest.count({
-      where: {
-        status: "DENIED",
-        updatedAt: { gte: startWeek, lte: now }
-      }
-    }),
     prisma.inventoryUsageRequest.count({
       where: {
         status: "REJECTED",
@@ -97,12 +83,6 @@ export async function GET(request: NextRequest) {
       where: {
         approvalStatus: "APPROVED",
         approvedAt: { gte: startToday, lte: endToday }
-      }
-    }),
-    prisma.maintenanceRequest.count({
-      where: {
-        status: "APPROVED",
-        updatedAt: { gte: startToday, lte: endToday }
       }
     }),
     prisma.inventoryUsageRequest.count({
@@ -136,17 +116,15 @@ export async function GET(request: NextRequest) {
   }
 
   const pendingApprovals =
-    pendingExpenses + pendingDrillingReports + pendingMaintenance + pendingInventoryUsage + pendingReceiptSubmissions;
+    pendingExpenses + pendingDrillingReports + pendingInventoryUsage + pendingReceiptSubmissions;
   const rejectedThisWeek =
     rejectedExpensesThisWeek +
     rejectedDrillingReportsThisWeek +
-    rejectedMaintenanceThisWeek +
     rejectedInventoryUsageThisWeek +
     rejectedReceiptSubmissionsThisWeek;
   const approvedToday =
     approvedExpensesToday +
     approvedDrillingReportsToday +
-    approvedMaintenanceToday +
     approvedInventoryUsageToday +
     approvedReceiptSubmissionsToday;
 
@@ -157,7 +135,6 @@ export async function GET(request: NextRequest) {
     breakdown: {
       pendingExpenses,
       pendingDrillingReports,
-      pendingMaintenance,
       pendingInventoryUsage,
       pendingReceiptSubmissions
     },
@@ -165,14 +142,12 @@ export async function GET(request: NextRequest) {
       rejectedThisWeek: {
         expenses: rejectedExpensesThisWeek,
         drillingReports: rejectedDrillingReportsThisWeek,
-        maintenance: rejectedMaintenanceThisWeek,
         inventoryUsage: rejectedInventoryUsageThisWeek,
         receiptSubmissions: rejectedReceiptSubmissionsThisWeek
       },
       approvedToday: {
         expenses: approvedExpensesToday,
         drillingReports: approvedDrillingReportsToday,
-        maintenance: approvedMaintenanceToday,
         inventoryUsage: approvedInventoryUsageToday,
         receiptSubmissions: approvedReceiptSubmissionsToday
       }

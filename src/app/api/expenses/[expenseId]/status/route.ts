@@ -1,3 +1,4 @@
+import type { EntryApprovalStatus } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
@@ -71,27 +72,59 @@ export async function POST(
     return NextResponse.json({ message: transition.message }, { status: 409 });
   }
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const next = await tx.expense.update({
-      where: { id: expenseId },
-      data: transition.data,
-      include: expenseInclude
-    });
+  let updated: NonNullable<Awaited<ReturnType<typeof prisma.expense.findUnique>>> | null = null;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const transitionLock = await tx.expense.updateMany({
+        where: {
+          id: expenseId,
+          approvalStatus: transition.expectedStatus
+        },
+        data: transition.data
+      });
 
-    await recordAuditLog({
-      db: tx,
-      module: "expenses",
-      entityType: "expense",
-      entityId: expenseId,
-      action,
-      description: buildAuditDescription(action, auth.session.name, expenseId),
-      before: expenseAuditSnapshot(existing),
-      after: expenseAuditSnapshot(next),
-      actor: auditActorFromSession(auth.session)
-    });
+      if (transitionLock.count === 0) {
+        throw new Error("ExpenseStatusTransitionConflict");
+      }
 
-    return next;
-  });
+      const next = await tx.expense.findUnique({
+        where: { id: expenseId },
+        include: expenseInclude
+      });
+      if (!next) {
+        throw new Error("ExpenseMissingAfterTransition");
+      }
+
+      await recordAuditLog({
+        db: tx,
+        module: "expenses",
+        entityType: "expense",
+        entityId: expenseId,
+        action,
+        description: buildAuditDescription(action, auth.session.name, expenseId),
+        before: expenseAuditSnapshot(existing),
+        after: expenseAuditSnapshot(next),
+        actor: auditActorFromSession(auth.session)
+      });
+
+      return next;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "ExpenseStatusTransitionConflict") {
+      return NextResponse.json(
+        {
+          message:
+            "Expense status changed by another action. Refresh and retry with the latest record state."
+        },
+        { status: 409 }
+      );
+    }
+    throw error;
+  }
+
+  if (!updated) {
+    return NextResponse.json({ message: "Expense status update could not be confirmed." }, { status: 500 });
+  }
 
   return NextResponse.json({ data: serializeExpenseForClient(updated) });
 }
@@ -149,7 +182,7 @@ function buildTransition({
   reason
 }: {
   action: StatusAction;
-  status: string;
+  status: EntryApprovalStatus;
   userId: string;
   reason: string;
 }) {
@@ -162,12 +195,13 @@ function buildTransition({
     }
     return {
       ok: true as const,
+      expectedStatus: status,
       data: {
         approvalStatus: "SUBMITTED" as const,
         submittedAt: new Date(),
         rejectionReason: null,
         approvedAt: null,
-        approvedBy: { disconnect: true }
+        approvedById: null
       }
     };
   }
@@ -178,11 +212,12 @@ function buildTransition({
     }
     return {
       ok: true as const,
+      expectedStatus: status,
       data: {
         approvalStatus: "APPROVED" as const,
         approvedAt: new Date(),
         rejectionReason: null,
-        approvedBy: { connect: { id: userId } }
+        approvedById: userId
       }
     };
   }
@@ -193,11 +228,12 @@ function buildTransition({
     }
     return {
       ok: true as const,
+      expectedStatus: status,
       data: {
         approvalStatus: "REJECTED" as const,
         approvedAt: new Date(),
         rejectionReason: reason,
-        approvedBy: { connect: { id: userId } }
+        approvedById: userId
       }
     };
   }
@@ -207,11 +243,12 @@ function buildTransition({
   }
   return {
     ok: true as const,
+    expectedStatus: status,
     data: {
       approvalStatus: "DRAFT" as const,
       approvedAt: null,
       rejectionReason: null,
-      approvedBy: { disconnect: true }
+      approvedById: null
     }
   };
 }

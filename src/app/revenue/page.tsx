@@ -7,6 +7,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import {
+  AnalyticsEmptyState,
+  getScopedKpiHelper,
+  getScopedKpiValue
+} from "@/components/layout/analytics-empty-state";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { DataTable } from "@/components/ui/table";
@@ -62,7 +67,7 @@ export default function RevenuePage() {
 function RevenuePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { filters } = useAnalyticsFilters();
+  const { filters, resetFilters, setFilters } = useAnalyticsFilters();
   const [summary, setSummary] = useState<RevenueSummary>(emptySummary);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -90,7 +95,7 @@ function RevenuePageContent() {
 
       const payload = response.ok ? await response.json() : emptySummary;
       setSummary(payload || emptySummary);
-    } catch (_error) {
+    } catch {
       setSummary(emptySummary);
     } finally {
       if (!silent) {
@@ -151,11 +156,65 @@ function RevenuePageContent() {
       }),
     [filters, projectIdFilter]
   );
+  const hasRevenueData = useMemo(
+    () =>
+      summary.revenueTrend.length > 0 ||
+      summary.revenueByClient.length > 0 ||
+      summary.revenueByProject.length > 0 ||
+      summary.revenueByRig.length > 0 ||
+      summary.totals.totalRevenue > 0 ||
+      summary.totals.reportsLogged > 0,
+    [
+      summary.revenueByClient.length,
+      summary.revenueByProject.length,
+      summary.revenueByRig.length,
+      summary.revenueTrend.length,
+      summary.totals.reportsLogged,
+      summary.totals.totalRevenue
+    ]
+  );
+  const isFilteredEmpty = !loading && isScoped && !hasRevenueData;
+  const applyDatePreset = useCallback(
+    (days: number) => {
+      const end = new Date();
+      end.setUTCHours(0, 0, 0, 0);
+      const start = new Date(end);
+      start.setUTCDate(end.getUTCDate() - Math.max(days - 1, 0));
+      setFilters((current) => ({
+        ...current,
+        from: endDateIso(start),
+        to: endDateIso(end)
+      }));
+    },
+    [setFilters]
+  );
+  const handleClearFilters = useCallback(() => {
+    resetFilters();
+  }, [resetFilters]);
+  const handleLast30Days = useCallback(() => {
+    applyDatePreset(30);
+  }, [applyDatePreset]);
+  const handleLast90Days = useCallback(() => {
+    applyDatePreset(90);
+  }, [applyDatePreset]);
 
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} />
+        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+
+        {!loading && !hasRevenueData ? (
+          <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
+            <AnalyticsEmptyState
+              variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
+              moduleHint="Create drilling reports first to populate revenue analytics."
+              scopeHint={`${summary.revenueByProject.length} projects in current scope • ${summary.revenueByRig.length} rigs in scope`}
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+            />
+          </Card>
+        ) : null}
 
         <section className="gf-section">
           <SectionHeader
@@ -164,13 +223,26 @@ function RevenuePageContent() {
           />
           <div className="gf-kpi-grid-primary">
           <MetricCard
-            label={isScoped ? "Revenue in Scope (Live)" : "Total Revenue (Live)"}
-            value={formatCurrency(summary.totals.totalRevenue)}
+            label={isScoped ? "Revenue (Scope)" : "Revenue"}
+            value={getScopedKpiValue(formatCurrency(summary.totals.totalRevenue), isFilteredEmpty)}
             tone="good"
+            change={getScopedKpiHelper(undefined, isFilteredEmpty)}
           />
-          <MetricCard label="Highest Revenue Rig" value={bestRig} />
-          <MetricCard label="Highest Revenue Client" value={bestClient} />
-          <MetricCard label="Best Project" value={bestProject} />
+          <MetricCard
+            label="Highest Revenue Rig"
+            value={getScopedKpiValue(bestRig, isFilteredEmpty)}
+            change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+          />
+          <MetricCard
+            label="Highest Revenue Client"
+            value={getScopedKpiValue(bestClient, isFilteredEmpty)}
+            change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+          />
+          <MetricCard
+            label="Best Project"
+            value={getScopedKpiValue(bestProject, isFilteredEmpty)}
+            change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+          />
           </div>
         </section>
 
@@ -205,7 +277,14 @@ function RevenuePageContent() {
             {loading ? (
               <p className="text-sm text-ink-600">Loading live revenue trend...</p>
             ) : summary.revenueTrend.length === 0 ? (
-              <p className="text-sm text-ink-600">No drilling report revenue data in the selected period.</p>
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No drilling report revenue data recorded yet."
+                scopeHint={`${summary.revenueTrend.length} trend points in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <LineTrendChart
                 data={summary.revenueTrend.map((entry) => ({
@@ -248,6 +327,15 @@ function RevenuePageContent() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.revenueByRig.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No rig revenue records found yet."
+                scopeHint={`${summary.revenueByRig.length} rigs in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.revenueByRig}
@@ -276,6 +364,15 @@ function RevenuePageContent() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.revenueByProject.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No project revenue records found yet."
+                scopeHint={`${summary.revenueByProject.length} projects in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.revenueByProject}
@@ -304,6 +401,15 @@ function RevenuePageContent() {
           >
             {loading ? (
               <p className="text-sm text-ink-600">Loading...</p>
+            ) : summary.revenueByClient.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No client revenue records found yet."
+                scopeHint={`${summary.revenueByClient.length} clients in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <BarCategoryChart
                 data={summary.revenueByClient}
@@ -330,6 +436,15 @@ function RevenuePageContent() {
           <Card title="Revenue Leaderboard (Project)">
             {loading ? (
               <p className="text-sm text-ink-600">Loading leaderboard...</p>
+            ) : summary.revenueByProject.length === 0 ? (
+              <AnalyticsEmptyState
+                variant={isScoped ? "filtered-empty" : "no-data"}
+                moduleHint="No project leaderboard data available yet."
+                scopeHint={`${summary.revenueByProject.length} projects in current scope`}
+                onClearFilters={handleClearFilters}
+                onLast30Days={handleLast30Days}
+                onLast90Days={handleLast90Days}
+              />
             ) : (
               <DataTable
                 columns={["Project", "Revenue"]}
@@ -353,4 +468,8 @@ function RevenuePageFallback() {
       </div>
     </AccessGate>
   );
+}
+
+function endDateIso(date: Date) {
+  return date.toISOString().slice(0, 10);
 }

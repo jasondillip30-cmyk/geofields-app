@@ -1,4 +1,66 @@
 import type { UserRole } from "@/lib/types";
+import {
+  buildGeneralExplanationAnswer,
+  buildSmallTalkAnswer,
+  isBroadGeneralQuestion,
+  isClarificationQuestion,
+  isComparisonQuestion,
+  isFollowUpReference,
+  isGeneralExplanationQuestion,
+  isPlanningQuestion,
+  isSmallTalk,
+  isSummaryQuestion,
+  normalizeUserQuestion,
+  resolveGeoFieldsDecisionCommand,
+  type GeoFieldsDecisionCommand
+} from "@/lib/ai/contextual-copilot-intents";
+import {
+  compactSummaryLine,
+  conciseFocusLine,
+  condenseReason,
+  dedupeText,
+  normalizeKey,
+  trimTrailingPeriod
+} from "@/lib/ai/contextual-copilot-text";
+import {
+  countActiveFilters,
+  inferBudgetSectionId,
+  inferPageKeyFromHref,
+  linkageSectionIdForType,
+  normalizeFocusItems,
+  normalizeIssueType,
+  normalizeSeverity,
+  resolveScopedPageHref
+} from "@/lib/ai/contextual-copilot-context";
+import {
+  buildIssueTypeCounts,
+  clamp,
+  dedupeNavigationTargets as dedupeNavigationTargetsByPrecision,
+  findMetricString,
+  findMetricValue,
+  focusSeverityRank,
+  formatAsMoney,
+  formatMetricValue,
+  hasMetric,
+  inferApprovalTab,
+  readConfidence,
+  readNumber,
+  readString,
+  resolveLargestMetric,
+  roundNumber
+} from "@/lib/ai/contextual-copilot-ranking";
+import {
+  buildComparisonAnswer,
+  buildDecisionFirstNarrative,
+  buildDecisionGuidance,
+  deriveIgnoreConsequence,
+  resolveDelayRisk,
+  resolveEffortLabel,
+  resolveEffortWeight,
+  resolveImpactLabel,
+  resolveUrgencyLabel,
+  resolveDecisionPlanItems
+} from "@/lib/ai/contextual-copilot-response";
 
 export interface CopilotSummaryMetric {
   key?: string;
@@ -422,14 +484,14 @@ function deriveExecutiveFocusItems(tablePreviews: CopilotTablePreview[]) {
       continue;
     }
     const percentUsed = readNumber(row, ["percentUsed"]);
-    const approvedSpend = readNumber(row, ["approvedSpend", "spend", "amount"]);
+    const recognizedSpend = readNumber(row, ["recognizedSpend", "spend", "amount"]);
     const severity =
       /overspent/i.test(status) ? "CRITICAL" : /critical/i.test(status) ? "HIGH" : "MEDIUM";
     items.push({
       id: readString(row, ["id", "entityId"]) || `budget-${normalizeKey(entity)}`,
       label: entity,
       severity,
-      amount: approvedSpend,
+      amount: recognizedSpend,
       href: readString(row, ["href"]) || "/cost-tracking/budget-vs-actual",
       targetId: readString(row, ["targetId", "id", "entityId"]) || undefined,
       sectionId: readString(row, ["sectionId"]) || undefined,
@@ -606,7 +668,7 @@ function deriveBudgetFocusItems(tablePreviews: CopilotTablePreview[]) {
       const entity =
         readString(row, ["rig", "project", "entity", "name", "label"]) || readString(row, ["id"]);
       const status = readString(row, ["status", "statusLabel"]) || "On Track";
-      const amount = readNumber(row, ["approvedSpend", "amount"]);
+      const amount = readNumber(row, ["recognizedSpend", "amount"]);
       const percentUsed = readNumber(row, ["percentUsed"]);
       if (!entity) {
         continue;
@@ -657,7 +719,7 @@ function deriveExpensesFocusItems(tablePreviews: CopilotTablePreview[]) {
   const topCategory = categoryPreview?.rows[0];
   if (topCategory) {
     const categoryName = readString(topCategory, ["name", "category", "label"]);
-    const amount = readNumber(topCategory, ["amount", "total", "approvedSpend"]);
+    const amount = readNumber(topCategory, ["amount", "total", "recognizedSpend"]);
     const share = readNumber(topCategory, ["share", "percent", "percentUsed"]);
     if (categoryName) {
       items.push({
@@ -680,7 +742,7 @@ function deriveExpensesFocusItems(tablePreviews: CopilotTablePreview[]) {
   const topProject = projectPreview?.rows[0];
   if (topProject) {
     const projectName = readString(topProject, ["name", "project", "label"]);
-    const amount = readNumber(topProject, ["amount", "total", "approvedSpend"]);
+    const amount = readNumber(topProject, ["amount", "total", "recognizedSpend"]);
     const share = readNumber(topProject, ["share", "percent", "percentUsed"]);
     if (projectName) {
       items.push({
@@ -703,7 +765,7 @@ function deriveExpensesFocusItems(tablePreviews: CopilotTablePreview[]) {
   const topRig = rigPreview?.rows[0];
   if (topRig) {
     const rigName = readString(topRig, ["name", "rig", "label"]);
-    const amount = readNumber(topRig, ["amount", "total", "approvedSpend"]);
+    const amount = readNumber(topRig, ["amount", "total", "recognizedSpend"]);
     const share = readNumber(topRig, ["share", "percent", "percentUsed"]);
     if (rigName) {
       const isUnassigned = /unassigned/i.test(rigName);
@@ -871,7 +933,7 @@ function deriveRigsFocusItems(tablePreviews: CopilotTablePreview[]) {
         issueType: "REVENUE_OPPORTUNITY",
         reason:
           revenue !== null
-            ? `${rig} currently leads approved revenue at ${formatAsMoney(revenue)}.`
+            ? `${rig} currently leads recognized revenue at ${formatAsMoney(revenue)}.`
             : `${rig} currently leads revenue contribution in scope.`
       });
     }
@@ -894,7 +956,7 @@ function deriveRigsFocusItems(tablePreviews: CopilotTablePreview[]) {
         issueType: "RIG_SPEND",
         reason:
           expense !== null
-            ? `${rig} currently carries ${formatAsMoney(expense)} in approved cost.`
+            ? `${rig} currently carries ${formatAsMoney(expense)} in recognized cost.`
             : `${rig} currently carries the highest visible expense load.`
       });
     }
@@ -970,8 +1032,8 @@ function deriveMetricFocusItems(context: CopilotPageContext) {
       label: `Top revenue rig • ${topRevenueRig}`,
       reason:
         topRevenueRigAmount > 0
-          ? `${topRevenueRig} currently leads approved revenue at ${formatAsMoney(topRevenueRigAmount)}.`
-          : `${topRevenueRig} currently leads approved revenue in scope.`,
+          ? `${topRevenueRig} currently leads recognized revenue at ${formatAsMoney(topRevenueRigAmount)}.`
+          : `${topRevenueRig} currently leads recognized revenue in scope.`,
       severity: "MEDIUM",
       amount: topRevenueRigAmount || null,
       issueType: "REVENUE_OPPORTUNITY"
@@ -986,8 +1048,8 @@ function deriveMetricFocusItems(context: CopilotPageContext) {
       label: `Top revenue project • ${topRevenueProject}`,
       reason:
         topRevenueProjectAmount > 0
-          ? `${topRevenueProject} currently leads approved project revenue at ${formatAsMoney(topRevenueProjectAmount)}.`
-          : `${topRevenueProject} currently leads approved project revenue in scope.`,
+          ? `${topRevenueProject} currently leads recognized project revenue at ${formatAsMoney(topRevenueProjectAmount)}.`
+          : `${topRevenueProject} currently leads recognized project revenue in scope.`,
       severity: "MEDIUM",
       amount: topRevenueProjectAmount || null,
       issueType: "REVENUE_OPPORTUNITY"
@@ -1018,8 +1080,8 @@ function deriveMetricFocusItems(context: CopilotPageContext) {
       label: `Highest expense rig • ${highestExpenseRig}`,
       reason:
         highestExpenseRigAmount > 0
-          ? `${highestExpenseRig} currently carries ${formatAsMoney(highestExpenseRigAmount)} of approved spend.`
-          : `${highestExpenseRig} currently carries the highest approved spend in scope.`,
+          ? `${highestExpenseRig} currently carries ${formatAsMoney(highestExpenseRigAmount)} of recognized spend.`
+          : `${highestExpenseRig} currently carries the highest recognized spend in scope.`,
       severity: highestExpenseRigAmount >= 50000 ? "HIGH" : "MEDIUM",
       amount: highestExpenseRigAmount || null,
       issueType: "RIG_SPEND"
@@ -1074,7 +1136,7 @@ function deriveMetricFocusItems(context: CopilotPageContext) {
       label: "Revenue attribution gap",
       reason: `${formatAsMoney(
         revenueAttributionGapAmount
-      )} in approved revenue is missing rig attribution and can weaken rig-level performance decisions.`,
+      )} in recognized revenue is missing rig attribution and can weaken rig-level performance decisions.`,
       severity: "HIGH",
       amount: revenueAttributionGapAmount,
       issueType: "LINKAGE"
@@ -1148,7 +1210,7 @@ function deriveSummary({
   if (context.pageKey === "data-quality-linkage-center") {
     const costAffected = findMetricValue(context.summaryMetrics, [/cost affected/i]);
     const linkageCount = findMetricValue(context.summaryMetrics, [/linkage/i]);
-    return `${linkageCount} linkage record(s) can impact ${formatAsMoney(costAffected)} approved cost reporting.`;
+    return `${linkageCount} linkage record(s) can impact ${formatAsMoney(costAffected)} recognized cost reporting.`;
   }
 
   if (context.pageKey === "budget-vs-actual") {
@@ -1161,7 +1223,10 @@ function deriveSummary({
 
   if (context.pageKey === "expenses") {
     const total = findMetricValue(context.summaryMetrics, [/total expenses/i, /totalExpenses/i]);
-    const approved = findMetricValue(context.summaryMetrics, [/approved expenses/i, /approvedExpenses/i]);
+    const recognized = findMetricValue(context.summaryMetrics, [
+      /recognized expenses/i,
+      /recognizedExpenses/i
+    ]);
     const submitted = findMetricValue(context.summaryMetrics, [/submitted expenses/i, /submittedExpenses/i]);
     const missingRig = findMetricValue(context.summaryMetrics, [/missing rig linkage/i, /missingRigLinkage/i]);
     const missingProject = findMetricValue(
@@ -1175,7 +1240,7 @@ function deriveSummary({
       return "No expense spend is visible in the current scope yet.";
     }
     const details = [
-      `Visible spend is ${formatAsMoney(total)} (${formatAsMoney(approved)} approved).`,
+      `Visible spend is ${formatAsMoney(total)} (${formatAsMoney(recognized)} recognized).`,
       topCategory && topCategory !== "N/A" ? `Largest category is ${topCategory}.` : null,
       topProject && topProject !== "N/A" ? `Highest-cost project is ${topProject}.` : null,
       topRig && topRig !== "N/A" ? `Highest-cost rig is ${topRig}.` : null,
@@ -1276,7 +1341,7 @@ function deriveKeyInsights({
 
   const linkageCount = findMetricValue(context.summaryMetrics, [/missing.*linkage/i, /needs linkage/i]);
   if (linkageCount > 0) {
-    insights.push(`${linkageCount} approved record(s) still need rig/project/maintenance linkage.`);
+    insights.push(`${linkageCount} record(s) still need rig/project/maintenance linkage.`);
   }
 
   if (focusItems.length > 0) {
@@ -1427,7 +1492,7 @@ function derivePageSpecificInsights({
       .filter((item) => (item.amount ?? 0) < 25000 && item.confidence === "HIGH")
       .length;
     return [
-      `Linkage impact: ${missingRig + missingProject + missingMaintenance} record(s) need correction, affecting ${formatAsMoney(costAffected)} approved cost.`,
+      `Linkage impact: ${missingRig + missingProject + missingMaintenance} record(s) need correction, affecting ${formatAsMoney(costAffected)} recognized cost.`,
       highValueLowConfidence > 0
         ? `${highValueLowConfidence} high-value linkage candidate(s) have low confidence and need manager judgment.`
         : "Highest-value linkage candidates have acceptable confidence for guided review.",
@@ -1459,7 +1524,10 @@ function derivePageSpecificInsights({
 
   if (context.pageKey === "expenses") {
     const total = findMetricValue(context.summaryMetrics, [/total expenses/i, /totalExpenses/i]);
-    const approved = findMetricValue(context.summaryMetrics, [/approved expenses/i, /approvedExpenses/i]);
+    const recognized = findMetricValue(context.summaryMetrics, [
+      /recognized expenses/i,
+      /recognizedExpenses/i
+    ]);
     const submittedCount = findMetricValue(context.summaryMetrics, [/submitted expenses/i, /submittedExpenses/i]);
     const submittedAmount = findMetricValue(
       context.summaryMetrics,
@@ -1485,7 +1553,7 @@ function derivePageSpecificInsights({
     const linkageTotal = missingRig + missingProject + missingClient;
     return [
       total > 0
-        ? `Expenses in view: ${formatAsMoney(total)} total, with ${formatAsMoney(approved)} currently approved.`
+        ? `Expenses in view: ${formatAsMoney(total)} total, with ${formatAsMoney(recognized)} currently recognized.`
         : "No expenses are currently visible in this filter scope.",
       topCategory && topCategory !== "N/A"
         ? `Primary cost driver is ${topCategory}${topProject && topProject !== "N/A" ? `, with ${topProject} as top project spend` : ""}${topRig && topRig !== "N/A" ? ` and ${topRig} as top rig spend` : ""}.`
@@ -1604,8 +1672,8 @@ function derivePageSpecificInsights({
         ? `Highest active mechanic workload is currently on ${topMechanic}.`
         : "Mechanic workload appears balanced in current scope.",
       submitted + underReview > 0
-        ? "Approval priority order: oldest pending critical/high urgency requests first, then waiting-for-parts items with longest downtime."
-        : "No maintenance approval bottleneck is currently visible.",
+        ? "Operational priority: handle the oldest critical/high urgency work first, then waiting-for-parts items with longest downtime."
+        : "No maintenance bottleneck is currently visible.",
       focusItems.length > 0
         ? `Highest-priority maintenance item: ${focusItems[0].label}.`
         : "No urgent maintenance outlier detected."
@@ -1659,7 +1727,11 @@ function deriveRecommendedActions({
   roleProfile: CopilotRoleProfile;
 }) {
   const actions: string[] = [];
-  const guidance = buildDecisionGuidance(focusItems, roleProfile);
+  const guidance = buildDecisionGuidance(
+    focusItems,
+    roleProfile,
+    rankFocusItemsForDecisionGuidance
+  );
 
   const roleGuidance = resolveRoleDoNowGuidance(roleProfile, focusItems);
   if (roleGuidance) {
@@ -1876,7 +1948,7 @@ function deriveActionRanking({
     ranking.needsManagerJudgment = `${needsManagerJudgment.label} — ${needsManagerJudgment.reason}`;
   }
 
-  const guidance = buildDecisionGuidance(sorted, roleProfile);
+  const guidance = buildDecisionGuidance(sorted, roleProfile, rankFocusItemsForDecisionGuidance);
   if (guidance.doNow) {
     ranking.doNow = guidance.doNow;
   }
@@ -2303,29 +2375,6 @@ function resolveInspectNextHint({
   return "Open linkage details and assign missing fields to restore reporting confidence.";
 }
 
-function condenseReason(value: string, maxLength = 100) {
-  const cleaned = trimTrailingPeriod(value).replace(/\s+/g, " ");
-  if (cleaned.length <= maxLength) {
-    return cleaned;
-  }
-  return `${cleaned.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-}
-
-function compactSummaryLine(summary: string, maxLength = 145) {
-  if (!summary) {
-    return "";
-  }
-  const normalized = summary
-    .replace(/^Atlas\s+(whole-app|related-data)\s+view:\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return condenseReason(normalized, maxLength);
-}
-
-function conciseFocusLine(item: CopilotFocusItem, maxReasonLength = 90) {
-  return `${item.label}: ${condenseReason(item.reason, maxReasonLength)}`;
-}
-
 function scoreActionCandidate(item: CopilotFocusItem) {
   const severityWeight =
     item.severity === "CRITICAL"
@@ -2480,8 +2529,8 @@ function resolveNavigationTargets({
       { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace inventory impact from receipt intake.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" }
     ],
     maintenance: [
-      { label: "Open Maintenance", href: "/maintenance", reason: "Review request queue and urgency.", pageKey: "maintenance", sectionId: "maintenance-log-section" },
-      { label: "Open Approvals", href: "/approvals?tab=maintenance", reason: "Process maintenance approvals.", pageKey: "approvals", sectionId: "approvals-tab-maintenance" }
+      { label: "Open Maintenance", href: "/maintenance", reason: "Review maintenance activity log and rig status.", pageKey: "maintenance", sectionId: "maintenance-log-section" },
+      { label: "Open Breakdowns", href: "/breakdowns", reason: "Check open breakdowns linked to maintenance work.", pageKey: "breakdowns", sectionId: "breakdown-log-section" }
     ],
     rigs: [
       { label: "Open Rigs", href: "/rigs", reason: "Review rig condition and utilization risk.", pageKey: "rigs", sectionId: "rig-registry-section" },
@@ -2586,165 +2635,6 @@ export function classifyCopilotIntent({
   return "app_guidance";
 }
 
-function isSummaryQuestion(normalizedQuestion: string) {
-  return (
-    normalizedQuestion.includes("summarize this page") ||
-    normalizedQuestion.includes("summarize") ||
-    normalizedQuestion.includes("summary") ||
-    normalizedQuestion.includes("what's happening") ||
-    normalizedQuestion.includes("what is happening")
-  );
-}
-
-function isGeneralExplanationQuestion(normalizedQuestion: string) {
-  const startsAsDefinition =
-    normalizedQuestion.startsWith("what is ") ||
-    normalizedQuestion.startsWith("what's ") ||
-    normalizedQuestion.startsWith("define ") ||
-    normalizedQuestion.startsWith("explain ");
-  if (!startsAsDefinition) {
-    return false;
-  }
-  return (
-    normalizedQuestion.includes("expense") ||
-    normalizedQuestion.includes("profit") ||
-    normalizedQuestion.includes("pending approval") ||
-    normalizedQuestion.includes("approval") ||
-    normalizedQuestion.includes("budget") ||
-    normalizedQuestion.includes("overspent") ||
-    normalizedQuestion.includes("linkage") ||
-    normalizedQuestion.includes("maintenance") ||
-    normalizedQuestion.includes("forecast")
-  );
-}
-
-function isBroadGeneralQuestion(normalizedQuestion: string) {
-  const startsGeneral =
-    normalizedQuestion.startsWith("what is ") ||
-    normalizedQuestion.startsWith("what's ") ||
-    normalizedQuestion.startsWith("how does ") ||
-    normalizedQuestion.startsWith("why does ") ||
-    normalizedQuestion.startsWith("can you explain ");
-  if (!startsGeneral) {
-    return false;
-  }
-  return (
-    !normalizedQuestion.includes("this page") &&
-    !normalizedQuestion.includes("here") &&
-    !normalizedQuestion.includes("this record") &&
-    !normalizedQuestion.includes("this item")
-  );
-}
-
-function isSmallTalk(normalizedQuestion: string) {
-  const punctuationTolerant = normalizedQuestion.replace(/[.!?]+$/g, "").trim();
-  return (
-    punctuationTolerant === "hey" ||
-    punctuationTolerant === "hi" ||
-    punctuationTolerant === "hello" ||
-    punctuationTolerant === "what's up" ||
-    punctuationTolerant === "whats up" ||
-    punctuationTolerant === "you good" ||
-    punctuationTolerant === "okay" ||
-    punctuationTolerant === "ok" ||
-    punctuationTolerant === "thanks" ||
-    punctuationTolerant === "thank you" ||
-    normalizedQuestion.includes("how are you") ||
-    normalizedQuestion.includes("can you help me")
-  );
-}
-
-function isFollowUpReference(normalizedQuestion: string) {
-  return (
-    normalizedQuestion === "that one" ||
-    normalizedQuestion === "that item" ||
-    normalizedQuestion.includes("the one you just showed") ||
-    normalizedQuestion.includes("the first one") ||
-    normalizedQuestion.includes("that issue")
-  );
-}
-
-function isComparisonQuestion(normalizedQuestion: string) {
-  return (
-    normalizedQuestion.includes("compare the top two") ||
-    normalizedQuestion.includes("compare these two") ||
-    normalizedQuestion.includes("which is more urgent") ||
-    normalizedQuestion.includes("which is higher value") ||
-    normalizedQuestion.includes("which is easiest to fix")
-  );
-}
-
-function isPlanningQuestion(normalizedQuestion: string) {
-  return (
-    normalizedQuestion.includes("what should i do first") ||
-    normalizedQuestion.includes("what should i do next") ||
-    normalizedQuestion.includes("what should i do") ||
-    normalizedQuestion.includes("what needs attention first") ||
-    normalizedQuestion.includes("next 10 minutes") ||
-    normalizedQuestion.includes("can wait") ||
-    normalizedQuestion.includes("can this wait") ||
-    normalizedQuestion.includes("quickest win") ||
-    normalizedQuestion.includes("quick win")
-  );
-}
-
-function isClarificationQuestion(normalizedQuestion: string) {
-  return (
-    normalizedQuestion === "why" ||
-    normalizedQuestion === "why?" ||
-    normalizedQuestion.includes("what do you mean") ||
-    normalizedQuestion.includes("explain that simply") ||
-    normalizedQuestion.includes("explain this simply")
-  );
-}
-
-function normalizeUserQuestion(question: string) {
-  return question.toLowerCase().trim();
-}
-
-type GeoFieldsDecisionCommand =
-  | "TOP_REVENUE_RIG"
-  | "HIGHEST_EXPENSE_RIG"
-  | "RIGS_NEEDING_ATTENTION"
-  | "PENDING_MAINTENANCE_RISKS"
-  | "BIGGEST_PROFITABILITY_ISSUE"
-  | "DATA_GAPS_HURTING_REPORTS"
-  | "TOP_MAINTENANCE_ISSUE"
-  | "TOP_RIG_RISK"
-  | "BIGGEST_APPROVAL_ISSUE";
-
-function resolveGeoFieldsDecisionCommand(
-  normalizedQuestion: string
-): GeoFieldsDecisionCommand | null {
-  if (normalizedQuestion.includes("top revenue rig")) {
-    return "TOP_REVENUE_RIG";
-  }
-  if (normalizedQuestion.includes("highest expense rig")) {
-    return "HIGHEST_EXPENSE_RIG";
-  }
-  if (normalizedQuestion.includes("rigs needing attention")) {
-    return "RIGS_NEEDING_ATTENTION";
-  }
-  if (normalizedQuestion.includes("pending maintenance risks") || normalizedQuestion.includes("pending maintenance risk")) {
-    return "PENDING_MAINTENANCE_RISKS";
-  }
-  if (normalizedQuestion.includes("biggest profitability issue")) {
-    return "BIGGEST_PROFITABILITY_ISSUE";
-  }
-  if (normalizedQuestion.includes("data gaps hurting reports")) {
-    return "DATA_GAPS_HURTING_REPORTS";
-  }
-  if (normalizedQuestion.includes("top maintenance issue")) {
-    return "TOP_MAINTENANCE_ISSUE";
-  }
-  if (normalizedQuestion.includes("top rig risk")) {
-    return "TOP_RIG_RISK";
-  }
-  if (normalizedQuestion.includes("biggest approval issue")) {
-    return "BIGGEST_APPROVAL_ISSUE";
-  }
-  return null;
-}
 
 function prioritizeFocusItemsForQuestion({
   question,
@@ -2833,115 +2723,6 @@ function resolveViewPrefix(context: CopilotPageContext) {
   return "";
 }
 
-function buildSmallTalkAnswer(normalizedQuestion: string) {
-  const punctuationTolerant = normalizedQuestion.replace(/[.!?]+$/g, "").trim();
-  if (normalizedQuestion.includes("how are you")) {
-    return "Doing well and ready to help. Want a quick summary or the top action to take now?";
-  }
-  if (
-    punctuationTolerant === "hey" ||
-    punctuationTolerant === "hi" ||
-    punctuationTolerant === "hello" ||
-    punctuationTolerant.includes("what's up") ||
-    punctuationTolerant.includes("whats up") ||
-    punctuationTolerant.includes("you good")
-  ) {
-    return "Hey — I’m here with you. Want me to break down what needs attention first?";
-  }
-  if (normalizedQuestion.includes("can you help me")) {
-    return "Absolutely. Tell me what decision you’re trying to make, and I’ll keep it simple.";
-  }
-  if (punctuationTolerant.includes("thanks") || punctuationTolerant.includes("thank you")) {
-    return "Anytime. If you want, I can line up the next best move.";
-  }
-  if (punctuationTolerant === "ok" || punctuationTolerant === "okay") {
-    return "Sounds good. Want to continue with the top priority or switch scope?";
-  }
-  return "I’m here and ready. Ask me anything, and I’ll keep it practical.";
-}
-
-function buildGeneralExplanationAnswer({
-  question,
-  context,
-  topFocus,
-  summary
-}: {
-  question: string;
-  context: CopilotPageContext;
-  topFocus: CopilotFocusItem | null | undefined;
-  summary: string;
-}) {
-  if (question.includes("what is an expense") || question.includes("what is expense")) {
-    return buildExplanationWithAppNote(
-      "An expense is money the company spends to run operations, such as fuel, labor, parts, travel, or services.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-  if (question.includes("what is profit") || question.includes("what's profit")) {
-    return buildExplanationWithAppNote(
-      "Profit is the amount left after approved costs are subtracted from revenue. In simple terms: profit = revenue - approved expenses.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-  if (question.includes("pending approval") || question.includes("pending approvals")) {
-    return buildExplanationWithAppNote(
-      "Pending approval means a record was submitted but has not been approved or rejected yet, so it is still waiting on a manager decision.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-  if (question.includes("budget")) {
-    return buildExplanationWithAppNote(
-      "A budget is planned spend for a scope (like a rig or project). Budget vs Actual compares approved spend against that plan to show pressure early.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-  if (question.includes("linkage")) {
-    return buildExplanationWithAppNote(
-      "Linkage means connecting a cost record to its operational owner, such as rig, project, or maintenance request, so reporting stays accurate.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-  if (question.includes("forecast")) {
-    return buildExplanationWithAppNote(
-      "Forecasting estimates future financial outcomes from current approved signals and trend direction, so managers can act before risks grow.",
-      context,
-      summary,
-      topFocus
-    );
-  }
-
-  return buildExplanationWithAppNote(
-    "That term describes how operations and finance records are interpreted for decision-making. I can break it down with a concrete app example if you want.",
-    context,
-    summary,
-    topFocus
-  );
-}
-
-function buildExplanationWithAppNote(
-  explanation: string,
-  context: CopilotPageContext,
-  summary: string,
-  topFocus: CopilotFocusItem | null | undefined
-) {
-  if (context.pageKey === "atlas-whole-app" || context.pageKey === "atlas-related") {
-    return `${explanation} If you want, I can tie this back to your current app-wide priorities.`;
-  }
-  if (topFocus || summary) {
-    return `${explanation} If helpful, I can apply that directly to what you’re looking at now.`;
-  }
-  return explanation;
-}
 
 function buildAnswer({
   intent,
@@ -3005,8 +2786,16 @@ function buildAnswer({
   const latestAssistantContext = context.sessionContext?.recentConversation?.find(
     (entry) => entry.role === "assistant" && typeof entry.text === "string" && entry.text.trim().length > 0
   )?.text;
-  const decisionGuidance = buildDecisionGuidance(decisionCandidates, roleProfile);
-  const decisionPlan = resolveDecisionPlanItems(decisionCandidates, roleProfile);
+  const decisionGuidance = buildDecisionGuidance(
+    decisionCandidates,
+    roleProfile,
+    rankFocusItemsForDecisionGuidance
+  );
+  const decisionPlan = resolveDecisionPlanItems(
+    decisionCandidates,
+    roleProfile,
+    rankFocusItemsForDecisionGuidance
+  );
   const decisionNarrative = buildDecisionFirstNarrative(decisionPlan);
   const conciseSummary = compactSummaryLine(summary);
 
@@ -3402,258 +3191,6 @@ function buildGeoFieldsCommandAnswer({
   return null;
 }
 
-function buildComparisonAnswer({
-  normalizedQuestion,
-  first,
-  second
-}: {
-  normalizedQuestion: string;
-  first: CopilotFocusItem | undefined | null;
-  second: CopilotFocusItem | undefined | null;
-}) {
-  if (!first && !second) {
-    return "I don’t have two comparable issues in this scope yet. Ask me to surface more focus items first.";
-  }
-  if (!first || !second) {
-    const item = first || second;
-    return `${item?.label} is the only strong focus item right now, so it stays first.`;
-  }
-
-  const urgencyWinner =
-    focusSeverityRank(first.severity) <= focusSeverityRank(second.severity) ? first : second;
-  const valueWinner = (first.amount ?? 0) >= (second.amount ?? 0) ? first : second;
-  const effortWinner =
-    resolveEffortWeight(first) <= resolveEffortWeight(second) ? first : second;
-
-  if (normalizedQuestion.includes("more urgent")) {
-    return `${urgencyWinner.label} is more urgent because it carries ${resolveUrgencyLabel(urgencyWinner).toLowerCase()} urgency (${urgencyWinner.reason}).`;
-  }
-  if (normalizedQuestion.includes("higher value")) {
-    if ((valueWinner.amount ?? 0) <= 0) {
-      return `Both issues have limited value metadata, so urgency is a better tiebreaker: ${urgencyWinner.label} first.`;
-    }
-    return `${valueWinner.label} is higher value at ${formatAsMoney(valueWinner.amount || 0)} impact.`;
-  }
-  if (normalizedQuestion.includes("easiest to fix")) {
-    return `${effortWinner.label} looks easier to fix first (${resolveEffortLabel(effortWinner).toLowerCase()} effort).`;
-  }
-
-  const valueLine =
-    (valueWinner.amount ?? 0) > 0
-      ? `Higher value: ${valueWinner.label} (${formatAsMoney(valueWinner.amount || 0)}).`
-      : "Value impact is similar from available data.";
-  return [
-    `Urgency: ${urgencyWinner.label} should go first.`,
-    valueLine,
-    `Easiest fix: ${effortWinner.label} (${resolveEffortLabel(effortWinner).toLowerCase()} effort).`
-  ].join(" ");
-}
-
-function deriveIgnoreConsequence(topFocus: CopilotFocusItem | undefined) {
-  if (!topFocus) {
-    return "If this is ignored, hidden risk can accumulate and shift from manageable to urgent without visibility.";
-  }
-  const issueType = normalizeIssueType(topFocus.issueType);
-  if (issueType === "APPROVAL_BACKLOG") {
-    return "Ignoring this keeps approval-sensitive data stale, delays decisions, and can distort near-term operational visibility.";
-  }
-  if (issueType === "BUDGET_PRESSURE" || issueType === "NO_BUDGET") {
-    return "Ignoring this can let spend continue without containment and increase budget variance risk.";
-  }
-  if (issueType === "LINKAGE") {
-    return "Ignoring this can keep reporting linkage gaps unresolved, which weakens decision-grade analytics.";
-  }
-  if (issueType === "MAINTENANCE") {
-    return "Ignoring this can extend downtime risk and delay operational recovery.";
-  }
-  if (issueType === "RIG_RISK") {
-    return "Ignoring this can degrade reliability and leave utilization losses unresolved.";
-  }
-  if (issueType === "PROFITABILITY") {
-    return "Ignoring this can let low-margin activity continue and compress net profit.";
-  }
-  if (issueType === "REVENUE_OPPORTUNITY") {
-    return "Ignoring this can delay high-yield production opportunities.";
-  }
-  if (issueType === "COST_DRIVER") {
-    return "Ignoring this can allow concentrated spend to continue without review or corrective action.";
-  }
-  return `Ignoring ${topFocus.label} can increase operational and financial pressure over time.`;
-}
-
-function buildDecisionGuidance(
-  candidates: CopilotFocusItem[],
-  roleProfile: CopilotRoleProfile | null = null
-) {
-  const { doNowItem, doNextItem, canWaitItem } = resolveDecisionPlanItems(candidates, roleProfile);
-
-  return {
-    doNow: doNowItem ? formatDecisionLine(doNowItem) : undefined,
-    doNext: doNextItem ? formatDecisionLine(doNextItem) : undefined,
-    canWait: canWaitItem
-      ? `${formatDecisionLine(canWaitItem)} If delayed: ${resolveDelayRisk(canWaitItem)}`
-      : undefined
-  };
-}
-
-function resolveDecisionPlanItems(
-  candidates: CopilotFocusItem[],
-  roleProfile: CopilotRoleProfile | null = null
-) {
-  const ranked = rankFocusItems(candidates, roleProfile);
-  const doNowItem = ranked.find((item) => item.severity === "CRITICAL" || item.severity === "HIGH") || ranked[0] || null;
-  const remaining = ranked.filter((item) => item.id !== doNowItem?.id);
-  const doNextItem =
-    [...remaining].sort((a, b) => {
-      const amountDiff = (b.amount ?? 0) - (a.amount ?? 0);
-      if (amountDiff !== 0) {
-        return amountDiff;
-      }
-      return focusSeverityRank(a.severity) - focusSeverityRank(b.severity);
-    })[0] || remaining[0] || null;
-  const canWaitItem =
-    [...remaining]
-      .reverse()
-      .find((item) => item.severity === "LOW" || item.severity === "MEDIUM") || null;
-  return {
-    ranked,
-    doNowItem,
-    doNextItem,
-    canWaitItem
-  };
-}
-
-function buildDecisionFirstNarrative({
-  doNowItem,
-  doNextItem,
-  canWaitItem,
-  includeCanWait = true
-}: {
-  doNowItem: CopilotFocusItem | null;
-  doNextItem: CopilotFocusItem | null;
-  canWaitItem: CopilotFocusItem | null;
-  includeCanWait?: boolean;
-}) {
-  if (!doNowItem) {
-    return "";
-  }
-  const reasonLine = condenseReason(
-    doNowItem.reason || "it has the strongest current operational impact",
-    68
-  );
-  const startLine = `Start with ${doNowItem.label} (${reasonLine}).`;
-  const nextLine = doNextItem ? `Then ${doNextItem.label}.` : "";
-  const canWaitLine =
-    includeCanWait && canWaitItem && canWaitItem.id !== doNextItem?.id
-      ? `${canWaitItem.label} can wait until later.`
-      : "";
-  return [startLine, nextLine, canWaitLine].filter(Boolean).join(" ");
-}
-
-function formatDecisionLine(item: CopilotFocusItem) {
-  const urgency = resolveUrgencyLabel(item).toLowerCase();
-  const impact = resolveImpactLabel(item).toLowerCase();
-  const effort = resolveEffortLabel(item).toLowerCase();
-  return `${item.label} (${urgency} urgency, ${impact} impact, ${effort} effort).`;
-}
-
-function resolveUrgencyLabel(item: CopilotFocusItem) {
-  if (item.severity === "CRITICAL") {
-    return "High";
-  }
-  if (item.severity === "HIGH") {
-    return "High";
-  }
-  if (item.severity === "MEDIUM") {
-    return "Medium";
-  }
-  return "Low";
-}
-
-function resolveImpactLabel(item: CopilotFocusItem) {
-  const amount = item.amount ?? 0;
-  if (amount >= 100000) {
-    return "High";
-  }
-  if (amount >= 25000) {
-    return "Medium";
-  }
-  if (amount > 0) {
-    return "Low";
-  }
-  return "Unknown";
-}
-
-function resolveEffortWeight(item: CopilotFocusItem) {
-  const issueType = normalizeIssueType(item.issueType);
-  if (issueType === "APPROVAL_BACKLOG") {
-    return 1;
-  }
-  if (issueType === "LINKAGE") {
-    return item.confidence === "HIGH" ? 1 : item.confidence === "MEDIUM" ? 2 : 3;
-  }
-  if (issueType === "BUDGET_PRESSURE" || issueType === "NO_BUDGET") {
-    return 3;
-  }
-  if (issueType === "MAINTENANCE" || issueType === "RIG_RISK") {
-    return 2;
-  }
-  if (issueType === "REVENUE_OPPORTUNITY") {
-    return 1;
-  }
-  if (issueType === "COST_DRIVER") {
-    return 2;
-  }
-  return 2;
-}
-
-function resolveEffortLabel(item: CopilotFocusItem) {
-  const weight = resolveEffortWeight(item);
-  if (weight <= 1) {
-    return "Low";
-  }
-  if (weight === 2) {
-    return "Medium";
-  }
-  return "High";
-}
-
-function resolveDelayRisk(item: CopilotFocusItem) {
-  const issueType = normalizeIssueType(item.issueType);
-  if (issueType === "APPROVAL_BACKLOG") {
-    return "pending decisions keep operational numbers stale.";
-  }
-  if (issueType === "BUDGET_PRESSURE") {
-    return "overspend can compound before containment actions are taken.";
-  }
-  if (issueType === "NO_BUDGET") {
-    return "unplanned spend can continue without guardrails.";
-  }
-  if (issueType === "LINKAGE") {
-    return "reporting quality stays degraded and can hide real cost ownership.";
-  }
-  if (issueType === "MAINTENANCE") {
-    return "maintenance queue pressure can increase downtime and service delays.";
-  }
-  if (issueType === "RIG_RISK") {
-    return "rig availability and reliability risk can compound.";
-  }
-  if (issueType === "PROFITABILITY") {
-    return "low-margin operations can continue reducing overall profitability.";
-  }
-  if (issueType === "REVENUE_OPPORTUNITY") {
-    return "revenue opportunity can be delayed by unresolved blockers.";
-  }
-  if (issueType === "COST_DRIVER") {
-    return "concentrated spend may continue without review.";
-  }
-  return "risk can escalate quietly and require more effort later.";
-}
-
-function trimTrailingPeriod(value: string) {
-  return value.trim().replace(/[.\s]+$/, "");
-}
-
 function resolveSessionSuggestedFocus(context: CopilotPageContext) {
   const items = (context.sessionContext?.recentSuggestedFocus || [])
     .map((entry, index) => {
@@ -3943,90 +3480,6 @@ function resolvePriorityLabel(score: number): ContextualCopilotResponsePayload["
   return "Low";
 }
 
-function normalizeFocusItems(items: CopilotFocusItem[]) {
-  return items
-    .map((item, index) => ({
-      id: item.id || `focus-${index}`,
-      label: (item.label || "").trim(),
-      reason: (item.reason || "").trim(),
-      severity: normalizeSeverity(item.severity),
-      amount: item.amount ?? null,
-      href: item.href || undefined,
-      issueType: normalizeIssueType(item.issueType),
-      actionLabel: item.actionLabel?.trim() || undefined,
-      inspectHint: item.inspectHint?.trim() || undefined,
-      targetId: item.targetId?.trim() || undefined,
-      sectionId: item.sectionId?.trim() || undefined,
-      targetPageKey: item.targetPageKey || inferPageKeyFromHref(item.href),
-      confidence: normalizeConfidence(item.confidence)
-    }))
-    .filter((item) => item.label && item.reason);
-}
-
-function normalizeSeverity(value: CopilotFocusSeverity | string): CopilotFocusSeverity {
-  if (value === "CRITICAL" || value === "HIGH" || value === "MEDIUM" || value === "LOW") {
-    return value;
-  }
-  return "MEDIUM";
-}
-
-function normalizeConfidence(
-  value: CopilotSuggestionConfidence | string | null | undefined
-): CopilotSuggestionConfidence | null {
-  if (value === "HIGH" || value === "MEDIUM" || value === "LOW") {
-    return value;
-  }
-  return null;
-}
-
-function normalizeIssueType(value: string | undefined | null) {
-  const source = (value || "").trim();
-  if (!source) {
-    return "GENERAL";
-  }
-  const normalized = source.replace(/\s+/g, "_").toUpperCase();
-  if (normalized.includes("NO_BUDGET")) {
-    return "NO_BUDGET";
-  }
-  if (normalized.includes("OVERSPENT") || normalized.includes("BUDGET")) {
-    return "BUDGET_PRESSURE";
-  }
-  if (normalized.includes("APPROVAL")) {
-    return "APPROVAL_BACKLOG";
-  }
-  if (normalized.includes("DRILLING")) {
-    return "APPROVAL_BACKLOG";
-  }
-  if (normalized.includes("PROFITABILITY") || normalized.includes("MARGIN") || normalized.includes("LOW_REVENUE")) {
-    return "PROFITABILITY";
-  }
-  if (normalized.includes("REVENUE_OPPORTUNITY") || normalized.includes("TOP_REVENUE") || normalized.includes("REVENUE")) {
-    return "REVENUE_OPPORTUNITY";
-  }
-  if (normalized.includes("RIG_RISK") || normalized.includes("UTILIZATION")) {
-    return "RIG_RISK";
-  }
-  if (normalized.includes("RIG_SPEND")) {
-    return "RIG_SPEND";
-  }
-  if (normalized.includes("PROJECT_SPEND")) {
-    return "PROJECT_SPEND";
-  }
-  if (normalized.includes("COST_DRIVER")) {
-    return "COST_DRIVER";
-  }
-  if (normalized.includes("MAINTENANCE")) {
-    return "MAINTENANCE";
-  }
-  if (normalized.includes("LINKAGE")) {
-    return "LINKAGE";
-  }
-  if (normalized.includes("ALERT")) {
-    return "ALERT";
-  }
-  return normalized;
-}
-
 function mergeFocusItemsByRecord(items: CopilotFocusItem[]) {
   const grouped = new Map<string, CopilotFocusItem[]>();
   for (const item of items) {
@@ -4229,364 +3682,18 @@ function rankFocusItems(items: CopilotFocusItem[], roleProfile: CopilotRoleProfi
   });
 }
 
-function focusSeverityRank(value: CopilotFocusSeverity) {
-  if (value === "CRITICAL") {
-    return 0;
-  }
-  if (value === "HIGH") {
-    return 1;
-  }
-  if (value === "MEDIUM") {
-    return 2;
-  }
-  return 3;
-}
-
-function resolveLargestMetric(metrics: CopilotSummaryMetric[]) {
-  let candidate: CopilotSummaryMetric | null = null;
-  let largest = Number.NEGATIVE_INFINITY;
-  for (const metric of metrics) {
-    const numeric = parseMetricNumber(metric.value);
-    if (numeric === null) {
-      continue;
-    }
-    if (numeric > largest) {
-      largest = numeric;
-      candidate = metric;
-    }
-  }
-  return candidate;
-}
-
-function hasMetric(metrics: CopilotSummaryMetric[], patterns: RegExp[]) {
-  return findMetricValue(metrics, patterns) > 0;
-}
-
-function findMetricValue(metrics: CopilotSummaryMetric[], patterns: RegExp[]) {
-  for (const metric of metrics) {
-    const searchTarget = `${metric.key || ""} ${metric.label}`.trim();
-    if (!patterns.some((pattern) => pattern.test(searchTarget))) {
-      continue;
-    }
-    const parsed = parseMetricNumber(metric.value);
-    if (parsed !== null) {
-      return parsed;
-    }
-  }
-  return 0;
-}
-
-function findMetricString(metrics: CopilotSummaryMetric[], patterns: RegExp[]) {
-  for (const metric of metrics) {
-    const searchTarget = `${metric.key || ""} ${metric.label}`.trim();
-    if (!patterns.some((pattern) => pattern.test(searchTarget))) {
-      continue;
-    }
-    if (typeof metric.value === "string") {
-      const normalized = metric.value.trim();
-      if (normalized) {
-        return normalized;
+function rankFocusItemsForDecisionGuidance(
+  items: CopilotFocusItem[],
+  roleProfile:
+    | {
+        segment: "MANAGEMENT" | "OFFICE" | "MECHANIC" | "OPERATIONS" | "GENERAL";
       }
-    }
-  }
-  return null;
-}
-
-function parseMetricNumber(value: CopilotSummaryMetric["value"]) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.replace(/[^0-9.-]/g, "");
-  if (!normalized) {
-    return null;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function readString(row: Record<string, string | number | null>, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return String(value);
-    }
-  }
-  return null;
-}
-
-function readNumber(row: Record<string, string | number | null>, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-    if (typeof value === "string") {
-      const parsed = Number(value.replace(/[^0-9.-]/g, ""));
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-  return null;
-}
-
-function readConfidence(row: Record<string, string | number | null>, keys: string[]) {
-  for (const key of keys) {
-    const value = row[key];
-    if (typeof value === "string") {
-      const normalized = value.trim().toUpperCase();
-      if (normalized === "HIGH" || normalized === "MEDIUM" || normalized === "LOW") {
-        return normalized as CopilotSuggestionConfidence;
-      }
-    }
-  }
-  return null;
-}
-
-function formatMetricValue(value: CopilotSummaryMetric["value"]) {
-  if (typeof value === "number") {
-    return new Intl.NumberFormat("en-US").format(value);
-  }
-  return value || "0";
-}
-
-function formatAsMoney(value: number) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0
-  }).format(value || 0);
-}
-
-function roundNumber(value: number) {
-  return Math.round(value * 100) / 100;
-}
-
-function normalizeKey(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-}
-
-function inferApprovalTab(queueLabel: string) {
-  const lower = queueLabel.toLowerCase();
-  if (lower.includes("drilling")) {
-    return "drilling-reports";
-  }
-  if (lower.includes("maintenance")) {
-    return "maintenance";
-  }
-  if (lower.includes("inventory")) {
-    return "inventory-usage";
-  }
-  if (lower.includes("receipt")) {
-    return "receipt-submissions";
-  }
-  return null;
+    | null
+    | undefined
+) {
+  return rankFocusItems(items, (roleProfile as CopilotRoleProfile | null) || null);
 }
 
 function dedupeNavigationTargets(targets: CopilotNavigationTarget[]) {
-  const seen = new Set<string>();
-  const unique: CopilotNavigationTarget[] = [];
-  for (const target of targets) {
-    const dedupeKey = `${target.href}::${target.targetId || ""}::${target.sectionId || ""}`;
-    if (!target.href || seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    unique.push({
-      ...target,
-      targetPrecision:
-        target.targetPrecision ||
-        resolveTargetPrecision({
-          targetId: target.targetId,
-          sectionId: target.sectionId
-        }),
-      availabilityNote: target.availabilityNote || undefined
-    });
-  }
-  return unique;
-}
-
-function dedupeText(values: string[]) {
-  const seen = new Set<string>();
-  const next: string[] = [];
-  for (const value of values) {
-    const key = value.trim();
-    if (!key || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(key);
-  }
-  return next;
-}
-
-function buildIssueTypeCounts(items: CopilotFocusItem[]) {
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const key = normalizeIssueType(item.issueType);
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([type, count]) => ({ type, count }))
-    .sort((a, b) => b.count - a.count);
-}
-
-function resolveScopedPageHref(context: CopilotPageContext) {
-  const fallbackMap: Record<string, string> = {
-    "atlas-related": "/",
-    "atlas-whole-app": "/",
-    "company-dashboard": "/",
-    "executive-overview": "/executive-overview",
-    "alerts-center": "/alerts-center",
-    "data-quality-linkage-center": "/data-quality/linkage-center",
-    "budget-vs-actual": "/cost-tracking/budget-vs-actual",
-    "cost-tracking": "/cost-tracking",
-    expenses: "/expenses",
-    "drilling-reports": "/drilling-reports",
-    breakdowns: "/breakdowns",
-    "inventory-overview": "/inventory",
-    "inventory-items": "/inventory/items",
-    "inventory-stock-movements": "/inventory/stock-movements",
-    "inventory-issues": "/inventory/issues",
-    "inventory-receipt-intake": "/purchasing/receipt-follow-up",
-    "inventory-suppliers": "/inventory/suppliers",
-    "inventory-locations": "/inventory/locations",
-    maintenance: "/maintenance",
-    rigs: "/rigs",
-    profit: "/profit",
-    forecasting: "/forecasting"
-  };
-  const fallback = fallbackMap[context.pageKey] || "/";
-  const params = new URLSearchParams();
-  if (context.filters.clientId && context.filters.clientId !== "all") {
-    params.set("clientId", context.filters.clientId);
-  }
-  if (context.filters.rigId && context.filters.rigId !== "all") {
-    params.set("rigId", context.filters.rigId);
-  }
-  if (context.filters.from) {
-    params.set("from", context.filters.from);
-  }
-  if (context.filters.to) {
-    params.set("to", context.filters.to);
-  }
-  const query = params.toString();
-  return query ? `${fallback}?${query}` : fallback;
-}
-
-function inferPageKeyFromHref(href: string | undefined) {
-  if (!href) {
-    return undefined;
-  }
-  const path = href.split("?")[0] || "";
-  if (path.startsWith("/executive-overview")) {
-    return "executive-overview";
-  }
-  if (path.startsWith("/alerts-center")) {
-    return "alerts-center";
-  }
-  if (path.startsWith("/data-quality/linkage-center")) {
-    return "data-quality-linkage-center";
-  }
-  if (path.startsWith("/cost-tracking/budget-vs-actual")) {
-    return "budget-vs-actual";
-  }
-  if (path.startsWith("/cost-tracking")) {
-    return "cost-tracking";
-  }
-  if (path.startsWith("/expenses")) {
-    return "expenses";
-  }
-  if (path.startsWith("/approvals")) {
-    return "approvals";
-  }
-  if (path.startsWith("/drilling-reports")) {
-    return "drilling-reports";
-  }
-  if (path.startsWith("/breakdowns")) {
-    return "breakdowns";
-  }
-  if (path.startsWith("/maintenance")) {
-    return "maintenance";
-  }
-  if (path.startsWith("/rigs")) {
-    return "rigs";
-  }
-  if (path.startsWith("/profit")) {
-    return "profit";
-  }
-  if (path.startsWith("/forecasting")) {
-    return "forecasting";
-  }
-  if (path.startsWith("/inventory/items")) {
-    return "inventory-items";
-  }
-  if (path.startsWith("/inventory/stock-movements")) {
-    return "inventory-stock-movements";
-  }
-  if (path.startsWith("/inventory/issues")) {
-    return "inventory-issues";
-  }
-  if (path.startsWith("/purchasing/receipt-follow-up")) {
-    return "inventory-receipt-intake";
-  }
-  if (path.startsWith("/inventory/suppliers")) {
-    return "inventory-suppliers";
-  }
-  if (path.startsWith("/inventory/locations")) {
-    return "inventory-locations";
-  }
-  if (path.startsWith("/inventory")) {
-    return "inventory-overview";
-  }
-  if (path.startsWith("/")) {
-    return path.slice(1).replace(/\//g, "-") || "company-dashboard";
-  }
-  return undefined;
-}
-
-function linkageSectionIdForType(linkageLabel: string) {
-  const lower = linkageLabel.toLowerCase();
-  if (lower.includes("rig")) {
-    return "missing-rig-section";
-  }
-  if (lower.includes("project")) {
-    return "missing-project-section";
-  }
-  return "missing-maintenance-section";
-}
-
-function inferBudgetSectionId(row: Record<string, string | number | null>) {
-  const scope = (readString(row, ["scope"]) || "").toLowerCase();
-  if (scope === "rig" || Boolean(readString(row, ["rig"]))) {
-    return "rig-budget-section";
-  }
-  if (scope === "project" || Boolean(readString(row, ["project"]))) {
-    return "project-budget-section";
-  }
-  return "attention-needed-section";
-}
-
-function countActiveFilters(filters: CopilotPageContext["filters"]) {
-  let active = 0;
-  const values = [filters.clientId, filters.rigId, filters.from, filters.to];
-  for (const value of values) {
-    if (!value) {
-      continue;
-    }
-    if (value !== "all") {
-      active += 1;
-    }
-  }
-  return active;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
+  return dedupeNavigationTargetsByPrecision(targets, resolveTargetPrecision);
 }

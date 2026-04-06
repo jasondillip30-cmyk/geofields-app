@@ -1,22 +1,30 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
-import { Card, MetricCard } from "@/components/ui/card";
+import {
+  scrollToFocusElement,
+  useCopilotFocusTarget
+} from "@/components/layout/copilot-focus-target";
+import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
+import { isBreakdownOpenStatus, normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { buildScopedHref } from "@/lib/drilldown";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
 interface ProjectOption {
   id: string;
   name: string;
+  status: string;
   assignedRigId: string | null;
-  client: { name: string };
+  client: {
+    name: string;
+  };
 }
 
 interface RigOption {
@@ -32,32 +40,135 @@ interface BreakdownRecord {
   severity: string;
   downtimeHours: number;
   status: string;
-  client: { name: string };
-  project: { name: string };
-  rig: { rigCode: string };
-  reportedBy: { fullName: string; role: string };
+  client: {
+    name: string;
+  };
+  project: {
+    id: string;
+    name: string;
+    status: string;
+  };
+  rig: {
+    id: string;
+    rigCode: string;
+    status: string;
+  };
+  reportedBy: {
+    fullName: string;
+    role: string;
+  };
 }
 
-type BreakdownWizardStep = 1 | 2 | 3;
+interface BreakdownFormState {
+  projectId: string;
+  title: string;
+  description: string;
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  downtimeHours: string;
+}
+
+interface BreakdownLogFilterState {
+  projectId: string;
+  rigId: string;
+  status: "all" | "OPEN" | "RESOLVED";
+  from: string;
+  to: string;
+}
+
+interface LinkedMaintenanceRow {
+  id: string;
+  requestCode: string;
+  requestDate: string;
+  issueDescription: string;
+  status: string;
+}
+
+interface LinkedUsageRequestRow {
+  id: string;
+  quantity: number;
+  status: string;
+  reason: string;
+  createdAt: string;
+  item: { id: string; name: string; sku: string } | null;
+  requestedBy: { id: string; fullName: string; role: string } | null;
+}
+
+interface LinkedRequisitionRow {
+  id: string;
+  requisitionCode: string;
+  type: string;
+  status: string;
+  submittedAt: string;
+  totals: {
+    estimatedTotalCost: number;
+  };
+}
+
+interface AuditRow {
+  id: string;
+  action: string;
+  description: string;
+  createdAt: string;
+  actorName: string | null;
+}
+
+interface RigBreakdownHistoryRow {
+  rigId: string;
+  resolvedRigId: string | null;
+  rigCode: string;
+  currentStatus: "OPEN" | "RESOLVED" | null;
+  latestBreakdownDate: string;
+  caseCount: number;
+  cases: BreakdownRecord[];
+}
+
+const INITIAL_FORM_STATE: BreakdownFormState = {
+  projectId: "",
+  title: "",
+  description: "",
+  severity: "MEDIUM",
+  downtimeHours: ""
+};
+
+const INITIAL_LOG_FILTER_STATE: BreakdownLogFilterState = {
+  projectId: "",
+  rigId: "",
+  status: "all",
+  from: "",
+  to: ""
+};
 
 export default function BreakdownsPage() {
+  const router = useRouter();
   const { filters } = useAnalyticsFilters();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rigs, setRigs] = useState<RigOption[]>([]);
   const [records, setRecords] = useState<BreakdownRecord[]>([]);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
-  const [wizardStep, setWizardStep] = useState<BreakdownWizardStep>(1);
-  const [form, setForm] = useState({
-    projectId: "",
-    rigId: "",
-    title: "",
-    description: "",
-    severity: "MEDIUM",
-    downtimeHours: "0"
-  });
+  const [logOpen, setLogOpen] = useState(true);
+  const [logFilters, setLogFilters] = useState<BreakdownLogFilterState>(
+    INITIAL_LOG_FILTER_STATE
+  );
+  const [form, setForm] = useState<BreakdownFormState>(INITIAL_FORM_STATE);
+  const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [linkedMaintenanceRows, setLinkedMaintenanceRows] = useState<LinkedMaintenanceRow[]>([]);
+  const [linkedUsageRows, setLinkedUsageRows] = useState<LinkedUsageRequestRow[]>([]);
+  const [linkedRequisitionRows, setLinkedRequisitionRows] = useState<LinkedRequisitionRow[]>([]);
+  const [auditRows, setAuditRows] = useState<AuditRow[]>([]);
+  const [selectedRigHistoryId, setSelectedRigHistoryId] = useState<string | null>(null);
+  const [rigDetailOpen, setRigDetailOpen] = useState(false);
+  const [rigDetailLoading, setRigDetailLoading] = useState(false);
+  const [rigDetailError, setRigDetailError] = useState<string | null>(null);
+  const [rigDetailCases, setRigDetailCases] = useState<BreakdownRecord[]>([]);
 
   async function loadAll() {
     setLoading(true);
@@ -76,7 +187,14 @@ export default function BreakdownsPage() {
 
       setProjects(projectsData.data || []);
       setRigs(rigsData.data || []);
-      setRecords(recordsData.data || []);
+      setRecords(
+        Array.isArray(recordsData.data)
+          ? recordsData.data.map((entry: BreakdownRecord) => ({
+              ...entry,
+              status: normalizeBreakdownStatus(entry.status)
+            }))
+          : []
+      );
     } finally {
       setLoading(false);
     }
@@ -86,20 +204,172 @@ export default function BreakdownsPage() {
     void loadAll();
   }, []);
 
-  const criticalCount = useMemo(
-    () => records.filter((record) => record.severity === "CRITICAL").length,
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setNotice(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
+
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === form.projectId) || null,
+    [form.projectId, projects]
+  );
+  const selectedRigCode = useMemo(() => {
+    if (!selectedProject?.assignedRigId) {
+      return "";
+    }
+    return (
+      rigs.find((rig) => rig.id === selectedProject.assignedRigId)?.rigCode ||
+      ""
+    );
+  }, [rigs, selectedProject?.assignedRigId]);
+  const openRecords = useMemo(
+    () => records.filter((record) => isBreakdownOpenStatus(record.status)),
     [records]
   );
-  const openCount = useMemo(
-    () => records.filter((record) => !["RESOLVED", "COMPLETED", "CLOSED"].includes(record.status)).length,
-    [records]
+  const criticalCount = useMemo(
+    () => openRecords.filter((record) => record.severity === "CRITICAL").length,
+    [openRecords]
+  );
+  const blockedProjectCount = useMemo(
+    () => new Set(openRecords.map((record) => record.project.id)).size,
+    [openRecords]
   );
   const totalDowntime = useMemo(
     () => records.reduce((sum, record) => sum + record.downtimeHours, 0),
     [records]
   );
+  const activeProjects = useMemo(
+    () => projects.filter((project) => project.status === "ACTIVE"),
+    [projects]
+  );
+  const filteredRecords = useMemo(() => {
+    return records.filter((record) => {
+      if (logFilters.projectId && record.project?.id !== logFilters.projectId) {
+        return false;
+      }
+      if (logFilters.rigId && record.rig?.id !== logFilters.rigId) {
+        return false;
+      }
+      const normalizedStatus = normalizeBreakdownStatus(record.status);
+      if (logFilters.status !== "all" && normalizedStatus !== logFilters.status) {
+        return false;
+      }
+      const reportDate = new Date(record.reportDate).toISOString().slice(0, 10);
+      if (logFilters.from && reportDate < logFilters.from) {
+        return false;
+      }
+      if (logFilters.to && reportDate > logFilters.to) {
+        return false;
+      }
+      return true;
+    });
+  }, [logFilters.from, logFilters.projectId, logFilters.rigId, logFilters.status, logFilters.to, records]);
+  const rigHistoryRows = useMemo(() => {
+    const rigIdByCode = new Map(rigs.map((entry) => [entry.rigCode, entry.id] as const));
+    const byRig = new Map<string, RigBreakdownHistoryRow>();
+
+    for (const row of filteredRecords) {
+      const rigCode = row.rig?.rigCode || "Unassigned rig";
+      const resolvedRigId =
+        row.rig?.id || (row.rig?.rigCode ? rigIdByCode.get(row.rig.rigCode) || null : null);
+      const rigGroupId = resolvedRigId || `rig-code-${rigCode.toLowerCase()}`;
+      const existing = byRig.get(rigGroupId);
+      if (existing) {
+        existing.cases.push(row);
+        if (!existing.resolvedRigId && resolvedRigId) {
+          existing.resolvedRigId = resolvedRigId;
+        }
+      } else {
+        byRig.set(rigGroupId, {
+          rigId: rigGroupId,
+          resolvedRigId,
+          rigCode,
+          currentStatus: null,
+          latestBreakdownDate: row.reportDate,
+          caseCount: 0,
+          cases: [row]
+        });
+      }
+    }
+
+    return Array.from(byRig.values())
+      .map((entry) => {
+        const cases = [...entry.cases].sort(
+          (a, b) => breakdownRowSortValue(b) - breakdownRowSortValue(a)
+        );
+        const hasOpenCase = cases.some((row) => isBreakdownOpenStatus(row.status));
+
+        return {
+          ...entry,
+          cases,
+          caseCount: cases.length,
+          latestBreakdownDate: cases[0]?.reportDate || "",
+          currentStatus: hasOpenCase ? "OPEN" : "RESOLVED"
+        };
+      })
+      .sort((a, b) => {
+        const byLatest = breakdownRowSortValue(b.cases[0]) - breakdownRowSortValue(a.cases[0]);
+        if (byLatest !== 0) {
+          return byLatest;
+        }
+        return a.rigCode.localeCompare(b.rigCode);
+      });
+  }, [filteredRecords, rigs]);
+  const rigDetailSelectedRig = useMemo(
+    () => rigHistoryRows.find((entry) => entry.rigId === selectedRigHistoryId) || null,
+    [rigHistoryRows, selectedRigHistoryId]
+  );
+  const rigDetailCaseSummary = useMemo(
+    () =>
+      rigDetailCases.reduce(
+        (acc, entry) => {
+          const status = normalizeBreakdownStatus(entry.status);
+          acc.total += 1;
+          if (status === "OPEN") {
+            acc.open += 1;
+          } else {
+            acc.resolved += 1;
+          }
+          if (entry.severity === "CRITICAL") {
+            acc.critical += 1;
+          }
+          return acc;
+        },
+        {
+          total: 0,
+          open: 0,
+          resolved: 0,
+          critical: 0
+        }
+      ),
+    [rigDetailCases]
+  );
+  const selectedRecord = useMemo(
+    () => records.find((entry) => entry.id === selectedRecordId) || null,
+    [records, selectedRecordId]
+  );
+  const formError = useMemo(() => {
+    if (!form.projectId) {
+      return "Select the affected active project.";
+    }
+    if (!selectedProject?.assignedRigId) {
+      return "Selected project has no assigned rig. Assign a rig on the project first.";
+    }
+    if (!form.title.trim()) {
+      return "Enter a short issue summary.";
+    }
+    return null;
+  }, [form.projectId, form.title, selectedProject?.assignedRigId]);
+
   const buildHref = useMemo(
-    () => (path: string, overrides?: Record<string, string | null | undefined>) => buildScopedHref(filters, path, overrides),
+    () =>
+      (
+        path: string,
+        overrides?: Record<string, string | null | undefined>
+      ) => buildScopedHref(filters, path, overrides),
     [filters]
   );
 
@@ -115,8 +385,9 @@ export default function BreakdownsPage() {
       },
       summaryMetrics: [
         { key: "breakdownsLogged", label: "Breakdowns Logged", value: records.length },
-        { key: "criticalBreakdowns", label: "Critical Breakdowns", value: criticalCount },
-        { key: "openBreakdowns", label: "Open Breakdowns", value: openCount },
+        { key: "criticalBreakdowns", label: "Critical Open", value: criticalCount },
+        { key: "openBreakdowns", label: "Open Breakdowns", value: openRecords.length },
+        { key: "blockedProjects", label: "Blocked Projects", value: blockedProjectCount },
         { key: "downtimeHours", label: "Estimated Downtime Hours", value: totalDowntime }
       ],
       tablePreviews: [
@@ -124,16 +395,15 @@ export default function BreakdownsPage() {
           key: "breakdown-log",
           title: "Breakdown Log",
           rowCount: records.length,
-          columns: ["Date", "Title", "Rig", "Severity", "Status", "Downtime"],
+          columns: ["Date", "Issue", "Project", "Rig", "Severity", "Status"],
           rows: records.slice(0, 10).map((record) => ({
             id: record.id,
             date: new Date(record.reportDate).toISOString().slice(0, 10),
-            title: record.title,
+            issue: record.title,
+            project: record.project?.name || "-",
             rig: record.rig?.rigCode || "-",
             severity: record.severity,
-            status: record.status,
-            downtimeHours: record.downtimeHours,
-            amount: record.downtimeHours,
+            status: normalizeBreakdownStatus(record.status),
             href: buildHref("/breakdowns"),
             targetId: record.id,
             sectionId: "breakdown-log-section",
@@ -141,15 +411,21 @@ export default function BreakdownsPage() {
           }))
         }
       ],
-      priorityItems: records
-        .filter((record) => record.severity === "CRITICAL" || record.severity === "HIGH")
+      priorityItems: openRecords
         .sort((a, b) => b.downtimeHours - a.downtimeHours)
         .slice(0, 5)
         .map((record) => ({
           id: record.id,
           label: `${record.rig?.rigCode || "Unassigned Rig"} • ${record.title}`,
-          reason: `${record.severity} breakdown with ${record.downtimeHours.toFixed(1)} estimated downtime hour(s).`,
-          severity: record.severity === "CRITICAL" ? ("CRITICAL" as const) : ("HIGH" as const),
+          reason: `${record.severity} breakdown with ${record.downtimeHours.toFixed(
+            1
+          )} estimated downtime hour(s).`,
+          severity:
+            record.severity === "CRITICAL"
+              ? ("CRITICAL" as const)
+              : record.severity === "HIGH"
+                ? ("HIGH" as const)
+                : ("MEDIUM" as const),
           amount: record.downtimeHours,
           href: buildHref("/breakdowns"),
           issueType: "BREAKDOWN",
@@ -161,21 +437,34 @@ export default function BreakdownsPage() {
         {
           label: "Open Maintenance",
           href: buildHref("/maintenance"),
-          reason: "Coordinate maintenance action for breakdowns.",
+          reason: "Create and manage repair work linked to breakdowns.",
           pageKey: "maintenance",
           sectionId: "maintenance-log-section"
         },
         {
-          label: "Open Drilling Reports",
-          href: buildHref("/drilling-reports"),
-          reason: "Cross-check drilling impact from breakdown downtime.",
-          pageKey: "drilling-reports",
-          sectionId: "drilling-reports-table-section"
+          label: "Open Purchase Requests",
+          href: buildHref("/expenses"),
+          reason: "Create breakdown-linked procurement requests.",
+          pageKey: "expenses",
+          sectionId: "expenses-requisition-workflow"
         }
       ],
-      notes: ["Breakdown insights are advisory-only and should be validated by maintenance leads."]
+      notes: [
+        "Breakdowns are operational events; maintenance and purchasing should link back to the event."
+      ]
     }),
-    [buildHref, criticalCount, filters.clientId, filters.from, filters.rigId, filters.to, openCount, records, totalDowntime]
+    [
+      blockedProjectCount,
+      buildHref,
+      criticalCount,
+      filters.clientId,
+      filters.from,
+      filters.rigId,
+      filters.to,
+      openRecords,
+      records,
+      totalDowntime
+    ]
   );
 
   useRegisterCopilotContext(copilotContext);
@@ -203,36 +492,39 @@ export default function BreakdownsPage() {
     return () => window.clearTimeout(timeout);
   }, [focusedRowId, focusedSectionId]);
 
-  const currentStepError =
-    wizardStep === 1
-      ? !form.projectId
-        ? "Select the affected project to continue."
-        : ""
-      : wizardStep === 2
-        ? !form.title.trim()
-          ? "Enter a breakdown title."
-          : !form.description.trim()
-            ? "Enter a breakdown description."
-            : ""
-        : "";
-
-  function goToNextStep() {
-    if (currentStepError) {
+  useEffect(() => {
+    if (rigHistoryRows.length === 0) {
+      setSelectedRigHistoryId(null);
       return;
     }
-    setWizardStep((current) => Math.min(3, current + 1) as BreakdownWizardStep);
-  }
 
-  function goToPreviousStep() {
-    setWizardStep((current) => Math.max(1, current - 1) as BreakdownWizardStep);
-  }
+    setSelectedRigHistoryId((current) =>
+      current && rigHistoryRows.some((entry) => entry.rigId === current)
+        ? current
+        : rigHistoryRows[0].rigId
+    );
+  }, [rigHistoryRows]);
+
+  useEffect(() => {
+    if (!rigDetailOpen || !selectedRigHistoryId) {
+      return;
+    }
+    const rigCases =
+      rigHistoryRows.find((entry) => entry.rigId === selectedRigHistoryId)?.cases || [];
+    setRigDetailCases(rigCases);
+    setRigDetailError(null);
+    setRigDetailLoading(false);
+  }, [rigDetailOpen, rigHistoryRows, selectedRigHistoryId]);
 
   async function submitBreakdown(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (currentStepError) {
+    if (formError) {
+      setErrorMessage(formError);
       return;
     }
-    setSaving(true);
+
+    setSubmitting(true);
+    setErrorMessage(null);
     try {
       const response = await fetch("/api/breakdowns", {
         method: "POST",
@@ -240,235 +532,349 @@ export default function BreakdownsPage() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          ...form,
-          downtimeHours: Number(form.downtimeHours)
+          projectId: form.projectId,
+          title: form.title.trim(),
+          description: form.description.trim(),
+          severity: form.severity,
+          downtimeHours: form.downtimeHours ? Number(form.downtimeHours) : 0
         })
       });
 
+      const payload = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({ message: "Failed to submit breakdown." }));
-        alert(payload.message || "Failed to submit breakdown.");
-        return;
+        throw new Error(payload?.message || "Failed to submit breakdown.");
       }
 
-      setForm({
-        projectId: "",
-        rigId: "",
-        title: "",
-        description: "",
-        severity: "MEDIUM",
-        downtimeHours: "0"
-      });
-      setWizardStep(1);
+      setForm(INITIAL_FORM_STATE);
+      setNotice(
+        "Breakdown reported. Project is on hold and rig status is now marked as breakdown."
+      );
       await loadAll();
+    } catch (submitError) {
+      setErrorMessage(
+        submitError instanceof Error
+          ? submitError.message
+          : "Failed to submit breakdown."
+      );
     } finally {
-      setSaving(false);
+      setSubmitting(false);
     }
   }
 
-  const linkedProject = projects.find((project) => project.id === form.projectId);
+  async function resolveBreakdown(record: BreakdownRecord) {
+    const note = window.prompt(
+      "Optional resolution note (short):",
+      ""
+    );
+    if (note === null) {
+      return;
+    }
+
+    setResolvingId(record.id);
+    setErrorMessage(null);
+    try {
+      const response = await fetch(`/api/breakdowns/${record.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          action: "resolve",
+          resolutionNote: note.trim() || null
+        })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { message?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.message || "Failed to resolve breakdown.");
+      }
+      setNotice(
+        "Breakdown marked as resolved. Project and rig statuses were refreshed."
+      );
+      await loadAll();
+      if (selectedRecordId && selectedRecordId === record.id) {
+        await loadBreakdownDetail(record.id);
+      }
+    } catch (resolveError) {
+      setErrorMessage(
+        resolveError instanceof Error
+          ? resolveError.message
+          : "Failed to resolve breakdown."
+      );
+    } finally {
+      setResolvingId(null);
+    }
+  }
+
+  async function openBreakdownDetail(recordId: string) {
+    setSelectedRecordId(recordId);
+    setDetailOpen(true);
+    await loadBreakdownDetail(recordId);
+  }
+
+  function openRigDetail(rigId: string) {
+    setSelectedRigHistoryId(rigId);
+    setRigDetailOpen(true);
+    setRigDetailLoading(false);
+    setRigDetailError(null);
+    const rigCases = rigHistoryRows.find((entry) => entry.rigId === rigId)?.cases || [];
+    setRigDetailCases(rigCases);
+  }
+
+  function closeBreakdownDetail() {
+    setDetailOpen(false);
+    setSelectedRecordId(null);
+    setDetailError(null);
+    setDetailLoading(false);
+    setLinkedMaintenanceRows([]);
+    setLinkedUsageRows([]);
+    setLinkedRequisitionRows([]);
+    setAuditRows([]);
+  }
+
+  function closeRigDetail() {
+    setRigDetailOpen(false);
+    setRigDetailLoading(false);
+    setRigDetailError(null);
+    setRigDetailCases([]);
+  }
+
+  function openCaseFromRigDetail(recordId: string) {
+    closeRigDetail();
+    void openBreakdownDetail(recordId);
+  }
+
+  async function loadBreakdownDetail(recordId: string) {
+    setDetailLoading(true);
+    setDetailError(null);
+    try {
+      const usageQuery = new URLSearchParams({
+        breakdownReportId: recordId,
+        scope: "all",
+        status: "ALL"
+      });
+      const maintenanceQuery = new URLSearchParams({
+        breakdownReportId: recordId
+      });
+      const requisitionsQuery = new URLSearchParams({
+        breakdownReportId: recordId
+      });
+      const auditQuery = new URLSearchParams({
+        entityType: "breakdown_report",
+        entityId: recordId,
+        limit: "20"
+      });
+
+      const [maintenanceRes, usageRes, requisitionsRes, auditRes] = await Promise.all([
+        fetch(`/api/maintenance-requests?${maintenanceQuery.toString()}`, {
+          cache: "no-store"
+        }),
+        fetch(`/api/inventory/usage-requests?${usageQuery.toString()}`, {
+          cache: "no-store"
+        }),
+        fetch(`/api/requisitions?${requisitionsQuery.toString()}`, {
+          cache: "no-store"
+        }),
+        fetch(`/api/audit-logs?${auditQuery.toString()}`, {
+          cache: "no-store"
+        })
+      ]);
+
+      const maintenancePayload = (await maintenanceRes.json().catch(() => null)) as
+        | { data?: LinkedMaintenanceRow[] }
+        | null;
+      const usagePayload = (await usageRes.json().catch(() => null)) as
+        | { data?: LinkedUsageRequestRow[] }
+        | null;
+      const requisitionPayload = (await requisitionsRes.json().catch(() => null)) as
+        | { data?: LinkedRequisitionRow[] }
+        | null;
+      const auditPayload = (await auditRes.json().catch(() => null)) as
+        | { data?: AuditRow[] }
+        | null;
+
+      if (!maintenanceRes.ok) {
+        throw new Error("Failed to load linked maintenance records.");
+      }
+      if (!usageRes.ok) {
+        throw new Error("Failed to load linked inventory usage requests.");
+      }
+      if (!requisitionsRes.ok) {
+        throw new Error("Failed to load linked purchase requests.");
+      }
+
+      setLinkedMaintenanceRows(
+        Array.isArray(maintenancePayload?.data) ? maintenancePayload.data : []
+      );
+      setLinkedUsageRows(Array.isArray(usagePayload?.data) ? usagePayload.data : []);
+      setLinkedRequisitionRows(
+        Array.isArray(requisitionPayload?.data) ? requisitionPayload.data : []
+      );
+      setAuditRows(auditRes.ok && Array.isArray(auditPayload?.data) ? auditPayload.data : []);
+    } catch (error) {
+      setLinkedMaintenanceRows([]);
+      setLinkedUsageRows([]);
+      setLinkedRequisitionRows([]);
+      setAuditRows([]);
+      setDetailError(
+        error instanceof Error
+          ? error.message
+          : "Failed to load breakdown case details."
+      );
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function goToBreakdownPartsRequest(record: BreakdownRecord) {
+    const query = new URLSearchParams({
+      section: "items",
+      usageReason: "BREAKDOWN",
+      breakdownId: record.id
+    });
+    closeBreakdownDetail();
+    router.push(`/inventory?${query.toString()}`);
+  }
+
+  function goToBreakdownPurchaseRequest(record: BreakdownRecord) {
+    const query = new URLSearchParams({
+      breakdownId: record.id
+    });
+    if (record.project?.id) {
+      query.set("projectId", record.project.id);
+    }
+    closeBreakdownDetail();
+    router.push(`/expenses?${query.toString()}`);
+  }
+
+  const selectedRecordIsOpen = selectedRecord
+    ? isBreakdownOpenStatus(selectedRecord.status)
+    : false;
 
   return (
     <AccessGate permission="breakdowns:view">
       <div className="gf-page-stack">
-        <section className="grid gap-3 md:grid-cols-4">
-          <MetricCard label="Breakdowns Logged" value={String(records.length)} />
-          <MetricCard
-            label="Critical Reports"
-            value={String(criticalCount)}
-            tone="warn"
-          />
-          <MetricCard
-            label="Submitted by Field Team"
-            value={String(records.filter((record) => record.reportedBy.role === "FIELD").length)}
-          />
-          <MetricCard
-            label="Total Estimated Downtime"
-            value={`${totalDowntime.toFixed(1)} hrs`}
-          />
-        </section>
+        {notice && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {notice}
+          </div>
+        )}
+        {errorMessage && (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+            {errorMessage}
+          </div>
+        )}
 
         <AccessGate permission="breakdowns:submit">
-          <Card
-            title="Field Breakdown Reporting"
-            subtitle="Automatically links breakdown to project, rig, and client for faster response."
-          >
+          <Card title="Report Breakdown">
             <form onSubmit={submitBreakdown} className="space-y-3">
-              <div className="grid gap-2 text-xs sm:grid-cols-3">
-                {[
-                  { step: 1, label: "Project context" },
-                  { step: 2, label: "Issue details" },
-                  { step: 3, label: "Review & submit" }
-                ].map((entry) => (
-                  <div
-                    key={`breakdown-step-${entry.step}`}
-                    className={`rounded-lg border px-2 py-1.5 ${
-                      wizardStep === entry.step
-                        ? "border-brand-300 bg-brand-50 text-brand-900"
-                        : "border-slate-200 bg-slate-50 text-slate-700"
-                    }`}
+              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                <label className="text-sm text-ink-700">
+                  Project
+                  <select
+                    value={form.projectId}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, projectId: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    required
                   >
-                    <p className="font-semibold">Step {entry.step}</p>
-                    <p>{entry.label}</p>
-                  </div>
-                ))}
+                    <option value="">Select active project</option>
+                    {activeProjects.map((project) => (
+                      <option key={project.id} value={project.id}>
+                        {project.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm text-ink-700">
+                  Derived rig
+                  <input
+                    value={selectedRigCode || "No assigned rig"}
+                    disabled
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                  />
+                </label>
+                <label className="text-sm text-ink-700">
+                  Client context
+                  <input
+                    value={selectedProject?.client.name || "-"}
+                    disabled
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                  />
+                </label>
+                <label className="text-sm text-ink-700">
+                  Severity / priority
+                  <select
+                    value={form.severity}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        severity: event.target.value as BreakdownFormState["severity"]
+                      }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="LOW">LOW</option>
+                    <option value="MEDIUM">MEDIUM</option>
+                    <option value="HIGH">HIGH</option>
+                    <option value="CRITICAL">CRITICAL</option>
+                  </select>
+                </label>
+                <label className="text-sm text-ink-700 lg:col-span-2">
+                  Issue summary
+                  <input
+                    value={form.title}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, title: event.target.value }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="e.g. Hydraulic pressure loss while drilling"
+                    required
+                  />
+                </label>
+                <label className="text-sm text-ink-700">
+                  Estimated downtime (hrs)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.1"
+                    value={form.downtimeHours}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        downtimeHours: event.target.value
+                      }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="Optional"
+                  />
+                </label>
+                <label className="text-sm text-ink-700 lg:col-span-4">
+                  Problem description (optional)
+                  <textarea
+                    value={form.description}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, description: event.target.value }))
+                    }
+                    className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="Quick details for maintenance handoff"
+                  />
+                </label>
               </div>
 
-              {wizardStep === 1 && (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <label className="text-sm text-ink-700">
-                    Project
-                    <select
-                      value={form.projectId}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, projectId: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      required
-                    >
-                      <option value="">Select project</option>
-                      {projects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    Rig (optional)
-                    <select
-                      value={form.rigId}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, rigId: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <option value="">Use project assigned rig</option>
-                      {rigs.map((rig) => (
-                        <option key={rig.id} value={rig.id}>
-                          {rig.rigCode}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              )}
-
-              {wizardStep === 2 && (
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                  <label className="text-sm text-ink-700">
-                    Severity
-                    <select
-                      value={form.severity}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, severity: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <option>LOW</option>
-                      <option>MEDIUM</option>
-                      <option>HIGH</option>
-                      <option>CRITICAL</option>
-                    </select>
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    Breakdown Title
-                    <input
-                      value={form.title}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, title: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      required
-                    />
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    Estimated Downtime (hrs)
-                    <input
-                      type="number"
-                      min="0"
-                      value={form.downtimeHours}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, downtimeHours: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    />
-                  </label>
-                  <label className="text-sm text-ink-700 md:col-span-2 lg:col-span-3">
-                    Description
-                    <textarea
-                      value={form.description}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, description: event.target.value }))
-                      }
-                      className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      required
-                    />
-                  </label>
-                </div>
-              )}
-
-              {wizardStep === 3 && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-ink-700">
-                  <p>
-                    <span className="font-semibold">Project:</span>{" "}
-                    {projects.find((project) => project.id === form.projectId)?.name || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Rig:</span>{" "}
-                    {rigs.find((rig) => rig.id === form.rigId)?.rigCode || "Project assigned rig"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Severity:</span> {form.severity}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Title:</span> {form.title || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Estimated Downtime:</span>{" "}
-                    {form.downtimeHours || "0"} hrs
-                  </p>
-                  <p>
-                    <span className="font-semibold">Description:</span> {form.description || "-"}
-                  </p>
-                  <p className="mt-1">
-                    <span className="font-semibold">Linked client:</span>{" "}
-                    {linkedProject?.client?.name || "-"}
-                  </p>
-                </div>
-              )}
-
               <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-                {wizardStep > 1 && (
-                  <button
-                    type="button"
-                    onClick={goToPreviousStep}
-                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-                  >
-                    Back
-                  </button>
-                )}
-                {wizardStep < 3 ? (
-                  <button
-                    type="button"
-                    onClick={goToNextStep}
-                    disabled={Boolean(currentStepError)}
-                    className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                  >
-                    Continue
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={saving}
-                    className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                  >
-                    {saving ? "Submitting..." : "Submit Breakdown"}
-                  </button>
-                )}
-                {currentStepError && wizardStep < 3 && (
-                  <p className="text-xs text-amber-800">{currentStepError}</p>
-                )}
+                <button
+                  type="submit"
+                  disabled={submitting || Boolean(formError)}
+                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
+                >
+                  {submitting ? "Reporting..." : "Report breakdown"}
+                </button>
+                {formError && <p className="text-xs text-amber-800">{formError}</p>}
               </div>
             </form>
           </Card>
@@ -477,45 +883,547 @@ export default function BreakdownsPage() {
         <section
           id="breakdown-log-section"
           className={cn(
-            focusedSectionId === "breakdown-log-section" && "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+            focusedSectionId === "breakdown-log-section" &&
+              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
           )}
         >
-        <Card title="Breakdown Log">
-          {loading ? (
-            <p className="text-sm text-ink-600">Loading breakdown records...</p>
-          ) : (
-            <DataTable
-              columns={[
-                "Date",
-                "Title",
-                "Client",
-                "Project",
-                "Rig",
-                "Severity",
-                "Downtime",
-                "Status",
-                "Reported By"
-              ]}
-              rows={records.map((record) => [
-                new Date(record.reportDate).toLocaleDateString(),
-                record.title,
-                record.client?.name || "-",
-                record.project?.name || "-",
-                record.rig?.rigCode || "-",
-                record.severity,
-                `${record.downtimeHours} hrs`,
-                record.status,
-                record.reportedBy?.fullName || "-"
-              ])}
-              rowIds={records.map((record) => `ai-focus-${record.id}`)}
-              rowClassNames={records.map((record) =>
-                focusedRowId === record.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""
-              )}
-            />
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Breakdown Log</h2>
+              <p className="text-xs text-slate-600">
+                Open {openRecords.length} • Critical {criticalCount} • Blocked projects{" "}
+                {blockedProjectCount} • Downtime {totalDowntime.toFixed(1)} hrs
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLogOpen((current) => !current)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              {logOpen ? "Hide log" : "View log"}
+            </button>
+          </div>
+
+          {logOpen && (
+            <div className="space-y-3">
+              <Card title="Log Filters">
+                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
+                  <label className="text-sm text-ink-700">
+                    Project
+                    <select
+                      value={logFilters.projectId}
+                      onChange={(event) =>
+                        setLogFilters((current) => ({
+                          ...current,
+                          projectId: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option value="">All projects</option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    Rig
+                    <select
+                      value={logFilters.rigId}
+                      onChange={(event) =>
+                        setLogFilters((current) => ({
+                          ...current,
+                          rigId: event.target.value
+                        }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option value="">All rigs</option>
+                      {rigs.map((rig) => (
+                        <option key={rig.id} value={rig.id}>
+                          {rig.rigCode}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    Status
+                    <select
+                      value={logFilters.status}
+                      onChange={(event) =>
+                        setLogFilters((current) => ({
+                          ...current,
+                          status: event.target.value as BreakdownLogFilterState["status"]
+                        }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option value="all">All statuses</option>
+                      <option value="OPEN">Open</option>
+                      <option value="RESOLVED">Resolved</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    From
+                    <input
+                      type="date"
+                      value={logFilters.from}
+                      onChange={(event) =>
+                        setLogFilters((current) => ({ ...current, from: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-sm text-ink-700">
+                    To
+                    <input
+                      type="date"
+                      value={logFilters.to}
+                      onChange={(event) =>
+                        setLogFilters((current) => ({ ...current, to: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                </div>
+              </Card>
+
+              <Card title="Rigs with Breakdown Activity">
+                {loading ? (
+                  <p className="text-sm text-ink-600">Loading breakdown records...</p>
+                ) : rigHistoryRows.length === 0 ? (
+                  <p className="text-sm text-slate-600">
+                    No breakdown records found for the selected filters.
+                  </p>
+                ) : (
+                  <DataTable
+                    columns={[
+                      "Rig",
+                      "Current breakdown state",
+                      "Breakdown cases",
+                      "Latest breakdown",
+                      "Action"
+                    ]}
+                    rows={rigHistoryRows.map((entry) => [
+                      entry.rigCode,
+                      entry.currentStatus ? (
+                        <BreakdownStatusChip
+                          key={`${entry.rigId}-state`}
+                          status={entry.currentStatus}
+                        />
+                      ) : (
+                        "No active case"
+                      ),
+                      formatNumber(entry.caseCount),
+                      toDate(entry.latestBreakdownDate),
+                      <button
+                        key={`${entry.rigId}-view`}
+                        type="button"
+                        onClick={() => {
+                          void openRigDetail(entry.rigId);
+                        }}
+                        className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                          selectedRigHistoryId === entry.rigId
+                            ? "border-brand-300 bg-brand-50 text-brand-800"
+                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                        }`}
+                      >
+                        View
+                      </button>
+                    ])}
+                    rowClassNames={rigHistoryRows.map((entry) =>
+                      focusedRowId && entry.cases.some((record) => record.id === focusedRowId)
+                        ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200"
+                        : ""
+                    )}
+                  />
+                )}
+              </Card>
+            </div>
           )}
-        </Card>
         </section>
+
+        {rigDetailOpen && (
+          <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-900/45 p-4">
+            <section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900">
+                    Rig Breakdown View{" "}
+                    {rigDetailSelectedRig?.rigCode ? `• ${rigDetailSelectedRig.rigCode}` : ""}
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Rig-level breakdown summary and case list
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeRigDetail}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="space-y-4 px-4 py-4">
+                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2 lg:grid-cols-4">
+                  <p>
+                    <span className="font-semibold">Rig:</span>{" "}
+                    {rigDetailSelectedRig?.rigCode || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Current breakdown state:</span>{" "}
+                    {formatBreakdownCurrentState(rigDetailSelectedRig?.currentStatus)}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Active breakdown case:</span>{" "}
+                    {rigDetailCases.find((entry) => isBreakdownOpenStatus(entry.status))?.id ||
+                      "None"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Total breakdown cases:</span>{" "}
+                    {formatNumber(rigDetailCases.length)}
+                  </p>
+                </div>
+
+                {rigDetailError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    {rigDetailError}
+                  </p>
+                )}
+
+                {rigDetailLoading ? (
+                  <p className="text-sm text-slate-600">Loading rig breakdown details...</p>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                      <p>
+                        Open breakdown cases:{" "}
+                        <span className="font-semibold">{rigDetailCaseSummary.open}</span>
+                      </p>
+                      <p>
+                        Resolved breakdown cases:{" "}
+                        <span className="font-semibold">{rigDetailCaseSummary.resolved}</span>
+                      </p>
+                      <p>
+                        Critical severity cases:{" "}
+                        <span className="font-semibold">{rigDetailCaseSummary.critical}</span>
+                      </p>
+                      <p className="mt-1 text-slate-600">
+                        Rig-level view is summary only. Open a case to review linked requests and
+                        actions.
+                      </p>
+                    </div>
+
+                    <Card title="Breakdown Cases">
+                      {rigDetailCases.length === 0 ? (
+                        <p className="text-sm text-slate-600">
+                          No breakdown cases found for this rig.
+                        </p>
+                      ) : (
+                        <DataTable
+                          columns={[
+                            "Breakdown case ID",
+                            "Date opened",
+                            "Issue summary",
+                            "Severity",
+                            "Status",
+                            "View details"
+                          ]}
+                          rows={rigDetailCases.map((row) => [
+                            row.id,
+                            toDate(row.reportDate),
+                            row.title || "-",
+                            row.severity || "-",
+                            <BreakdownStatusChip key={`${row.id}-rig-status`} status={row.status} />,
+                            <button
+                              key={`${row.id}-open`}
+                              type="button"
+                              onClick={() => openCaseFromRigDetail(row.id)}
+                              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                            >
+                              View details
+                            </button>
+                          ])}
+                        />
+                      )}
+                    </Card>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {detailOpen && selectedRecord && (
+          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-4">
+            <section className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900">
+                    Breakdown Case {selectedRecord.id}
+                  </h3>
+                  <p className="text-xs text-slate-600">
+                    Operational case details and next actions
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeBreakdownDetail}
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="space-y-4 px-4 py-4">
+                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2">
+                  <p>
+                    <span className="font-semibold">Breakdown ID:</span> {selectedRecord.id}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Status:</span>{" "}
+                    {normalizeBreakdownStatus(selectedRecord.status)}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Project:</span>{" "}
+                    {selectedRecord.project?.name || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Rig:</span>{" "}
+                    {selectedRecord.rig?.rigCode || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Client context:</span>{" "}
+                    {selectedRecord.client?.name || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Date reported:</span>{" "}
+                    {toDate(selectedRecord.reportDate)}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Severity:</span>{" "}
+                    {selectedRecord.severity}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Downtime:</span>{" "}
+                    {formatNumber(selectedRecord.downtimeHours)} hrs
+                  </p>
+                  <p className="md:col-span-2">
+                    <span className="font-semibold">Issue summary:</span>{" "}
+                    {selectedRecord.title}
+                  </p>
+                  <p className="md:col-span-2">
+                    <span className="font-semibold">Problem description:</span>{" "}
+                    {selectedRecord.description || "-"}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => goToBreakdownPartsRequest(selectedRecord)}
+                    disabled={!selectedRecordIsOpen}
+                    className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Request parts
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => goToBreakdownPurchaseRequest(selectedRecord)}
+                    disabled={!selectedRecordIsOpen}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Create purchase request
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void resolveBreakdown(selectedRecord);
+                    }}
+                    disabled={!selectedRecordIsOpen || resolvingId === selectedRecord.id}
+                    className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {resolvingId === selectedRecord.id
+                      ? "Resolving..."
+                      : "Mark breakdown resolved"}
+                  </button>
+                </div>
+                {!selectedRecordIsOpen && (
+                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                    This breakdown case is resolved. Linked history remains viewable, but new
+                    item or purchase actions are disabled.
+                  </p>
+                )}
+
+                {detailError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                    {detailError}
+                  </p>
+                )}
+
+                {detailLoading ? (
+                  <p className="text-sm text-slate-600">Loading linked case details...</p>
+                ) : (
+                  <div className="grid gap-3 lg:grid-cols-2">
+                    <Card title="Linked Maintenance Records">
+                      {linkedMaintenanceRows.length === 0 ? (
+                        <p className="text-sm text-slate-600">
+                          No linked maintenance records yet.
+                        </p>
+                      ) : (
+                        <DataTable
+                          columns={["Record", "Date", "Status", "Description"]}
+                          rows={linkedMaintenanceRows.map((row) => [
+                            row.requestCode,
+                            toDate(row.requestDate),
+                            formatMaintenanceLifecycleStatus(row.status),
+                            row.issueDescription || "-"
+                          ])}
+                        />
+                      )}
+                    </Card>
+
+                    <Card title="Linked Inventory Usage Requests">
+                      {linkedUsageRows.length === 0 ? (
+                        <p className="text-sm text-slate-600">
+                          No linked inventory usage requests yet.
+                        </p>
+                      ) : (
+                        <DataTable
+                          columns={["Requested", "Item", "Qty", "Status", "Requester"]}
+                          rows={linkedUsageRows.map((row) => [
+                            toDate(row.createdAt),
+                            row.item ? `${row.item.name} (${row.item.sku})` : "-",
+                            formatNumber(row.quantity),
+                            row.status,
+                            row.requestedBy?.fullName || "-"
+                          ])}
+                        />
+                      )}
+                    </Card>
+
+                    <Card title="Linked Purchase Requests">
+                      {linkedRequisitionRows.length === 0 ? (
+                        <p className="text-sm text-slate-600">
+                          No linked purchase requests yet.
+                        </p>
+                      ) : (
+                        <DataTable
+                          columns={["Requisition", "Type", "Status", "Submitted", "Estimated"]}
+                          rows={linkedRequisitionRows.map((row) => [
+                            row.requisitionCode,
+                            row.type,
+                            row.status,
+                            toDate(row.submittedAt),
+                            formatCurrency(row.totals?.estimatedTotalCost || 0)
+                          ])}
+                        />
+                      )}
+                    </Card>
+
+                    <Card title="Case Update History">
+                      {auditRows.length === 0 ? (
+                        <p className="text-sm text-slate-600">
+                          No update history available for this record.
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {auditRows.map((entry) => (
+                            <div
+                              key={entry.id}
+                              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                            >
+                              <p className="font-semibold text-slate-900">
+                                {entry.action.replaceAll("_", " ")}
+                              </p>
+                              <p className="mt-0.5">
+                                {entry.description || "Breakdown case updated."}
+                              </p>
+                              <p className="mt-0.5 text-slate-500">
+                                {toDateTime(entry.createdAt)}
+                                {entry.actorName ? ` • ${entry.actorName}` : ""}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </Card>
+                  </div>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
       </div>
     </AccessGate>
   );
+}
+
+function BreakdownStatusChip({ status }: { status: string }) {
+  const normalizedStatus = normalizeBreakdownStatus(status);
+  const className =
+    normalizedStatus === "RESOLVED"
+      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+      : "border-amber-300 bg-amber-100 text-amber-800";
+
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${className}`}
+    >
+      {normalizedStatus}
+    </span>
+  );
+}
+
+function breakdownRowSortValue(entry: BreakdownRecord | undefined) {
+  if (!entry) {
+    return 0;
+  }
+  const date = Date.parse(entry.reportDate || "");
+  if (Number.isFinite(date)) {
+    return date;
+  }
+  return 0;
+}
+
+function formatBreakdownCurrentState(status: string | null | undefined) {
+  const normalized = normalizeBreakdownStatus(status || "");
+  if (normalized === "OPEN") {
+    return "Open";
+  }
+  return "No active case";
+}
+
+function toDate(value: string | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function toDateTime(value: string | null | undefined) {
+  if (!value) {
+    return "-";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toISOString().replace("T", " ").slice(0, 16);
+}
+
+function formatMaintenanceLifecycleStatus(status: string | null | undefined) {
+  const normalized = (status || "").trim().toUpperCase();
+  if (normalized === "OPEN") return "Open";
+  if (normalized === "IN_REPAIR") return "In repair";
+  if (normalized === "WAITING_FOR_PARTS") return "Waiting for parts";
+  if (normalized === "COMPLETED") return "Completed";
+  return "Open";
 }

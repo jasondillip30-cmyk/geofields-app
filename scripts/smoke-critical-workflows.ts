@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { purgeDanglingSmokeArtifacts } from "./smoke-isolation";
 
 const prisma = new PrismaClient();
 
@@ -42,6 +43,7 @@ async function main() {
   };
 
   try {
+    await purgeDanglingSmokeArtifacts(prisma);
     await ensureServerReachable(baseUrl);
 
     const adminCookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
@@ -197,6 +199,38 @@ async function main() {
       "Inventory stock was not decremented correctly for approved usage request."
     );
 
+    const approveAgainResult = await postJson(
+      baseUrl,
+      `/api/inventory/usage-requests/${usageApprove.id}/status`,
+      adminCookie,
+      { action: "approve", note: "Smoke test duplicate approval" }
+    );
+    assert(
+      approveAgainResult.status === 409,
+      `Duplicate usage approval should return 409, got ${approveAgainResult.status}: ${approveAgainResult.text}`
+    );
+
+    const [usageAfterDuplicateApprove, itemAfterDuplicateApprove] = await Promise.all([
+      prisma.inventoryUsageRequest.findUnique({
+        where: { id: usageApprove.id },
+        select: { status: true, approvedMovementId: true }
+      }),
+      prisma.inventoryItem.findUnique({
+        where: { id: inventoryItem.id },
+        select: { quantityInStock: true }
+      })
+    ]);
+    assert(
+      usageAfterDuplicateApprove?.status === "APPROVED" &&
+        usageAfterDuplicateApprove.approvedMovementId === usageApproveRow?.approvedMovementId,
+      "Duplicate usage approval changed approval linkage unexpectedly."
+    );
+    assert(
+      typeof itemAfterDuplicateApprove?.quantityInStock === "number" &&
+        itemAfterDuplicateApprove.quantityInStock === itemAfterApproval.quantityInStock,
+      "Duplicate usage approval should not decrement stock a second time."
+    );
+
     const receiptPayload = {
       receiptType: "EXPENSE_ONLY",
       receiptPurpose: "BUSINESS_EXPENSE_ONLY",
@@ -261,6 +295,30 @@ async function main() {
       created.receiptExpenseId = resolvedExpenseId;
     }
 
+    const receiptExpenseCountBeforeRetry = await prisma.expense.count({
+      where: { receiptNumber: `${runToken}-receipt` }
+    });
+    const finalizeRetryResult = await postJson(
+      baseUrl,
+      "/api/inventory/receipt-intake/commit",
+      adminCookie,
+      {
+        ...receiptPayload,
+        submissionId
+      }
+    );
+    assert(
+      finalizeRetryResult.status === 409,
+      `Duplicate receipt finalize should return 409, got ${finalizeRetryResult.status}: ${finalizeRetryResult.text}`
+    );
+    const receiptExpenseCountAfterRetry = await prisma.expense.count({
+      where: { receiptNumber: `${runToken}-receipt` }
+    });
+    assert(
+      receiptExpenseCountAfterRetry === receiptExpenseCountBeforeRetry,
+      "Duplicate receipt finalize should not create an additional expense record."
+    );
+
     console.info("✅ Critical workflow smoke checks passed.");
     console.info(
       [
@@ -268,7 +326,8 @@ async function main() {
         "• expense approval",
         "• inventory usage reject",
         "• inventory usage approve",
-        "• receipt submission + finalization"
+        "• receipt submission + finalization",
+        "• duplicate approval/finalize conflict handling"
       ].join("\n")
     );
   } finally {

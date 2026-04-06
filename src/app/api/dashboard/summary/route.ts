@@ -4,11 +4,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import {
   getFinancialInclusionPolicy,
-  withFinancialDrillReportApproval,
-  withFinancialExpenseApproval
+  withFinancialDrillReportApproval
 } from "@/lib/financial-approval-policy";
+import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { parseReceiptSubmissionPayload } from "@/lib/receipt-intake-submission";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
 interface FinancialBucket {
   revenue: number;
@@ -54,16 +55,13 @@ type DashboardSectionKey =
   | "rig usage query"
   | "pending expense approvals"
   | "pending report approvals"
-  | "pending maintenance approvals"
   | "pending inventory usage approvals"
   | "receipt submissions query"
   | "rejected expenses this week"
   | "rejected reports this week"
-  | "rejected maintenance this week"
   | "rejected inventory usage this week"
   | "approved expenses today"
   | "approved reports today"
-  | "approved maintenance today"
   | "approved inventory usage today"
   | "inventory low stock count"
   | "inventory out of stock count";
@@ -128,19 +126,6 @@ export async function GET(request: NextRequest) {
         : {})
     });
 
-    const expenseWhere: Prisma.ExpenseWhereInput = withFinancialExpenseApproval({
-      ...(clientId ? { clientId } : {}),
-      ...(rigId ? { rigId } : {}),
-      ...(fromDate || toDate
-        ? {
-            date: {
-              ...(fromDate ? { gte: fromDate } : {}),
-              ...(toDate ? { lte: toDate } : {})
-            }
-          }
-        : {})
-    });
-
     const now = new Date();
     const todayStart = startOfUtcDay(now);
     const todayEnd = endOfUtcDay(now);
@@ -161,20 +146,22 @@ export async function GET(request: NextRequest) {
       []
     );
 
-    const expenses = await runSection(
+    const spendContext = await runSection(
       "expenses query",
       () =>
-        prisma.expense.findMany({
-          where: expenseWhere,
-          orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-          include: {
-            project: { select: { id: true, name: true } },
-            rig: { select: { id: true, rigCode: true } },
-            client: { select: { id: true, name: true } }
-          }
+        buildRecognizedSpendContext({
+          clientId,
+          rigId,
+          fromDate,
+          toDate
         }),
-      []
+      buildEmptyRecognizedSpendContext()
     );
+    const rawExpenses = spendContext.rawExpenses;
+    const recognizedExpenses = spendContext.recognizedExpenses;
+    const recognizedExpenseResult = {
+      stats: spendContext.recognitionStats
+    };
 
     const rigs = await runSection(
       "rigs query",
@@ -261,27 +248,6 @@ export async function GET(request: NextRequest) {
       0
     );
 
-    const pendingMaintenanceApprovals = await runSection(
-      "pending maintenance approvals",
-      () =>
-        prisma.maintenanceRequest.count({
-          where: {
-            ...(clientId ? { clientId } : {}),
-            ...(rigId ? { rigId } : {}),
-            ...(fromDate || toDate
-              ? {
-                  requestDate: {
-                    ...(fromDate ? { gte: fromDate } : {}),
-                    ...(toDate ? { lte: toDate } : {})
-                  }
-                }
-              : {}),
-            status: "SUBMITTED"
-          }
-        }),
-      0
-    );
-
     const pendingInventoryUsageApprovals = await runSection(
       "pending inventory usage approvals",
       () =>
@@ -355,23 +321,6 @@ export async function GET(request: NextRequest) {
       0
     );
 
-    const rejectedMaintenanceThisWeek = await runSection(
-      "rejected maintenance this week",
-      () =>
-        prisma.maintenanceRequest.count({
-          where: {
-            ...(clientId ? { clientId } : {}),
-            ...(rigId ? { rigId } : {}),
-            status: "DENIED",
-            updatedAt: {
-              gte: weekStart,
-              lte: now
-            }
-          }
-        }),
-      0
-    );
-
     const rejectedInventoryUsageThisWeek = await runSection(
       "rejected inventory usage this week",
       () =>
@@ -415,23 +364,6 @@ export async function GET(request: NextRequest) {
             ...(rigId ? { rigId } : {}),
             approvalStatus: "APPROVED",
             approvedAt: {
-              gte: todayStart,
-              lte: todayEnd
-            }
-          }
-        }),
-      0
-    );
-
-    const approvedMaintenanceToday = await runSection(
-      "approved maintenance today",
-      () =>
-        prisma.maintenanceRequest.count({
-          where: {
-            ...(clientId ? { clientId } : {}),
-            ...(rigId ? { rigId } : {}),
-            status: "APPROVED",
-            updatedAt: {
               gte: todayStart,
               lte: todayEnd
             }
@@ -517,13 +449,13 @@ export async function GET(request: NextRequest) {
       fromDate,
       toDate,
       reportDates: reports.map((entry) => entry.date),
-      expenseDates: expenses.map((entry) => entry.date)
+      expenseDates: recognizedExpenses.map((entry) => entry.date)
     });
     const effectiveRange = resolveEffectiveRange({
       fromDate,
       toDate,
       reportDates: reports.map((entry) => entry.date),
-      expenseDates: expenses.map((entry) => entry.date)
+      expenseDates: recognizedExpenses.map((entry) => entry.date)
     });
 
     const financialTrendMap = new Map<string, FinancialBucket>();
@@ -584,15 +516,15 @@ export async function GET(request: NextRequest) {
     }
 
     let totalExpenses = 0;
-    let approvedExpenses = 0;
-    for (const expense of expenses) {
+    let approvedIntentAmount = 0;
+    for (const expense of recognizedExpenses) {
       totalExpenses += expense.amount;
       const status = expense.approvalStatus as ExpenseStatusKey;
       if (status in expenseStatusCounts) {
         expenseStatusCounts[status] += 1;
       }
       if (expense.approvalStatus === "APPROVED") {
-        approvedExpenses += expense.amount;
+        approvedIntentAmount += expense.amount;
       }
 
       if (expense.clientId) activeClientIds.add(expense.clientId);
@@ -806,7 +738,7 @@ export async function GET(request: NextRequest) {
         maintenanceRigs: scopedRigs.filter((rig) => rig.status === "MAINTENANCE").length,
         totalRevenue: roundCurrency(totalRevenue),
         totalExpenses: roundCurrency(totalExpenses),
-        approvedExpenses: roundCurrency(approvedExpenses),
+        recognizedSpend: roundCurrency(totalExpenses),
         grossProfit: roundCurrency(grossProfit),
         totalMeters: roundCurrency(totalMeters),
         bestPerformingClient: revenueByClient[0]?.name || noRevenueLabel,
@@ -820,40 +752,34 @@ export async function GET(request: NextRequest) {
         pendingApprovals:
           pendingExpenseApprovals +
           pendingReportApprovals +
-          pendingMaintenanceApprovals +
           pendingInventoryUsageApprovals +
           pendingReceiptSubmissions,
         rejectedThisWeek:
           rejectedExpensesThisWeek +
           rejectedReportsThisWeek +
-          rejectedMaintenanceThisWeek +
           rejectedInventoryUsageThisWeek +
           rejectedReceiptSubmissionsThisWeek,
         approvedToday:
           approvedExpensesToday +
           approvedReportsToday +
-          approvedMaintenanceToday +
           approvedInventoryUsageToday +
           approvedReceiptSubmissionsToday,
         approvalBreakdown: {
           pending: {
             expenses: pendingExpenseApprovals,
             drillingReports: pendingReportApprovals,
-            maintenance: pendingMaintenanceApprovals,
             inventoryUsage: pendingInventoryUsageApprovals,
             receiptSubmissions: pendingReceiptSubmissions
           },
           rejectedThisWeek: {
             expenses: rejectedExpensesThisWeek,
             drillingReports: rejectedReportsThisWeek,
-            maintenance: rejectedMaintenanceThisWeek,
             inventoryUsage: rejectedInventoryUsageThisWeek,
             receiptSubmissions: rejectedReceiptSubmissionsThisWeek
           },
           approvedToday: {
             expenses: approvedExpensesToday,
             drillingReports: approvedReportsToday,
-            maintenance: approvedMaintenanceToday,
             inventoryUsage: approvedInventoryUsageToday,
             receiptSubmissions: approvedReceiptSubmissionsToday
           }
@@ -870,6 +796,15 @@ export async function GET(request: NextRequest) {
       expenseBreakdown,
       projectAssignments,
       expenseStatusCounts,
+      operationalPurposeSummary: {
+        totalRecognizedSpend: spendContext.purposeTotals.recognizedSpendTotal,
+        breakdownCost: spendContext.purposeTotals.breakdownCost,
+        maintenanceCost: spendContext.purposeTotals.maintenanceCost,
+        stockReplenishmentCost: spendContext.purposeTotals.stockReplenishmentCost,
+        operatingCost: spendContext.purposeTotals.operatingCost,
+        otherUnlinkedCost: spendContext.purposeTotals.otherUnlinkedCost
+      },
+      classificationAudit: spendContext.classificationAudit,
       profitForecast: {
         daysInScope: effectiveRange.days,
         avgDailyProfit: roundCurrency(avgDailyProfit),
@@ -882,6 +817,20 @@ export async function GET(request: NextRequest) {
       },
       recommendations
     };
+
+    debugLog(
+      "[expense-visibility][dashboard-summary]",
+      {
+        rawExpenseCount: rawExpenses.length,
+        recognizedExpenseCount: recognizedExpenses.length,
+        recognition: recognizedExpenseResult.stats,
+        recognizedTotalExpenses: roundCurrency(totalExpenses),
+        recognizedApprovalIntentAmount: roundCurrency(approvedIntentAmount),
+        purposeTotals: spendContext.purposeTotals,
+        classificationAudit: spendContext.classificationAudit
+      },
+      { channel: "finance" }
+    );
 
     return NextResponse.json(responsePayload);
   } catch (error) {
@@ -1518,4 +1467,56 @@ function formatCurrencyAmount(value: number) {
 
 function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function buildEmptyRecognizedSpendContext(): Awaited<ReturnType<typeof buildRecognizedSpendContext>> {
+  return {
+    rawExpenses: [],
+    recognizedExpenses: [],
+    recognitionStats: {
+      inputCount: 0,
+      candidateCount: 0,
+      recognizedCount: 0,
+      linkedPurchaseExpenseCount: 0,
+      recognizedPurchaseExpenseCount: 0,
+      excludedUnpostedPurchaseCount: 0,
+      excludedNonApprovedCount: 0
+    },
+    movements: [],
+    usageRequestRows: [],
+    requisitionContexts: [],
+    receiptContexts: [],
+    maintenanceRequests: [],
+    classifiedRows: [],
+    purposeTotals: {
+      recognizedSpendTotal: 0,
+      breakdownCost: 0,
+      maintenanceCost: 0,
+      stockReplenishmentCost: 0,
+      operatingCost: 0,
+      otherUnlinkedCost: 0
+    },
+    categoryTotals: {},
+    classificationAudit: {
+      recognizedSpendTotal: 0,
+      purposeTotals: {
+        recognizedSpendTotal: 0,
+        breakdownCost: 0,
+        maintenanceCost: 0,
+        stockReplenishmentCost: 0,
+        operatingCost: 0,
+        otherUnlinkedCost: 0
+      },
+      categoryTotals: {},
+      purposeCounts: {
+        BREAKDOWN_COST: 0,
+        MAINTENANCE_COST: 0,
+        STOCK_REPLENISHMENT: 0,
+        OPERATING_COST: 0,
+        OTHER_UNLINKED: 0
+      },
+      legacyUnlinkedCount: 0,
+      reconciliationDelta: 0
+    }
+  };
 }
