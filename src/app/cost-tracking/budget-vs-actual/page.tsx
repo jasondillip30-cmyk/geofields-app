@@ -9,6 +9,7 @@ import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-contex
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import {
   AnalyticsEmptyState,
   getScopedKpiHelper,
@@ -96,7 +97,7 @@ const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
 const EMPTY_CLASSIFIED_EXPENSE_ROWS: ClassifiedExpenseRow[] = [];
 
 const emptySummary: BudgetSummaryPayload = {
-  filters: { clientId: "all", rigId: "all", from: null, to: null },
+  filters: { projectId: "all", clientId: "all", rigId: "all", from: null, to: null },
   totals: { totalBudget: 0, recognizedSpend: 0, remainingBudget: 0, overspentCount: 0 },
   byRig: [],
   byProject: [],
@@ -140,22 +141,35 @@ export default function BudgetVsActualPage() {
   const { filters, resetFilters, setFilters } = useAnalyticsFilters();
   const { user } = useRole();
   const canEdit = Boolean(user?.role && canAccess(user.role, "finance:edit"));
-  const isScoped = hasActiveScopeFilters(filters);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
+  const effectiveScopeFilters = useMemo(
+    () =>
+      isSingleProjectScope
+        ? {
+            ...filters,
+            clientId: "all",
+            rigId: "all"
+          }
+        : filters,
+    [filters, isSingleProjectScope]
+  );
+  const isScoped = hasActiveScopeFilters(effectiveScopeFilters);
   const costTrackingHref = useMemo(() => {
-    const params = buildFiltersQuery(filters);
+    const params = buildFiltersQuery(effectiveScopeFilters);
     const query = params.toString();
     return `/cost-tracking${query ? `?${query}` : ""}`;
-  }, [filters]);
+  }, [effectiveScopeFilters]);
   const alertsCenterHref = useMemo(() => {
-    const params = buildFiltersQuery(filters);
+    const params = buildFiltersQuery(effectiveScopeFilters);
     const query = params.toString();
     return `/alerts-center${query ? `?${query}` : ""}`;
-  }, [filters]);
+  }, [effectiveScopeFilters]);
   const budgetVsActualHref = useMemo(() => {
-    const params = buildFiltersQuery(filters);
+    const params = buildFiltersQuery(effectiveScopeFilters);
     const query = params.toString();
     return `/cost-tracking/budget-vs-actual${query ? `?${query}` : ""}`;
-  }, [filters]);
+  }, [effectiveScopeFilters]);
 
   const [summary, setSummary] = useState<BudgetSummaryPayload>(emptySummary);
   const [plans, setPlans] = useState<BudgetPlanRow[]>([]);
@@ -221,8 +235,13 @@ export default function BudgetVsActualPage() {
         const params = new URLSearchParams();
         if (filters.from) params.set("from", filters.from);
         if (filters.to) params.set("to", filters.to);
-        if (filters.clientId !== "all") params.set("clientId", filters.clientId);
-        if (filters.rigId !== "all") params.set("rigId", filters.rigId);
+        if (isSingleProjectScope) {
+          params.set("projectId", scopeProjectId);
+        } else {
+          if (filters.clientId !== "all") params.set("clientId", filters.clientId);
+          if (filters.rigId !== "all") params.set("rigId", filters.rigId);
+          if (filters.projectId !== "all") params.set("projectId", filters.projectId);
+        }
 
         const query = params.toString();
         const response = await fetch(`/api/budgets/summary${query ? `?${query}` : ""}`, {
@@ -240,7 +259,7 @@ export default function BudgetVsActualPage() {
         }
       }
     },
-    [filters.clientId, filters.from, filters.rigId, filters.to]
+    [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to, isSingleProjectScope, scopeProjectId]
   );
 
   const loadPlansAndLookups = useCallback(async () => {
@@ -363,6 +382,12 @@ export default function BudgetVsActualPage() {
     }
     return map;
   }, [projects]);
+  const lockedProjectName = useMemo(() => {
+    if (!isSingleProjectScope) {
+      return null;
+    }
+    return projectById.get(scopeProjectId)?.name || null;
+  }, [isSingleProjectScope, projectById, scopeProjectId]);
   const overviewCounts = useMemo(() => {
     let overspentCount = 0;
     let noBudgetCount = 0;
@@ -715,10 +740,10 @@ export default function BudgetVsActualPage() {
       pageKey: "budget-vs-actual",
       pageName: "Budget vs Actual",
       filters: {
-        clientId: filters.clientId,
-        rigId: filters.rigId,
-        from: filters.from || null,
-        to: filters.to || null
+        clientId: effectiveScopeFilters.clientId,
+        rigId: effectiveScopeFilters.rigId,
+        from: effectiveScopeFilters.from || null,
+        to: effectiveScopeFilters.to || null
       },
       summaryMetrics: [
         { key: "totalProjectBudget", label: "Total Project Budget", value: projectTotals.totalBudget },
@@ -798,10 +823,10 @@ export default function BudgetVsActualPage() {
       alertsCenterHref,
       budgetVsActualHref,
       costTrackingHref,
-      filters.clientId,
-      filters.from,
-      filters.rigId,
-      filters.to,
+      effectiveScopeFilters.clientId,
+      effectiveScopeFilters.from,
+      effectiveScopeFilters.rigId,
+      effectiveScopeFilters.to,
       overviewCounts.noBudgetCount,
       overviewCounts.overspentCount,
       overviewCounts.watchlistCount,
@@ -817,7 +842,8 @@ export default function BudgetVsActualPage() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+        <ProjectLockedBanner projectId={scopeProjectId} projectName={lockedProjectName} />
+        <FilterScopeBanner filters={effectiveScopeFilters} onClearFilters={handleClearFilters} />
 
         {!loading && !hasBudgetData ? (
           <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>

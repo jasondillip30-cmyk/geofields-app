@@ -85,6 +85,7 @@ export async function POST(request: NextRequest) {
       id: true,
       clientId: true,
       assignedRigId: true,
+      backupRigId: true,
       status: true
     }
   });
@@ -93,10 +94,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: "Project not found." }, { status: 404 });
   }
 
-  const rigId = selectedRigId || project.assignedRigId;
+  const allowedRigIds = [project.assignedRigId, project.backupRigId].filter(
+    (value): value is string => Boolean(value)
+  );
+  if (allowedRigIds.length === 0) {
+    return NextResponse.json(
+      { message: "This project has no assigned rig. Assign a rig to the project first." },
+      { status: 400 }
+    );
+  }
+  if (selectedRigId && !allowedRigIds.includes(selectedRigId)) {
+    return NextResponse.json(
+      { message: "Selected rig is not assigned to this project. Choose one of the project rigs." },
+      { status: 400 }
+    );
+  }
+  const rigId = selectedRigId || project.assignedRigId || project.backupRigId;
   if (!rigId) {
     return NextResponse.json(
-      { message: "No rig linked to this project. Select a rig before submitting breakdown." },
+      { message: "This project has no assigned rig. Assign a rig to the project first." },
       { status: 400 }
     );
   }

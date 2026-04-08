@@ -20,6 +20,7 @@ const movementInclude = {
   client: { select: { id: true, name: true } },
   rig: { select: { id: true, rigCode: true } },
   project: { select: { id: true, name: true } },
+  drillReport: { select: { id: true, holeNumber: true, date: true } },
   maintenanceRequest: {
     select: { id: true, requestCode: true, status: true, breakdownReportId: true }
   },
@@ -74,6 +75,7 @@ export async function GET(
       id: true,
       status: true,
       reason: true,
+      drillReportId: true,
       breakdownReportId: true,
       maintenanceRequestId: true,
       requestedForDate: true,
@@ -86,6 +88,13 @@ export async function GET(
       },
       breakdownReport: {
         select: { id: true, title: true, status: true, severity: true }
+      },
+      drillReport: {
+        select: {
+          id: true,
+          holeNumber: true,
+          date: true
+        }
       }
     }
   });
@@ -153,6 +162,7 @@ function serializeLinkedUsageRequest(
     id: string;
     status: string;
     reason: string;
+    drillReportId: string | null;
     breakdownReportId: string | null;
     maintenanceRequestId: string | null;
     requestedForDate: Date | null;
@@ -167,6 +177,7 @@ function serializeLinkedUsageRequest(
       breakdownReportId: string | null;
     } | null;
     breakdownReport: { id: string; title: string; status: string; severity: string } | null;
+    drillReport: { id: string; holeNumber: string; date: Date } | null;
   }
 ) {
   const fallbackBreakdownId =
@@ -176,7 +187,8 @@ function serializeLinkedUsageRequest(
   const reasonType = deriveInventoryUsageReasonType({
     explicitReasonType: null,
     maintenanceRequestId: requestRow.maintenanceRequestId,
-    breakdownReportId: fallbackBreakdownId
+    breakdownReportId: fallbackBreakdownId,
+    drillReportId: requestRow.drillReportId
   });
 
   return {
@@ -184,6 +196,7 @@ function serializeLinkedUsageRequest(
     status: requestRow.status,
     reason: requestRow.reason,
     reasonType,
+    drillReportId: requestRow.drillReportId,
     breakdownReportId: fallbackBreakdownId,
     maintenanceRequestId: requestRow.maintenanceRequestId,
     requestedForDate: requestRow.requestedForDate,
@@ -204,6 +217,7 @@ function serializeLinkedUsageRequest(
         }
       : null,
     maintenanceRequest: requestRow.maintenanceRequest,
-    breakdownReport: requestRow.breakdownReport
+    breakdownReport: requestRow.breakdownReport,
+    drillReport: requestRow.drillReport
   };
 }

@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import {
   scrollToFocusElement,
@@ -18,14 +20,31 @@ import { canUseElevatedDrillingEdit } from "@/lib/auth/approval-policy";
 import { canAccess } from "@/lib/auth/permissions";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { buildScopedHref } from "@/lib/drilldown";
+import {
+  buildDrillReportDirectCostSummary,
+  buildDrillOperationalKpiSummary,
+  buildProjectDirectCostSummaryFromReports,
+  buildProjectOperationalKpiSummaryFromReports
+} from "@/lib/drilling-direct-cost-summary";
+import {
+  buildGuidedBillableInputsModel,
+  buildGuidedBillableLineInputs
+} from "@/lib/drilling-report-guided-inputs";
+import {
+  DRILL_DELAY_REASON_OPTIONS,
+  type DrillDelayReasonCategory
+} from "@/lib/drill-report-delay-reasons";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
 interface ProjectOption {
   id: string;
   name: string;
+  location: string;
   clientId: string;
   status: string;
+  contractType?: "PER_METER" | "DAY_RATE" | "LUMP_SUM";
   contractRatePerM: number;
+  billingRateItems?: ProjectBillingRateItemOption[];
   client: {
     id: string;
     name: string;
@@ -38,6 +57,18 @@ interface ProjectOption {
     id: string;
     rigCode: string;
   } | null;
+}
+
+interface ProjectBillingRateItemOption {
+  itemCode: string;
+  label: string;
+  unit: string;
+  unitRate: number;
+  drillingStageLabel?: string | null;
+  depthBandStartM?: number | null;
+  depthBandEndM?: number | null;
+  sortOrder: number;
+  isActive: boolean;
 }
 
 interface RigOption {
@@ -62,6 +93,11 @@ interface DrillReportRecord {
   rigMoves: number;
   standbyHours: number;
   delayHours: number;
+  delayReasonCategory: DrillDelayReasonCategory | null;
+  delayReasonNote: string | null;
+  holeContinuityOverrideReason: string | null;
+  leadOperatorName: string | null;
+  assistantCount: number;
   operatorCrew: string | null;
   billableAmount: number;
   comments: string | null;
@@ -70,8 +106,47 @@ interface DrillReportRecord {
   rig: { id: string; rigCode: string; status: string };
   submittedBy: { id: string; fullName: string } | null;
   approvedBy: { id: string; fullName: string } | null;
+  billableLines: Array<{ itemCode: string; unit: string; quantity: number }>;
+  inventoryMovements: Array<{
+    id: string;
+    date: string;
+    quantity: number;
+    totalCost: number;
+    item: { id: string; name: string; sku: string } | null;
+    expense: { id: string; amount: number; approvalStatus: string } | null;
+  }>;
+  inventoryUsageRequests: Array<{
+    id: string;
+    status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
+    quantity: number;
+    reason: string;
+    approvedMovementId: string | null;
+    createdAt: string;
+    decidedAt: string | null;
+    item: { id: string; name: string; sku: string } | null;
+  }>;
   createdAt: string;
   updatedAt: string;
+}
+
+interface ProjectConsumablePoolItem {
+  itemId: string;
+  itemName: string;
+  sku: string;
+  stockOnHand: number;
+  approvedRequestQty: number;
+  approvedPurchaseQty: number;
+  consumedQty: number;
+  poolQty: number;
+  availableNow: number;
+  unitCost: number;
+}
+
+interface StagedConsumableLine {
+  itemId: string;
+  itemName: string;
+  sku: string;
+  quantity: string;
 }
 
 interface DrillStats {
@@ -81,21 +156,33 @@ interface DrillStats {
   averageWorkHours: number;
 }
 
+interface HoleProgressSummary {
+  holeNumber: string;
+  currentDepth: number;
+  lastReportDate: string;
+}
+
 interface DrillReportFormState {
   date: string;
   projectId: string;
   rigId: string;
+  holeMode: "CONTINUE" | "START_NEW";
+  selectedHoleNumber: string;
   holeNumber: string;
-  areaLocation: string;
   fromMeter: string;
   toMeter: string;
-  totalMetersDrilled: string;
+  metersDrilledToday: string;
   workHours: string;
   rigMoves: string;
   standbyHours: string;
   delayHours: string;
-  operatorCrew: string;
+  delayReasonCategory: DrillDelayReasonCategory | "";
+  delayReasonNote: string;
+  holeContinuityOverrideReason: string;
+  leadOperatorName: string;
+  assistantCount: string;
   comments: string;
+  billableQuantities: Record<string, string>;
 }
 
 const RECENT_PROJECTS_STORAGE_KEY = "gf:drilling-recent-projects";
@@ -126,13 +213,24 @@ export default function DrillingReportsPage() {
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [requiresContinuityOverride, setRequiresContinuityOverride] = useState(false);
+  const [formConsumablesPool, setFormConsumablesPool] = useState<ProjectConsumablePoolItem[]>([]);
+  const [formConsumablesLoading, setFormConsumablesLoading] = useState(false);
+  const [consumableSearch, setConsumableSearch] = useState("");
+  const [pendingConsumableItemId, setPendingConsumableItemId] = useState("");
+  const [pendingConsumableQuantity, setPendingConsumableQuantity] = useState("1");
+  const [stagedConsumables, setStagedConsumables] = useState<StagedConsumableLine[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const [assistTarget, setAssistTarget] = useState<CopilotFocusTarget | null>(null);
   const [form, setForm] = useState<DrillReportFormState>(() => createEmptyForm());
+  const [holeProgressByProject, setHoleProgressByProject] = useState<Record<string, HoleProgressSummary[]>>({});
+  const [holeProgressLoading, setHoleProgressLoading] = useState(false);
 
   const canCreateReport = Boolean(user?.role && canAccess(user.role, "drilling:submit"));
+  const isSingleProjectScope = filters.projectId !== "all";
+  const scopedProjectId = isSingleProjectScope ? filters.projectId : selectedProjectId;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -184,14 +282,9 @@ export default function DrillingReportsPage() {
   const loadReferenceData = useCallback(async () => {
     setReferencesLoading(true);
     try {
-      const query = new URLSearchParams();
-      if (filters.clientId !== "all") query.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") query.set("rigId", filters.rigId);
-      const search = query.toString();
-
       const [projectsRes, rigsRes] = await Promise.all([
-        fetch(`/api/projects${search ? `?${search}` : ""}`, { cache: "no-store" }),
-        fetch(`/api/rigs${search ? `?${search}` : ""}`, { cache: "no-store" })
+        fetch("/api/projects", { cache: "no-store" }),
+        fetch("/api/rigs", { cache: "no-store" })
       ]);
 
       const [projectsPayload, rigsPayload] = await Promise.all([
@@ -199,8 +292,7 @@ export default function DrillingReportsPage() {
         rigsRes.ok ? rigsRes.json() : Promise.resolve({ data: [] })
       ]);
 
-      const activeProjects = (projectsPayload.data || []).filter((project: ProjectOption) => project.status === "ACTIVE");
-      setProjects(activeProjects);
+      setProjects(projectsPayload.data || []);
       setRigs(rigsPayload.data || []);
     } catch {
       setProjects([]);
@@ -208,34 +300,65 @@ export default function DrillingReportsPage() {
     } finally {
       setReferencesLoading(false);
     }
-  }, [filters.clientId, filters.rigId]);
+  }, []);
 
   useEffect(() => {
     void loadReferenceData();
   }, [loadReferenceData]);
 
+  const reportableProjects = useMemo(
+    () =>
+      projects.filter(
+        (project) => project.status === "ACTIVE" || project.status === "PLANNED"
+      ),
+    [projects]
+  );
+
   useEffect(() => {
-    if (projects.length === 0) {
+    const defaultPool = reportableProjects.length > 0 ? reportableProjects : projects;
+    if (defaultPool.length === 0) {
       setSelectedProjectId("");
       return;
     }
 
-    if (selectedProjectId && projects.some((project) => project.id === selectedProjectId)) {
+    if (isSingleProjectScope) {
+      if (!projects.some((project) => project.id === filters.projectId)) {
+        setSelectedProjectId("");
+        return;
+      }
+      if (selectedProjectId !== filters.projectId) {
+        setSelectedProjectId(filters.projectId);
+        markProjectAsRecent(filters.projectId);
+      }
       return;
     }
 
-    const recentMatch = recentProjectIds.find((recentId) => projects.some((project) => project.id === recentId));
-    const fallbackProjectId = recentMatch || projects[0]?.id || "";
+    if (selectedProjectId && defaultPool.some((project) => project.id === selectedProjectId)) {
+      return;
+    }
+
+    const recentMatch = recentProjectIds.find((recentId) =>
+      defaultPool.some((project) => project.id === recentId)
+    );
+    const fallbackProjectId = recentMatch || defaultPool[0]?.id || "";
     if (!fallbackProjectId) {
       return;
     }
 
     setSelectedProjectId(fallbackProjectId);
     markProjectAsRecent(fallbackProjectId);
-  }, [markProjectAsRecent, projects, recentProjectIds, selectedProjectId]);
+  }, [
+    filters.projectId,
+    isSingleProjectScope,
+    markProjectAsRecent,
+    projects,
+    recentProjectIds,
+    reportableProjects,
+    selectedProjectId
+  ]);
 
   const loadReportsData = useCallback(async () => {
-    if (!selectedProjectId) {
+    if (!scopedProjectId) {
       setReports([]);
       setStats(emptyStats);
       setSelectedReportId(null);
@@ -248,9 +371,9 @@ export default function DrillingReportsPage() {
       const search = new URLSearchParams();
       if (filters.from) search.set("from", filters.from);
       if (filters.to) search.set("to", filters.to);
-      if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") search.set("rigId", filters.rigId);
-      search.set("projectId", selectedProjectId);
+      if (!isSingleProjectScope && filters.clientId !== "all") search.set("clientId", filters.clientId);
+      if (!isSingleProjectScope && filters.rigId !== "all") search.set("rigId", filters.rigId);
+      search.set("projectId", scopedProjectId);
 
       const response = await fetch(`/api/drilling-reports?${search.toString()}`, { cache: "no-store" });
       const payload = response.ok ? await response.json() : { data: [], stats: emptyStats };
@@ -271,16 +394,30 @@ export default function DrillingReportsPage() {
     } finally {
       setReportsLoading(false);
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to, selectedProjectId]);
+  }, [filters.clientId, filters.from, filters.rigId, filters.to, isSingleProjectScope, scopedProjectId]);
 
   useEffect(() => {
     void loadReportsData();
   }, [loadReportsData]);
 
   const selectedProject = useMemo(
-    () => projects.find((project) => project.id === selectedProjectId) || null,
-    [projects, selectedProjectId]
+    () => projects.find((project) => project.id === scopedProjectId) || null,
+    [projects, scopedProjectId]
   );
+  const spendingReportsHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (scopedProjectId) {
+      params.set("projectId", scopedProjectId);
+    }
+    if (filters.from) {
+      params.set("from", filters.from);
+    }
+    if (filters.to) {
+      params.set("to", filters.to);
+    }
+    const query = params.toString();
+    return query ? `/spending/drilling-reports?${query}` : "/spending/drilling-reports";
+  }, [filters.from, filters.to, scopedProjectId]);
 
   const selectedReport = useMemo(
     () => reports.find((report) => report.id === selectedReportId) || null,
@@ -305,15 +442,11 @@ export default function DrillingReportsPage() {
     return rigs.find((rig) => rig.id === filters.rigId)?.rigCode || null;
   }, [filters.rigId, rigs]);
 
-  const activeRigs = useMemo(
-    () => rigs.filter((rig) => rig.status === "ACTIVE"),
-    [rigs]
-  );
-
   const orderedProjectTabs = useMemo(() => {
     const recentOrder = new Map(recentProjectIds.map((id, index) => [id, index]));
+    const sourceProjects = reportableProjects.length > 0 ? reportableProjects : projects;
 
-    return [...projects].sort((a, b) => {
+    return [...sourceProjects].sort((a, b) => {
       const recentA = recentOrder.get(a.id);
       const recentB = recentOrder.get(b.id);
 
@@ -328,7 +461,7 @@ export default function DrillingReportsPage() {
       }
       return a.name.localeCompare(b.name);
     });
-  }, [projects, recentProjectIds]);
+  }, [projects, recentProjectIds, reportableProjects]);
 
   const visibleProjectTabs = useMemo(
     () => orderedProjectTabs.slice(0, MAX_VISIBLE_PROJECT_TABS),
@@ -350,19 +483,6 @@ export default function DrillingReportsPage() {
     [projects, recentProjectIds, selectedProjectId]
   );
 
-  const pendingApprovals = useMemo(
-    () => reports.filter((entry) => entry.approvalStatus === "SUBMITTED").length,
-    [reports]
-  );
-  const rejectedReports = useMemo(
-    () => reports.filter((entry) => entry.approvalStatus === "REJECTED").length,
-    [reports]
-  );
-  const draftReports = useMemo(
-    () => reports.filter((entry) => entry.approvalStatus === "DRAFT").length,
-    [reports]
-  );
-
   const selectedProjectRigsLabel = useMemo(() => {
     if (!selectedProject) {
       return "No project selected";
@@ -379,26 +499,55 @@ export default function DrillingReportsPage() {
 
     return rigCodes.join(" • ");
   }, [selectedProject]);
-
-  const canSubmitReport = useCallback(
-    (report: DrillReportRecord) => {
-      if (!(report.approvalStatus === "DRAFT" || report.approvalStatus === "REJECTED")) {
-        return false;
-      }
-      const elevatedEditor = canUseElevatedDrillingEdit(user?.role);
-      if (elevatedEditor) {
-        return true;
-      }
-      return !report.submittedBy?.id || report.submittedBy.id === user?.id;
-    },
-    [user?.id, user?.role]
+  const selectedProjectBillingSummary = useMemo(
+    () => buildProjectBillingSummary(selectedProject),
+    [selectedProject]
+  );
+  const selectedProjectDirectCostSummary = useMemo(
+    () =>
+      buildProjectDirectCostSummaryFromReports(
+        reports.map((report) => ({
+          billableAmount: report.billableAmount,
+          inventoryMovements: report.inventoryMovements || []
+        }))
+      ),
+    [reports]
+  );
+  const selectedProjectOperationalKpis = useMemo(
+    () =>
+      buildProjectOperationalKpiSummaryFromReports(
+        reports.map((report) => ({
+          totalMetersDrilled: report.totalMetersDrilled,
+          workHours: report.workHours,
+          inventoryMovements: report.inventoryMovements || []
+        }))
+      ),
+    [reports]
+  );
+  const selectedReportDirectCostSummary = useMemo(
+    () =>
+      selectedReport
+        ? buildDrillReportDirectCostSummary({
+            billableAmount: selectedReport.billableAmount,
+            inventoryMovements: selectedReport.inventoryMovements || []
+          })
+        : null,
+    [selectedReport]
+  );
+  const selectedReportOperationalKpis = useMemo(
+    () =>
+      selectedReport
+        ? buildDrillOperationalKpiSummary({
+            totalMetersDrilled: selectedReport.totalMetersDrilled,
+            workHours: selectedReport.workHours,
+            inventoryMovements: selectedReport.inventoryMovements || []
+          })
+        : null,
+    [selectedReport]
   );
 
   const canEditReport = useCallback(
     (report: DrillReportRecord) => {
-      if (!(report.approvalStatus === "DRAFT" || report.approvalStatus === "REJECTED")) {
-        return false;
-      }
       const elevatedEditor = canUseElevatedDrillingEdit(user?.role);
       if (elevatedEditor) {
         return true;
@@ -412,24 +561,343 @@ export default function DrillingReportsPage() {
     () => projects.find((project) => project.id === form.projectId) || null,
     [form.projectId, projects]
   );
-
-  const computedMeters = useMemo(() => {
-    const explicitMeters = Number(form.totalMetersDrilled || 0);
-    if (explicitMeters > 0) {
-      return explicitMeters;
-    }
-    const from = Number(form.fromMeter || 0);
-    const to = Number(form.toMeter || 0);
-    return Math.max(0, to - from);
-  }, [form.fromMeter, form.toMeter, form.totalMetersDrilled]);
-
-  const computedBillable = useMemo(() => {
+  const formProjectRigOptions = useMemo(() => {
     if (!formProject) {
+      return [] as Array<{ id: string; rigCode: string }>;
+    }
+
+    const rigsById = new Map<string, { id: string; rigCode: string }>();
+    if (formProject.assignedRig) {
+      rigsById.set(formProject.assignedRig.id, {
+        id: formProject.assignedRig.id,
+        rigCode: formProject.assignedRig.rigCode
+      });
+    }
+    if (formProject.backupRig) {
+      rigsById.set(formProject.backupRig.id, {
+        id: formProject.backupRig.id,
+        rigCode: formProject.backupRig.rigCode
+      });
+    }
+
+    return Array.from(rigsById.values()).sort((left, right) => left.rigCode.localeCompare(right.rigCode));
+  }, [formProject]);
+  const formProjectRigsLabel = useMemo(() => {
+    if (formProjectRigOptions.length === 0) {
+      return "No rig assigned";
+    }
+    return formProjectRigOptions.map((entry) => entry.rigCode).join(" • ");
+  }, [formProjectRigOptions]);
+
+  useEffect(() => {
+    if (!canCreateReport || !isSingleProjectScope || !scopedProjectId) {
+      setIsFormOpen(false);
+      return;
+    }
+    setIsFormOpen(true);
+  }, [canCreateReport, isSingleProjectScope, scopedProjectId]);
+
+  useEffect(() => {
+    if (!isFormOpen || !isSingleProjectScope || !scopedProjectId) {
+      return;
+    }
+    if (form.projectId === scopedProjectId) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      projectId: scopedProjectId,
+      rigId: "",
+      selectedHoleNumber: "",
+      holeNumber: "",
+      holeMode: "CONTINUE",
+      delayReasonCategory: "",
+      delayReasonNote: "",
+      holeContinuityOverrideReason: "",
+      leadOperatorName: "",
+      assistantCount: "0",
+      billableQuantities: {}
+    }));
+    setConsumableSearch("");
+    setPendingConsumableItemId("");
+    setPendingConsumableQuantity("1");
+    setStagedConsumables([]);
+    setRequiresContinuityOverride(false);
+  }, [form.projectId, isFormOpen, isSingleProjectScope, scopedProjectId]);
+  const formProjectBillingItems = useMemo(
+    () =>
+      (formProject?.billingRateItems || [])
+        .filter((item) => item.isActive)
+        .sort((left, right) => left.sortOrder - right.sortOrder),
+    [formProject]
+  );
+  const guidedBillableInputs = useMemo(
+    () => buildGuidedBillableInputsModel(formProjectBillingItems),
+    [formProjectBillingItems]
+  );
+  const formProjectHoleProgress = useMemo(
+    () => holeProgressByProject[form.projectId] || [],
+    [form.projectId, holeProgressByProject]
+  );
+  const nextHoleNumberSuggestion = useMemo(
+    () => getNextHoleNumberSuggestion(formProjectHoleProgress),
+    [formProjectHoleProgress]
+  );
+  const selectedHoleProgress = useMemo(
+    () =>
+      formProjectHoleProgress.find((entry) => entry.holeNumber === form.selectedHoleNumber) || null,
+    [form.selectedHoleNumber, formProjectHoleProgress]
+  );
+  const defaultBaselineDepth = useMemo(() => {
+    if (formMode === "edit") {
+      const existingFrom = Number(form.fromMeter);
+      return Number.isFinite(existingFrom) ? existingFrom : 0;
+    }
+    if (form.holeMode === "CONTINUE") {
+      return selectedHoleProgress?.currentDepth || 0;
+    }
+    return 0;
+  }, [form.fromMeter, form.holeMode, formMode, selectedHoleProgress]);
+  const metersDrilledToday = useMemo(() => {
+    const parsed = Number(form.metersDrilledToday || 0);
+    if (!Number.isFinite(parsed) || parsed < 0) {
       return 0;
     }
-    const rate = Number(formProject.contractRatePerM || 0);
-    return Math.round(computedMeters * rate * 100) / 100;
-  }, [computedMeters, formProject]);
+    return parsed;
+  }, [form.metersDrilledToday]);
+  const derivedFromMeter = defaultBaselineDepth;
+  const derivedToMeter = derivedFromMeter + metersDrilledToday;
+  const derivedHoleNumber =
+    form.holeMode === "START_NEW"
+      ? form.holeNumber || nextHoleNumberSuggestion
+      : form.selectedHoleNumber || form.holeNumber;
+  const stageContextRows = useMemo(
+    () => resolveStageContextRows(formProjectBillingItems, derivedFromMeter, derivedToMeter),
+    [derivedFromMeter, derivedToMeter, formProjectBillingItems]
+  );
+  const stageContextText = useMemo(() => {
+    if (metersDrilledToday <= 0) {
+      return "Enter meters drilled today to preview stage context.";
+    }
+    if (stageContextRows.length === 0) {
+      return "No staged billing band overlaps this report range.";
+    }
+    return stageContextRows
+      .map((row) => `${row.label} (${formatNumber(row.rangeStart)}m-${formatNumber(row.rangeEnd)}m)`)
+      .join(" • ");
+  }, [metersDrilledToday, stageContextRows]);
+  const guidedBillableLinesResult = useMemo(
+    () =>
+      buildGuidedBillableLineInputs({
+        billingItems: formProjectBillingItems,
+        metersDrilledToday,
+        derivedFromMeter,
+        derivedToMeter,
+        workHours: Number(form.workHours),
+        rigMoves: Number(form.rigMoves),
+        standbyHours: Number(form.standbyHours),
+        manualQuantities: form.billableQuantities
+      }),
+    [
+      form.billableQuantities,
+      derivedFromMeter,
+      derivedToMeter,
+      form.rigMoves,
+      form.standbyHours,
+      form.workHours,
+      formProjectBillingItems,
+      metersDrilledToday
+    ]
+  );
+  const stagedCoverageWarning = useMemo(() => {
+    if (!guidedBillableLinesResult.hasStagedAutoAllocation || metersDrilledToday <= 0) {
+      return null;
+    }
+    if (guidedBillableLinesResult.stagedUnallocatedMeters <= 0) {
+      return null;
+    }
+    return `Only ${formatNumber(guidedBillableLinesResult.stagedAllocatedMeters)}m of ${formatNumber(metersDrilledToday)}m fits configured stage bands. ${formatNumber(guidedBillableLinesResult.stagedUnallocatedMeters)}m is outside configured stage depth bands.`;
+  }, [
+    guidedBillableLinesResult.hasStagedAutoAllocation,
+    guidedBillableLinesResult.stagedAllocatedMeters,
+    guidedBillableLinesResult.stagedUnallocatedMeters,
+    metersDrilledToday
+  ]);
+  const estimatedDailyBillable = useMemo(() => {
+    const lineAmount = guidedBillableLinesResult.lines.reduce((sum, line) => {
+      const rateItem = formProjectBillingItems.find((entry) => entry.itemCode === line.itemCode);
+      const unitRate = Number(rateItem?.unitRate || 0);
+      if (!Number.isFinite(unitRate) || unitRate <= 0) {
+        return sum;
+      }
+      return sum + line.quantity * unitRate;
+    }, 0);
+    if (lineAmount > 0) {
+      return lineAmount;
+    }
+    const fallbackRate = Number(formProject?.contractRatePerM || 0);
+    return metersDrilledToday * (Number.isFinite(fallbackRate) ? fallbackRate : 0);
+  }, [formProject?.contractRatePerM, formProjectBillingItems, guidedBillableLinesResult.lines, metersDrilledToday]);
+  const consumablesPoolByItemId = useMemo(
+    () => new Map(formConsumablesPool.map((entry) => [entry.itemId, entry])),
+    [formConsumablesPool]
+  );
+  const pendingConsumable = useMemo(
+    () => formConsumablesPool.find((entry) => entry.itemId === pendingConsumableItemId) || null,
+    [formConsumablesPool, pendingConsumableItemId]
+  );
+  const filteredConsumableSearchResults = useMemo(() => {
+    const query = consumableSearch.trim().toLowerCase();
+    const stagedIds = new Set(stagedConsumables.map((row) => row.itemId));
+    const filtered = formConsumablesPool.filter((entry) => {
+      if (stagedIds.has(entry.itemId)) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      return (
+        entry.itemName.toLowerCase().includes(query) ||
+        entry.sku.toLowerCase().includes(query)
+      );
+    });
+    return filtered.slice(0, 8);
+  }, [consumableSearch, formConsumablesPool, stagedConsumables]);
+
+  const loadProjectHoleProgress = useCallback(async (projectId: string) => {
+    if (!projectId) {
+      return;
+    }
+    setHoleProgressLoading(true);
+    try {
+      const response = await fetch(`/api/drilling-reports?projectId=${encodeURIComponent(projectId)}`, {
+        cache: "no-store"
+      });
+      const payload = response.ok ? await response.json() : { data: [] };
+      const next = buildHoleProgressSummaries(Array.isArray(payload.data) ? payload.data : []);
+      setHoleProgressByProject((current) => ({
+        ...current,
+        [projectId]: next
+      }));
+    } catch {
+      setHoleProgressByProject((current) => ({
+        ...current,
+        [projectId]: []
+      }));
+    } finally {
+      setHoleProgressLoading(false);
+    }
+  }, []);
+
+  const loadFormConsumablesPool = useCallback(
+    async (projectId: string, excludeDrillReportId: string | null) => {
+      if (!projectId) {
+        setFormConsumablesPool([]);
+        return;
+      }
+      setFormConsumablesLoading(true);
+      try {
+        const search = new URLSearchParams({ projectId });
+        if (excludeDrillReportId) {
+          search.set("excludeDrillReportId", excludeDrillReportId);
+        }
+        const response = await fetch(`/api/drilling-reports/consumables?${search.toString()}`, {
+          cache: "no-store"
+        });
+        const payload = response.ok ? await response.json() : { data: [] };
+        setFormConsumablesPool(Array.isArray(payload.data) ? payload.data : []);
+      } catch {
+        setFormConsumablesPool([]);
+      } finally {
+        setFormConsumablesLoading(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!isFormOpen || !form.projectId) {
+      return;
+    }
+    if (holeProgressByProject[form.projectId]) {
+      return;
+    }
+    void loadProjectHoleProgress(form.projectId);
+  }, [form.projectId, holeProgressByProject, isFormOpen, loadProjectHoleProgress]);
+
+  useEffect(() => {
+    if (!isFormOpen || !form.projectId) {
+      setFormConsumablesPool([]);
+      return;
+    }
+    void loadFormConsumablesPool(
+      form.projectId,
+      formMode === "edit" && editingReportId ? editingReportId : null
+    );
+  }, [editingReportId, form.projectId, formMode, isFormOpen, loadFormConsumablesPool]);
+
+  useEffect(() => {
+    if (!isFormOpen || formMode !== "create") {
+      return;
+    }
+    const hasExistingHoles = formProjectHoleProgress.length > 0;
+    setForm((current) => {
+      const nextMode = hasExistingHoles ? current.holeMode : "START_NEW";
+      const nextSelectedHole =
+        hasExistingHoles && !current.selectedHoleNumber
+          ? formProjectHoleProgress[0]?.holeNumber || ""
+          : current.selectedHoleNumber;
+      const nextHoleNumber =
+        nextMode === "START_NEW" ? nextHoleNumberSuggestion : nextSelectedHole || current.holeNumber;
+      if (
+        current.holeMode === nextMode &&
+        current.selectedHoleNumber === nextSelectedHole &&
+        current.holeNumber === nextHoleNumber
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        holeMode: nextMode,
+        selectedHoleNumber: nextSelectedHole,
+        holeNumber: nextHoleNumber
+      };
+    });
+  }, [formMode, formProjectHoleProgress, isFormOpen, nextHoleNumberSuggestion]);
+  useEffect(() => {
+    if (!isFormOpen) {
+      return;
+    }
+    if (formProjectBillingItems.length === 0 && Object.keys(form.billableQuantities).length === 0) {
+      return;
+    }
+
+    const allowedCodes = new Set(formProjectBillingItems.map((item) => item.itemCode));
+    setForm((current) => {
+      const nextBillableQuantities = Object.entries(current.billableQuantities).reduce<
+        Record<string, string>
+      >((accumulator, [itemCode, quantity]) => {
+        if (allowedCodes.has(itemCode)) {
+          accumulator[itemCode] = quantity;
+        }
+        return accumulator;
+      }, {});
+
+      if (
+        Object.keys(nextBillableQuantities).length === Object.keys(current.billableQuantities).length &&
+        Object.keys(nextBillableQuantities).every(
+          (itemCode) => nextBillableQuantities[itemCode] === current.billableQuantities[itemCode]
+        )
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        billableQuantities: nextBillableQuantities
+      };
+    });
+  }, [form.billableQuantities, formProjectBillingItems, isFormOpen]);
 
   const buildHref = useCallback(
     (path: string, overrides?: Record<string, string | null | undefined>) => buildScopedHref(filters, path, overrides),
@@ -450,16 +918,14 @@ export default function DrillingReportsPage() {
         { key: "reportsLogged", label: "Reports Logged", value: stats.reportsLogged },
         { key: "totalMeters", label: "Total Meters", value: stats.totalMeters },
         { key: "billableActivity", label: "Total Billable", value: stats.billableActivity },
-        { key: "pendingApprovals", label: "Pending Approvals", value: pendingApprovals },
-        { key: "rejectedReports", label: "Rejected Reports", value: rejectedReports },
-        { key: "draftReports", label: "Draft Reports", value: draftReports }
+        { key: "averageWorkHours", label: "Average Work Hours", value: stats.averageWorkHours }
       ],
       tablePreviews: [
         {
           key: "drilling-reports",
           title: "Drilling Reports",
           rowCount: reports.length,
-          columns: ["Date", "Project", "Rig", "Hole", "Meters", "WorkHours", "DelayHours", "Status"],
+          columns: ["Date", "Project", "Rig", "Hole", "Meters", "WorkHours", "DelayHours"],
           rows: reports.slice(0, 10).map((report) => ({
             id: report.id,
             date: toIsoDate(report.date),
@@ -469,7 +935,6 @@ export default function DrillingReportsPage() {
             meters: report.totalMetersDrilled,
             workHours: report.workHours,
             delayHours: report.delayHours,
-            status: report.approvalStatus,
             billable: report.billableAmount,
             href: buildHref("/drilling-reports"),
             targetId: report.id,
@@ -489,32 +954,17 @@ export default function DrillingReportsPage() {
         : [],
       priorityItems: [
         ...reports
-          .filter((report) => report.approvalStatus === "SUBMITTED")
+          .filter((report) => report.delayHours > 0)
           .sort((a, b) => b.delayHours - a.delayHours)
           .slice(0, 3)
           .map((report) => ({
             id: report.id,
             label: `${report.project.name} • ${report.holeNumber}`,
-            reason: `Submitted for approval${report.delayHours > 0 ? ` with ${report.delayHours.toFixed(1)} delay hours` : ""}.`,
+            reason: `Delay recorded (${report.delayHours.toFixed(1)} hours). Review report context.`,
             severity: report.delayHours >= 4 ? ("HIGH" as const) : ("MEDIUM" as const),
             amount: report.billableAmount,
             href: buildHref("/drilling-reports"),
-            issueType: "APPROVAL_BACKLOG",
-            targetId: report.id,
-            sectionId: "drilling-reports-table-section",
-            targetPageKey: "drilling-reports"
-          })),
-        ...reports
-          .filter((report) => report.approvalStatus === "REJECTED")
-          .slice(0, 2)
-          .map((report) => ({
-            id: `rejected-${report.id}`,
-            label: `${report.project.name} • ${report.holeNumber}`,
-            reason: `Rejected report${report.rejectionReason ? ` (${report.rejectionReason})` : ""} needs correction before billing.`,
-            severity: "MEDIUM" as const,
-            amount: report.billableAmount,
-            href: buildHref("/drilling-reports"),
-            issueType: "REJECTED_REPORT",
+            issueType: "DRILLING_REPORT_COMPLETENESS",
             targetId: report.id,
             sectionId: "drilling-reports-table-section",
             targetPageKey: "drilling-reports"
@@ -522,21 +972,14 @@ export default function DrillingReportsPage() {
       ],
       navigationTargets: [
         {
-          label: "Open Drilling Approvals",
-          href: buildHref("/approvals", { tab: "drilling-reports" }),
-          reason: "Clear submitted drilling reports quickly.",
-          pageKey: "approvals",
-          sectionId: "approvals-tab-drilling-reports"
-        },
-        {
           label: "Open Revenue",
-          href: buildHref("/revenue", { projectId: selectedProjectId || null }),
+          href: buildHref("/revenue", { projectId: scopedProjectId || null }),
           reason: "Validate drilling output impact on revenue.",
           pageKey: "revenue"
         },
         {
           label: "Open Profit",
-          href: buildHref("/profit", { projectId: selectedProjectId || null }),
+          href: buildHref("/profit", { projectId: scopedProjectId || null }),
           reason: "Review profitability impact for drilling scope.",
           pageKey: "profit"
         }
@@ -544,23 +987,24 @@ export default function DrillingReportsPage() {
       notes: selectedProject
         ? [
             `Active project: ${selectedProject.name} (${selectedProject.client.name}).`,
-            "Project tabs define operational context; top bar filters define scope."
+            isSingleProjectScope
+              ? "Project scope is set from the top bar."
+              : "Project tabs define operational context while top bar filters refine scope."
           ]
-        : ["Select an active project tab to anchor drilling operations context."]
+        : ["Select an active project to anchor drilling operations context."]
     }),
     [
       buildHref,
-      draftReports,
       filters.clientId,
       filters.from,
       filters.rigId,
       filters.to,
-      pendingApprovals,
-      rejectedReports,
+      isSingleProjectScope,
       reports,
       selectedProject,
-      selectedProjectId,
+      scopedProjectId,
       selectedReport,
+      stats.averageWorkHours,
       stats.billableActivity,
       stats.reportsLogged,
       stats.totalMeters
@@ -612,14 +1056,14 @@ export default function DrillingReportsPage() {
     }
     const active = selectedReport;
     const missingContext: string[] = [];
-    if (active && !active.operatorCrew) {
-      missingContext.push("Crew/operator field is missing.");
+    if (active && !active.leadOperatorName && !active.operatorCrew) {
+      missingContext.push("Lead operator is missing.");
     }
     if (active && !active.areaLocation) {
       missingContext.push("Area/location field is missing.");
     }
     if (active && !active.comments) {
-      missingContext.push("Comments/context note is missing.");
+      missingContext.push("Comments note is missing.");
     }
     const roleLabel =
       user?.role === "FIELD"
@@ -632,101 +1076,145 @@ export default function DrillingReportsPage() {
       heading: "Field / Reporting Workflow Assist",
       roleLabel,
       tone:
-        active?.approvalStatus === "REJECTED" || (active?.delayHours || 0) > 6
-          ? "amber"
-          : "indigo",
+        (active?.delayHours || 0) > 6 ? "amber" : "indigo",
       whyThisMatters:
         assistTarget?.reason ||
         (active
-          ? `Report ${active.holeNumber} affects daily production completeness and approval readiness.`
+          ? `Report ${active.holeNumber} affects daily production completeness.`
           : "This reporting target was prioritized to improve operational visibility."),
       inspectFirst: [
         "Confirm drilling meters, work hours, and delay values are accurate.",
         "Verify rig/project alignment and hole reference fields.",
-        "Check whether submission is delayed or missing key context."
+        "Check for missing daily notes."
       ],
       missingContext,
       checklist: [
-        "Complete before submission",
-        "Review drilling entry",
+        "Complete daily report",
+        "Review drilling details",
         "Confirm rig/project assignment",
-        "Add operational context note",
+        "Add comments if needed",
         "Check reporting completeness"
       ],
       recommendedNextStep: active
-        ? active.approvalStatus === "REJECTED"
-          ? "Fix missing/rejected fields first, then resubmit with clear context."
-          : "Review missing context and finalize this report for cleaner approval flow."
-        : "Open the highlighted report row and complete missing reporting context first."
+        ? "Complete missing notes and save this report."
+        : "Open the highlighted report and complete missing details first."
     };
   }, [assistTarget, selectedReport, user?.role]);
 
   useEffect(() => {
-    if (!isFormOpen || !form.projectId || form.rigId) {
+    if (!isFormOpen || !form.projectId) {
+      return;
+    }
+    if (formProjectRigOptions.length === 0) {
+      if (form.rigId) {
+        setForm((current) => ({ ...current, rigId: "" }));
+      }
       return;
     }
 
-    const formSelectedProject = projects.find((project) => project.id === form.projectId);
-    if (!formSelectedProject?.assignedRig?.id) {
+    const hasSelectedAllowedRig = formProjectRigOptions.some((rigOption) => rigOption.id === form.rigId);
+    if (hasSelectedAllowedRig) {
       return;
     }
 
-    if (!activeRigs.some((rig) => rig.id === formSelectedProject.assignedRig?.id)) {
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      rigId: formSelectedProject.assignedRig?.id || ""
-    }));
-  }, [activeRigs, form.projectId, form.rigId, isFormOpen, projects]);
+    const fallbackRigId = formProjectRigOptions[0]?.id || "";
+    setForm((current) =>
+      current.rigId === fallbackRigId
+        ? current
+        : {
+            ...current,
+            rigId: fallbackRigId
+          }
+    );
+  }, [form.projectId, form.rigId, formProjectRigOptions, isFormOpen]);
 
   const openCreateReportModal = useCallback(() => {
-    const initialProjectId = selectedProjectId || projects[0]?.id || "";
+    const initialProjectId =
+      scopedProjectId || reportableProjects[0]?.id || projects[0]?.id || "";
     const initialProject = projects.find((project) => project.id === initialProjectId) || null;
-    const rigFromProject = initialProject?.assignedRig?.id || "";
-    const rigFromFilter = filters.rigId !== "all" ? filters.rigId : "";
-    const initialRigId = rigFromProject || rigFromFilter;
+    const initialRigId = initialProject?.assignedRig?.id || initialProject?.backupRig?.id || "";
 
     setFormMode("create");
     setEditingReportId(null);
     setFormError(null);
+    setRequiresContinuityOverride(false);
     setNotice(null);
+    setConsumableSearch("");
+    setPendingConsumableItemId("");
+    setPendingConsumableQuantity("1");
+    setStagedConsumables([]);
     setForm(createEmptyForm(initialProjectId, initialRigId));
+    if (initialProjectId && !holeProgressByProject[initialProjectId]) {
+      void loadProjectHoleProgress(initialProjectId);
+    }
     setIsFormOpen(true);
-  }, [filters.rigId, projects, selectedProjectId]);
+  }, [holeProgressByProject, loadProjectHoleProgress, projects, reportableProjects, scopedProjectId]);
 
   const openEditReportModal = useCallback((report: DrillReportRecord) => {
+    const billableQuantities = report.billableLines.reduce<Record<string, string>>(
+      (accumulator, line) => {
+        accumulator[line.itemCode] = String(line.quantity);
+        return accumulator;
+      },
+      {}
+    );
+
     setFormMode("edit");
     setEditingReportId(report.id);
     setFormError(null);
+    setRequiresContinuityOverride(Boolean(report.holeContinuityOverrideReason));
     setNotice(null);
+    setConsumableSearch("");
+    setPendingConsumableItemId("");
+    setPendingConsumableQuantity("1");
+    const stagedByItemId = new Map<string, StagedConsumableLine>();
+    for (const movement of report.inventoryMovements || []) {
+      const itemId = movement.item?.id || "";
+      if (!itemId) {
+        continue;
+      }
+      const existingLine = stagedByItemId.get(itemId);
+      const movementQuantity = Math.max(0, Number(movement.quantity || 0));
+      if (existingLine) {
+        const nextQuantity = Number(existingLine.quantity) + movementQuantity;
+        existingLine.quantity = String(nextQuantity);
+      } else {
+        stagedByItemId.set(itemId, {
+          itemId,
+          itemName: movement.item?.name || "Item",
+          sku: movement.item?.sku || "",
+          quantity: String(movementQuantity)
+        });
+      }
+    }
+    setStagedConsumables(Array.from(stagedByItemId.values()));
     setForm({
       date: new Date(report.date).toISOString().slice(0, 10),
       projectId: report.project.id,
       rigId: report.rig.id,
+      holeMode: "CONTINUE",
+      selectedHoleNumber: report.holeNumber,
       holeNumber: report.holeNumber,
-      areaLocation: report.areaLocation,
       fromMeter: String(report.fromMeter),
       toMeter: String(report.toMeter),
-      totalMetersDrilled: String(report.totalMetersDrilled),
+      metersDrilledToday: String(report.totalMetersDrilled),
       workHours: String(report.workHours),
       rigMoves: String(report.rigMoves),
       standbyHours: String(report.standbyHours),
       delayHours: String(report.delayHours),
-      operatorCrew: report.operatorCrew || "",
-      comments: report.comments || ""
+      delayReasonCategory: parseDelayReasonCategoryForForm(report.delayReasonCategory),
+      delayReasonNote: report.delayReasonNote || "",
+      holeContinuityOverrideReason: report.holeContinuityOverrideReason || "",
+      leadOperatorName: report.leadOperatorName || report.operatorCrew || "",
+      assistantCount: String(Math.max(0, Number(report.assistantCount || 0))),
+      comments: report.comments || "",
+      billableQuantities
     });
-    setIsFormOpen(true);
-  }, []);
-
-  const closeFormModal = useCallback(() => {
-    if (formSaving) {
-      return;
+    if (!holeProgressByProject[report.project.id]) {
+      void loadProjectHoleProgress(report.project.id);
     }
-    setIsFormOpen(false);
-    setFormError(null);
-  }, [formSaving]);
+    setIsFormOpen(true);
+  }, [holeProgressByProject, loadProjectHoleProgress]);
 
   const emitAnalyticsRefresh = useCallback(() => {
     if (typeof window === "undefined") {
@@ -739,99 +1227,176 @@ export default function DrillingReportsPage() {
     window.dispatchEvent(new Event("gf:profit-updated"));
   }, []);
 
-  const submitStatusAction = useCallback(
-    async (reportId: string, action: "submit" | "approve" | "reject" | "reopen", reason?: string) => {
-      const response = await fetch(`/api/drilling-reports/${reportId}/status`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          action,
-          reason: reason || undefined
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "Failed to update report status."));
+  const addPendingConsumableToStaged = useCallback(() => {
+    if (!pendingConsumable) {
+      setFormError("Select a consumable from the approved list first.");
+      return;
+    }
+    const parsedQuantity = Number(pendingConsumableQuantity);
+    const quantity = Number.isFinite(parsedQuantity) ? parsedQuantity : 0;
+    if (quantity <= 0) {
+      setFormError("Consumable quantity must be greater than zero.");
+      return;
+    }
+    if (quantity > pendingConsumable.availableNow) {
+      setFormError(
+        `Cannot use more than available for ${pendingConsumable.itemName}. Requested ${formatNumber(
+          quantity
+        )}, available ${formatNumber(pendingConsumable.availableNow)}.`
+      );
+      return;
+    }
+    setFormError(null);
+    setStagedConsumables((current) => [
+      ...current,
+      {
+        itemId: pendingConsumable.itemId,
+        itemName: pendingConsumable.itemName,
+        sku: pendingConsumable.sku,
+        quantity: String(quantity)
       }
-    },
-    []
-  );
-
-  const updateReportStatus = useCallback(
-    async (reportId: string, action: "submit" | "approve" | "reject" | "reopen") => {
-      try {
-        let reason = "";
-        if (action === "reject") {
-          reason = window.prompt("Enter rejection reason (required):", "")?.trim() || "";
-          if (!reason) {
-            return;
-          }
-        }
-
-        await submitStatusAction(reportId, action, reason || undefined);
-        await loadReportsData();
-        emitAnalyticsRefresh();
-        if (action === "submit") {
-          setNotice("Report submitted for approval.");
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Failed to update report status.";
-        window.alert(message);
-      }
-    },
-    [emitAnalyticsRefresh, loadReportsData, submitStatusAction]
-  );
+    ]);
+    setPendingConsumableItemId("");
+    setPendingConsumableQuantity("1");
+  }, [pendingConsumable, pendingConsumableQuantity]);
 
   const saveReport = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       setFormSaving(true);
       setFormError(null);
+      const billableLinesInput = guidedBillableLinesResult.lines;
+      if (guidedBillableLinesResult.error) {
+        setFormError(guidedBillableLinesResult.error);
+        setFormSaving(false);
+        return;
+      }
 
-      const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
-      const submissionMode = submitter?.dataset.mode === "submit" ? "submit" : "draft";
+      if (!form.projectId) {
+        setFormError("Select a project first.");
+        setFormSaving(false);
+        return;
+      }
+      if (!form.rigId) {
+        setFormError("Select one of the project's assigned rigs before saving.");
+        setFormSaving(false);
+        return;
+      }
+      if (formProjectRigOptions.length === 0) {
+        setFormError("This project has no assigned rig. Assign a rig to the project first.");
+        setFormSaving(false);
+        return;
+      }
+      if (!formProjectRigOptions.some((rigOption) => rigOption.id === form.rigId)) {
+        setFormError("Selected rig is not assigned to this project. Choose one of the project rigs.");
+        setFormSaving(false);
+        return;
+      }
+      if (!derivedHoleNumber) {
+        setFormError("Choose a hole to continue or start a new hole.");
+        setFormSaving(false);
+        return;
+      }
+      if (metersDrilledToday < 0) {
+        setFormError("Meters drilled today must be zero or greater.");
+        setFormSaving(false);
+        return;
+      }
+      const parsedDelayHours = Number(form.delayHours);
+      const delayHours = Number.isFinite(parsedDelayHours) ? parsedDelayHours : 0;
+      if (delayHours > 0 && !form.delayReasonCategory) {
+        setFormError("Select a delay reason when delay hours are above zero.");
+        setFormSaving(false);
+        return;
+      }
+      const trimmedOverrideReason = form.holeContinuityOverrideReason.trim();
+      if (requiresContinuityOverride && trimmedOverrideReason.length === 0) {
+        setFormError("Add a short reason to continue with a different starting depth.");
+        setFormSaving(false);
+        return;
+      }
+      const trimmedDelayNote = form.delayReasonNote.trim();
+      const trimmedLeadOperatorName = form.leadOperatorName.trim();
+      const parsedAssistantCount = Number(form.assistantCount);
+      const assistantCount =
+        Number.isFinite(parsedAssistantCount) && parsedAssistantCount >= 0
+          ? Math.round(parsedAssistantCount)
+          : 0;
+      const consumablesUsedPayload: Array<{ itemId: string; quantity: number }> = [];
+      for (const row of stagedConsumables) {
+        const quantity = Number(row.quantity);
+        if (!Number.isFinite(quantity) || quantity < 0) {
+          setFormError(`Consumable quantity for ${row.itemName} must be zero or greater.`);
+          setFormSaving(false);
+          return;
+        }
+        if (quantity === 0) {
+          continue;
+        }
+        const pool = consumablesPoolByItemId.get(row.itemId);
+        if (!pool) {
+          setFormError(`${row.itemName} is no longer approved and available for this project.`);
+          setFormSaving(false);
+          return;
+        }
+        if (quantity > pool.availableNow) {
+          setFormError(
+            `Cannot use more than available for ${row.itemName}. Requested ${formatNumber(
+              quantity
+            )}, available ${formatNumber(pool.availableNow)}.`
+          );
+          setFormSaving(false);
+          return;
+        }
+        consumablesUsedPayload.push({
+          itemId: row.itemId,
+          quantity
+        });
+      }
 
       const payload = {
         date: form.date,
         projectId: form.projectId,
         rigId: form.rigId,
-        holeNumber: form.holeNumber,
-        areaLocation: form.areaLocation,
-        fromMeter: Number(form.fromMeter),
-        toMeter: Number(form.toMeter),
-        totalMetersDrilled: Number(form.totalMetersDrilled || 0),
+        holeNumber: derivedHoleNumber,
+        areaLocation: formProject?.location || "Project site",
+        fromMeter: derivedFromMeter,
+        toMeter: derivedToMeter,
+        totalMetersDrilled: metersDrilledToday,
         workHours: Number(form.workHours),
         rigMoves: Number(form.rigMoves),
         standbyHours: Number(form.standbyHours),
-        delayHours: Number(form.delayHours),
-        operatorCrew: form.operatorCrew,
-        comments: form.comments
+        delayHours,
+        delayReasonCategory: delayHours > 0 ? form.delayReasonCategory || null : null,
+        delayReasonNote: delayHours > 0 ? (trimmedDelayNote.length > 0 ? trimmedDelayNote : null) : null,
+        holeContinuityOverrideReason: trimmedOverrideReason.length > 0 ? trimmedOverrideReason : null,
+        leadOperatorName: trimmedLeadOperatorName.length > 0 ? trimmedLeadOperatorName : null,
+        assistantCount,
+        comments: form.comments,
+        consumablesUsed: consumablesUsedPayload,
+        ...(formProjectBillingItems.length > 0 ? { billableLines: billableLinesInput } : {})
       };
 
       try {
-        let savedReportId = editingReportId || "";
-
         if (formMode === "create") {
           const response = await fetch("/api/drilling-reports", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
             },
-            body: JSON.stringify({
-              ...payload,
-              submissionMode
-            })
+            body: JSON.stringify(payload)
           });
 
           if (!response.ok) {
-            setFormError(await readApiError(response, "Failed to save drilling report."));
+            const message = await readApiError(response, "Failed to save drilling report.");
+            if (message.includes("Add an override reason to save.")) {
+              setRequiresContinuityOverride(true);
+            }
+            setFormError(message);
             return;
           }
 
-          const result = await response.json();
-          savedReportId = result?.data?.id || "";
+          await response.json();
         } else {
           if (!editingReportId) {
             setFormError("Unable to edit report. Missing report ID.");
@@ -847,32 +1412,26 @@ export default function DrillingReportsPage() {
           });
 
           if (!response.ok) {
-            setFormError(await readApiError(response, "Failed to update drilling report."));
+            const message = await readApiError(response, "Failed to update drilling report.");
+            if (message.includes("Add an override reason to save.")) {
+              setRequiresContinuityOverride(true);
+            }
+            setFormError(message);
             return;
           }
 
-          const result = await response.json();
-          savedReportId = result?.data?.id || editingReportId;
-
-          if (submissionMode === "submit") {
-            await submitStatusAction(savedReportId, "submit");
-          }
+          await response.json();
         }
 
         await loadReportsData();
         emitAnalyticsRefresh();
-        if (submissionMode === "submit") {
-          setNotice("Report submitted for approval.");
-        } else if (formMode === "create") {
-          setNotice("Draft report saved.");
-        } else {
-          setNotice("Draft report updated.");
-        }
+        setNotice(formMode === "create" ? "Report saved." : "Report updated.");
 
         setIsFormOpen(false);
         setEditingReportId(null);
         setFormMode("create");
-        setForm(createEmptyForm(selectedProjectId, selectedProject?.assignedRig?.id || ""));
+        setRequiresContinuityOverride(false);
+        setForm(createEmptyForm(scopedProjectId, selectedProject?.assignedRig?.id || selectedProject?.backupRig?.id || ""));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to save drilling report.";
         setFormError(message);
@@ -884,11 +1443,23 @@ export default function DrillingReportsPage() {
       editingReportId,
       emitAnalyticsRefresh,
       form,
+      consumablesPoolByItemId,
       formMode,
+      formProjectBillingItems,
+      formProjectRigOptions,
+      formProject?.location,
+      guidedBillableLinesResult.error,
+      guidedBillableLinesResult.lines,
+      derivedFromMeter,
+      derivedHoleNumber,
+      derivedToMeter,
       loadReportsData,
+      metersDrilledToday,
+      requiresContinuityOverride,
+      stagedConsumables,
       selectedProject?.assignedRig?.id,
-      selectedProjectId,
-      submitStatusAction
+      selectedProject?.backupRig?.id,
+      scopedProjectId
     ]
   );
 
@@ -902,91 +1473,100 @@ export default function DrillingReportsPage() {
         )}
 
         <Card
-          title="Drilling Operations Workspace"
-          subtitle="Project-first drilling console for daily reporting and approvals"
+          className="hidden"
+          title="Drilling workspace"
+          subtitle="Record what happened today. Use Spending for report browsing and detail review."
           action={
             <AccessGate permission="drilling:submit" fallback={null}>
               <button
                 type="button"
                 onClick={openCreateReportModal}
-                className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700"
+                className="gf-btn-primary px-3 py-2 text-xs"
               >
-                New Drilling Report
+                Record report
               </button>
             </AccessGate>
           }
         >
           <div className="space-y-3">
             <div className="space-y-2">
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {orderedProjectTabs.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-ink-600">
-                    No active projects available in this scope.
-                  </p>
-                ) : (
-                  visibleProjectTabs.map((project) => (
-                    <button
-                      key={project.id}
-                      type="button"
-                      onClick={() => handleSelectProject(project.id)}
-                      className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                        project.id === selectedProjectId
-                          ? "border-brand-500 bg-brand-50 text-brand-800"
-                          : "border-slate-200 bg-white text-ink-700 hover:bg-slate-50"
-                      }`}
-                    >
-                      {project.name}
-                    </button>
-                  ))
-                )}
-              </div>
-
-              {(overflowProjectTabs.length > 0 || recentProjectTabs.length > 0) && (
-                <div className="flex flex-wrap items-center gap-2">
-                  {overflowProjectTabs.length > 0 && (
-                    <label className="text-xs text-ink-700">
-                      <span className="mr-2">More projects</span>
-                      <select
-                        value=""
-                        onChange={(event) => {
-                          if (event.target.value) {
-                            handleSelectProject(event.target.value);
-                          }
-                        }}
-                        className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                      >
-                        <option value="">Select project</option>
-                        {overflowProjectTabs.map((project) => (
-                          <option key={project.id} value={project.id}>
-                            {project.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-
-                  {recentProjectTabs.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-xs text-ink-600">Recent:</span>
-                      {recentProjectTabs.map((project) => (
+              {!isSingleProjectScope ? (
+                <>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {orderedProjectTabs.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-sm text-ink-600">
+                        No active projects available in this scope.
+                      </p>
+                    ) : (
+                      visibleProjectTabs.map((project) => (
                         <button
-                          key={`recent-${project.id}`}
+                          key={project.id}
                           type="button"
                           onClick={() => handleSelectProject(project.id)}
-                          className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-ink-700 hover:bg-slate-100"
+                          className={`whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                            project.id === selectedProjectId
+                              ? "border-brand-500 bg-brand-50 text-brand-800"
+                              : "border-slate-200 bg-white text-ink-700 hover:bg-slate-50"
+                          }`}
                         >
                           {project.name}
                         </button>
-                      ))}
+                      ))
+                    )}
+                  </div>
+
+                  {(overflowProjectTabs.length > 0 || recentProjectTabs.length > 0) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {overflowProjectTabs.length > 0 && (
+                        <label className="text-xs text-ink-700">
+                          <span className="mr-2">More projects</span>
+                          <select
+                            value=""
+                            onChange={(event) => {
+                              if (event.target.value) {
+                                handleSelectProject(event.target.value);
+                              }
+                            }}
+                            className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
+                          >
+                            <option value="">Select project</option>
+                            {overflowProjectTabs.map((project) => (
+                              <option key={project.id} value={project.id}>
+                                {project.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+
+                      {recentProjectTabs.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs text-ink-600">Recent:</span>
+                          {recentProjectTabs.map((project) => (
+                            <button
+                              key={`recent-${project.id}`}
+                              type="button"
+                              onClick={() => handleSelectProject(project.id)}
+                              className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-ink-700 hover:bg-slate-100"
+                            >
+                              {project.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
-              )}
+                </>
+              ) : null}
             </div>
 
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
               {!selectedProject ? (
-                <p className="text-sm text-ink-600">Select a project tab to set the active drilling workspace.</p>
+                <p className="text-sm text-ink-600">
+                  {isSingleProjectScope
+                    ? "Select a project in the top bar to set the active drilling workspace."
+                    : "Select a project tab to set the active drilling workspace."}
+                </p>
               ) : (
                 <div className="grid gap-2 text-xs text-ink-700 md:grid-cols-2 xl:grid-cols-5">
                   <p>
@@ -1002,27 +1582,39 @@ export default function DrillingReportsPage() {
                     <span className="font-semibold text-ink-800">Status:</span> {formatProjectStatus(selectedProject.status)}
                   </p>
                   <p>
-                    <span className="font-semibold text-ink-800">Contract Rate:</span> {formatCurrency(selectedProject.contractRatePerM)} / meter
+                    <span className="font-semibold text-ink-800">{selectedProjectBillingSummary.label}:</span>{" "}
+                    {selectedProjectBillingSummary.value}
                   </p>
                 </div>
               )}
-              <p className="mt-1 text-[11px] text-slate-500">
-                Global client, rig, and date filters are controlled from the top filter bar.
-              </p>
+              <p className="mt-1 text-[11px] text-slate-500">Top bar controls project and date scope.</p>
             </div>
+            {selectedProject ? (
+              <div className="gf-guided-strip">
+                <p className="gf-guided-strip-title">Guided daily flow</p>
+                <div className="gf-guided-step-list">
+                  <p className="gf-guided-step">1. Choose hole progression.</p>
+                  <p className="gf-guided-step">2. Enter meters and operational hours.</p>
+                  <p className="gf-guided-step">3. Save report to commit daily activity.</p>
+                </div>
+              </div>
+            ) : null}
           </div>
         </Card>
 
-        <FilterScopeBanner filters={filters} clientLabel={selectedClientName} rigLabel={selectedRigLabel} />
+        {isSingleProjectScope ? (
+          <ProjectLockedBanner projectId={scopedProjectId} projectName={selectedProject?.name || null} />
+        ) : (
+          <FilterScopeBanner
+            filters={filters}
+            projectLabel={selectedProject?.name}
+            clientLabel={selectedClientName}
+            rigLabel={selectedRigLabel}
+          />
+        )}
 
-        <section
-          id="drilling-project-summary-section"
-          className={cn(
-            focusedSectionId === "drilling-project-summary-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-        <Card title={selectedProject ? `${selectedProject.name} Overview` : "Project Overview"} subtitle="Current project context and operational KPIs">
+        <section id="drilling-project-summary-section" className="hidden">
+        <Card title={selectedProject ? `${selectedProject.name} Overview` : "Project Overview"} subtitle="Current project activity and operational KPIs">
           {!selectedProject ? (
             <p className="text-sm text-ink-600">Select a project to view drilling activity.</p>
           ) : (
@@ -1031,21 +1623,102 @@ export default function DrillingReportsPage() {
                 <SummaryItem label="Client" value={selectedProject.client.name} />
                 <SummaryItem label="Assigned Rig(s)" value={selectedProjectRigsLabel} />
                 <SummaryItem label="Project Status" value={formatProjectStatus(selectedProject.status)} />
-                <SummaryItem label="Contract Rate" value={`${formatCurrency(selectedProject.contractRatePerM)} / meter`} />
+                <SummaryItem label={selectedProjectBillingSummary.label} value={selectedProjectBillingSummary.value} />
               </div>
 
               <section className="grid gap-3 md:grid-cols-4">
                 <MetricCard label="Total Meters Drilled" value={formatNumber(stats.totalMeters)} />
                 <MetricCard label="Total Reports" value={String(stats.reportsLogged)} />
                 <MetricCard label="Total Billable" value={formatCurrency(stats.billableActivity)} tone="good" />
-                <MetricCard label="Pending Approvals" value={String(pendingApprovals)} tone={pendingApprovals > 0 ? "warn" : "neutral"} />
+                <MetricCard label="Average Work Hours" value={formatNumber(stats.averageWorkHours)} />
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Basic direct-cost view
+                </p>
+                <div className="mt-2 grid gap-3 md:grid-cols-3">
+                  <MetricCard
+                    label="Total revenue"
+                    value={formatCurrency(selectedProjectDirectCostSummary.totalRevenue)}
+                    tone="good"
+                  />
+                  <MetricCard
+                    label="Total used consumables cost"
+                    value={formatCurrency(selectedProjectDirectCostSummary.totalUsedConsumablesCost)}
+                    tone="warn"
+                  />
+                  <MetricCard
+                    label="Simple result"
+                    value={formatCurrency(selectedProjectDirectCostSummary.simpleResult)}
+                    tone={selectedProjectDirectCostSummary.simpleResult >= 0 ? "good" : "danger"}
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  Direct-cost only: includes drilling revenue and consumables used. Other project costs are not included.
+                </p>
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Operational KPI view
+                </p>
+                <div className="mt-2 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                  <MetricCard label="Meters drilled" value={formatNumber(selectedProjectOperationalKpis.metersDrilled)} />
+                  <MetricCard label="Work hours" value={formatNumber(selectedProjectOperationalKpis.workHours)} />
+                  <MetricCard
+                    label="Meters per hour"
+                    value={
+                      selectedProjectOperationalKpis.metersPerHour === null
+                        ? "—"
+                        : formatNumber(selectedProjectOperationalKpis.metersPerHour)
+                    }
+                  />
+                  <MetricCard
+                    label="Consumables cost used"
+                    value={formatCurrency(selectedProjectOperationalKpis.consumablesCostUsed)}
+                    tone="warn"
+                  />
+                  <MetricCard
+                    label="Consumables cost per meter"
+                    value={
+                      selectedProjectOperationalKpis.consumablesCostPerMeter === null
+                        ? "—"
+                        : formatCurrency(selectedProjectOperationalKpis.consumablesCostPerMeter)
+                    }
+                    tone="warn"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  Operational KPIs only: based on drilling activity and consumables used. This is not full project margin.
+                </p>
               </section>
             </div>
           )}
         </Card>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(320px,1fr)]">
+        <Card
+          className="hidden"
+          title="Record-first workspace"
+          subtitle="Use this page to create and edit drilling reports. Analysis and report browsing now live in Spending."
+          action={
+            <Link href={spendingReportsHref} className="gf-btn-subtle">
+              View reports in Spending
+            </Link>
+          }
+        >
+          <div className="grid gap-3 md:grid-cols-3">
+            <SummaryItem label="Total meters drilled" value={formatNumber(stats.totalMeters)} />
+            <SummaryItem label="Total reports" value={String(stats.reportsLogged)} />
+            <SummaryItem label="Average work hours" value={formatNumber(stats.averageWorkHours)} />
+          </div>
+          <p className="mt-3 text-xs text-slate-600">
+            Record/edit stays here. Report list and detail are now in Spending to keep finance + report context together.
+          </p>
+        </Card>
+
+        <section className="hidden grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(320px,1fr)]">
           <div className="xl:col-span-2">
             <WorkflowAssistPanel model={reportingWorkflowAssist} />
           </div>
@@ -1069,7 +1742,7 @@ export default function DrillingReportsPage() {
                     onClick={openCreateReportModal}
                     className="mt-3 rounded-lg bg-brand-600 px-3 py-2 text-xs font-semibold text-white hover:bg-brand-700"
                   >
-                    Create first report
+                    Record first report
                   </button>
                 )}
               </div>
@@ -1086,8 +1759,7 @@ export default function DrillingReportsPage() {
                         <th className="px-3 py-2 text-right">Work Hrs</th>
                         <th className="px-3 py-2 text-right">Delay Hrs</th>
                         <th className="px-3 py-2 text-right">Rig Moves</th>
-                        <th className="px-3 py-2">Crew / Operator</th>
-                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2">Crew</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
@@ -1111,10 +1783,7 @@ export default function DrillingReportsPage() {
                           <td className="px-3 py-2 text-right text-ink-700">{report.workHours.toFixed(1)}</td>
                           <td className="px-3 py-2 text-right text-ink-700">{report.delayHours.toFixed(1)}</td>
                           <td className="px-3 py-2 text-right text-ink-700">{report.rigMoves}</td>
-                          <td className="px-3 py-2 text-ink-700">{report.operatorCrew || "-"}</td>
-                          <td className="px-3 py-2">
-                            <StatusBadge status={report.approvalStatus} />
-                          </td>
+                          <td className="px-3 py-2 text-ink-700">{formatCrewSummary(report)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1133,46 +1802,148 @@ export default function DrillingReportsPage() {
             )}
           >
           <Card
-            title="Detailed Report View"
-            subtitle={selectedReport ? `Report ${selectedReport.holeNumber}` : "Select a report from the table"}
+            title="Report details"
+            subtitle={selectedReport ? `Hole ${selectedReport.holeNumber}` : "Select a report from the table"}
             className="min-h-[420px] xl:sticky xl:top-24"
           >
             {!selectedReport ? (
-              <p className="text-sm text-ink-600">Click any row to inspect full drilling report details.</p>
+              <p className="text-sm text-ink-600">Select a report to view daily activity and usage details.</p>
             ) : (
               <div className="space-y-4 text-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <StatusBadge status={selectedReport.approvalStatus} />
-                  {selectedReport.rejectionReason && (
-                    <span className="rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">
-                      Rejection: {selectedReport.rejectionReason}
-                    </span>
-                  )}
-                </div>
-
                 <div className="grid gap-2">
                   <DetailRow label="Date" value={toIsoDate(selectedReport.date)} />
                   <DetailRow label="Client" value={selectedReport.client.name} />
                   <DetailRow label="Project" value={selectedReport.project.name} />
                   <DetailRow label="Rig" value={selectedReport.rig.rigCode} />
-                  <DetailRow label="Hole Number" value={selectedReport.holeNumber} />
-                  <DetailRow label="Area / Location" value={selectedReport.areaLocation} />
-                  <DetailRow label="From Meter" value={selectedReport.fromMeter.toFixed(1)} />
-                  <DetailRow label="To Meter" value={selectedReport.toMeter.toFixed(1)} />
-                  <DetailRow label="Total Meters Drilled" value={formatNumber(selectedReport.totalMetersDrilled)} />
-                  <DetailRow label="Work Hours" value={selectedReport.workHours.toFixed(1)} />
-                  <DetailRow label="Rig Moves" value={String(selectedReport.rigMoves)} />
-                  <DetailRow label="Standby Hours" value={selectedReport.standbyHours.toFixed(1)} />
-                  <DetailRow label="Delay Hours" value={selectedReport.delayHours.toFixed(1)} />
-                  <DetailRow label="Crew / Operator" value={selectedReport.operatorCrew || "-"} />
-                  <DetailRow label="Calculated Billable" value={formatCurrency(selectedReport.billableAmount)} />
+                  <DetailRow label="Hole" value={selectedReport.holeNumber} />
+                  <DetailRow label="Area" value={selectedReport.areaLocation} />
+                  <DetailRow label="Start depth" value={selectedReport.fromMeter.toFixed(1)} />
+                  <DetailRow label="End depth" value={selectedReport.toMeter.toFixed(1)} />
+                  <DetailRow label="Meters drilled today" value={formatNumber(selectedReport.totalMetersDrilled)} />
+                  <DetailRow label="Work hours" value={selectedReport.workHours.toFixed(1)} />
+                  <DetailRow label="Rig moves" value={String(selectedReport.rigMoves)} />
+                  <DetailRow label="Standby hours" value={selectedReport.standbyHours.toFixed(1)} />
+                  <DetailRow label="Delay hours" value={selectedReport.delayHours.toFixed(1)} />
+                  <DetailRow
+                    label="Delay reason"
+                    value={formatDelayReasonLabel(selectedReport.delayReasonCategory)}
+                  />
+                  <DetailRow label="Delay note" value={selectedReport.delayReasonNote || "-"} />
+                  <DetailRow
+                    label="Continuity override reason"
+                    value={selectedReport.holeContinuityOverrideReason || "-"}
+                  />
+                  <DetailRow label="Lead operator" value={selectedReport.leadOperatorName || "-"} />
+                  <DetailRow
+                    label="Assistants"
+                    value={String(Math.max(0, Math.round(Number(selectedReport.assistantCount || 0))))}
+                  />
+                  <DetailRow label="Crew" value={formatCrewSummary(selectedReport)} />
+                  <DetailRow label="Revenue" value={formatCurrency(selectedReport.billableAmount)} />
                   <DetailRow label="Comments" value={selectedReport.comments || "-"} />
-                  <DetailRow label="Submitted By" value={selectedReport.submittedBy?.fullName || "-"} />
-                  <DetailRow label="Approved/Rejected By" value={selectedReport.approvedBy?.fullName || "-"} />
-                  <DetailRow label="Submitted At" value={formatDateTime(selectedReport.submittedAt)} />
-                  <DetailRow label="Decision Time" value={formatDateTime(selectedReport.approvedAt)} />
+                  <DetailRow label="Recorded by" value={selectedReport.submittedBy?.fullName || "-"} />
+                  <DetailRow
+                    label="Recorded at"
+                    value={formatDateTime(selectedReport.submittedAt || selectedReport.createdAt)}
+                  />
                   <DetailRow label="Created At" value={formatDateTime(selectedReport.createdAt)} />
                   <DetailRow label="Updated At" value={formatDateTime(selectedReport.updatedAt)} />
+                </div>
+
+                {selectedReportDirectCostSummary ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Basic financial summary
+                    </p>
+                    <div className="mt-2 grid gap-1">
+                      <DetailRow label="Revenue" value={formatCurrency(selectedReportDirectCostSummary.revenue)} />
+                      <DetailRow
+                        label="Consumables cost used"
+                        value={formatCurrency(selectedReportDirectCostSummary.consumablesCostUsed)}
+                      />
+                      <DetailRow
+                        label="Simple result"
+                        value={formatCurrency(selectedReportDirectCostSummary.simpleResult)}
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Direct-cost only: includes drilling revenue and consumables used. Other project costs are not included.
+                    </p>
+                  </div>
+                ) : null}
+
+                {selectedReportOperationalKpis ? (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Operational KPI view
+                    </p>
+                    <div className="mt-2 grid gap-1">
+                      <DetailRow label="Meters drilled" value={formatNumber(selectedReportOperationalKpis.metersDrilled)} />
+                      <DetailRow label="Work hours" value={formatNumber(selectedReportOperationalKpis.workHours)} />
+                      <DetailRow
+                        label="Meters per hour"
+                        value={
+                          selectedReportOperationalKpis.metersPerHour === null
+                            ? "—"
+                            : formatNumber(selectedReportOperationalKpis.metersPerHour)
+                        }
+                      />
+                      <DetailRow
+                        label="Consumables cost used"
+                        value={formatCurrency(selectedReportOperationalKpis.consumablesCostUsed)}
+                      />
+                      <DetailRow
+                        label="Consumables cost per meter"
+                        value={
+                          selectedReportOperationalKpis.consumablesCostPerMeter === null
+                            ? "—"
+                            : formatCurrency(selectedReportOperationalKpis.consumablesCostPerMeter)
+                        }
+                      />
+                    </div>
+                    <p className="mt-2 text-xs text-slate-600">
+                      Operational KPIs only: based on drilling activity and consumables used. This is not full project margin.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Consumables used
+                  </p>
+                  {(selectedReport.inventoryMovements || []).length === 0 ? (
+                    <p className="mt-1 text-xs text-slate-600">
+                      No consumables were recorded on this report.
+                    </p>
+                  ) : (
+                    <div className="mt-2 space-y-1.5">
+                      {(selectedReport.inventoryMovements || []).slice(0, 8).map((movementRow) => (
+                        <div
+                          key={movementRow.id}
+                          className="grid gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 sm:grid-cols-[minmax(0,1fr)_auto_auto]"
+                        >
+                          <p className="truncate">
+                            {formatNumber(movementRow.quantity)} x{" "}
+                            {movementRow.item?.name || "Item"}
+                          </p>
+                          <p className="font-medium">{formatCurrency(movementRow.totalCost || 0)}</p>
+                          {movementRow.id ? (
+                            <a
+                              href={buildHref("/inventory", {
+                                section: "stock-movements",
+                                movementId: movementRow.id
+                              })}
+                              className="text-brand-700 underline"
+                            >
+                              Movement
+                            </a>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-2 border-t border-slate-200 pt-3">
@@ -1182,17 +1953,7 @@ export default function DrillingReportsPage() {
                       onClick={() => openEditReportModal(selectedReport)}
                       className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-50"
                     >
-                      Edit Draft
-                    </button>
-                  )}
-
-                  {canSubmitReport(selectedReport) && (
-                    <button
-                      type="button"
-                      onClick={() => void updateReportStatus(selectedReport.id, "submit")}
-                      className="rounded-md border border-amber-200 px-3 py-1.5 text-xs text-amber-800 hover:bg-amber-50"
-                    >
-                      Submit for Approval
+                      Edit Report
                     </button>
                   )}
                 </div>
@@ -1202,134 +1963,535 @@ export default function DrillingReportsPage() {
           </div>
         </section>
 
+        {!isSingleProjectScope ? (
+          <Card title="Select one project to continue">
+            <p className="text-sm text-ink-700">
+              Recording drilling reports is project-first. Choose one project in the top filter bar to continue.
+            </p>
+          </Card>
+        ) : null}
+
+        {isSingleProjectScope && !canCreateReport ? (
+          <Card title="Record drilling report">
+            <p className="text-sm text-ink-700">
+              You can view drilling data, but your role does not have permission to record reports.
+            </p>
+          </Card>
+        ) : null}
+
         {isFormOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 p-4">
-            <div className="w-full max-w-5xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-                <div>
-                  <h3 className="font-display text-lg text-ink-900">
-                    {formMode === "create" ? "New Drilling Report" : "Edit Drilling Report"}
-                  </h3>
-                  <p className="text-xs text-ink-600">
-                    {formMode === "create"
-                      ? "Create a report for the selected project context."
-                      : "Update draft values before submitting for approval."}
-                  </p>
+          <Card
+            title="New drilling report"
+            subtitle="Record today's drilling activity for the locked project."
+            action={
+              <Link href={spendingReportsHref} className="gf-btn-subtle">
+                View reports in Spending
+              </Link>
+            }
+          >
+            <form onSubmit={saveReport} className="px-1 py-1">
+                <div className="mb-4 gf-guided-strip">
+                  <p className="gf-guided-strip-title">Keep it simple</p>
+                  <div className="gf-guided-step-list">
+                    <p className="gf-guided-step">Use meters drilled today as the main depth input.</p>
+                    <p className="gf-guided-step">Fill daily operational fields and configured extras only.</p>
+                    <p className="gf-guided-step">Save report to record activity and linked consumable usage.</p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={closeFormModal}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-ink-700 hover:bg-slate-50"
-                >
-                  Close
-                </button>
-              </div>
-
-              <form onSubmit={saveReport} className="max-h-[78vh] overflow-auto px-5 py-4">
                 <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                  <InputField
-                    label="Date"
-                    type="date"
-                    value={form.date}
-                    onChange={(value) => setForm((current) => ({ ...current, date: value }))}
-                    required
+                  <ReadOnlyField
+                    label="Report date"
+                    value={formMode === "create" ? `${form.date} (today)` : form.date}
                   />
 
-                  <SelectField
-                    label="Project"
-                    value={form.projectId}
-                    onChange={(value) => setForm((current) => ({ ...current, projectId: value }))}
-                    options={projects.map((project) => ({
-                      value: project.id,
-                      label: project.name
-                    }))}
-                    required
-                  />
+                  {isSingleProjectScope ? (
+                    <ReadOnlyField
+                      label="Project (locked)"
+                      value={
+                        formProject
+                          ? `${formProject.name} (${formatProjectStatus(formProject.status)})`
+                          : "Selected project"
+                      }
+                    />
+                  ) : (
+                    <SelectField
+                      label="Project"
+                      value={form.projectId}
+                      onChange={(value) => {
+                        setRequiresContinuityOverride(false);
+                        setConsumableSearch("");
+                        setPendingConsumableItemId("");
+                        setPendingConsumableQuantity("1");
+                        setStagedConsumables([]);
+                        setForm((current) => ({
+                          ...current,
+                          projectId: value,
+                          rigId: "",
+                          selectedHoleNumber: "",
+                          holeNumber: "",
+                          holeMode: "CONTINUE",
+                          delayReasonCategory: "",
+                          delayReasonNote: "",
+                          holeContinuityOverrideReason: "",
+                          leadOperatorName: "",
+                          assistantCount: "0",
+                          billableQuantities: {}
+                        }));
+                      }}
+                      options={(reportableProjects.length > 0 ? reportableProjects : projects).map((project) => ({
+                        value: project.id,
+                        label: `${project.name} (${formatProjectStatus(project.status)})`
+                      }))}
+                      required
+                    />
+                  )}
 
-                  <SelectField
-                    label="Rig"
-                    value={form.rigId}
-                    onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
-                    options={activeRigs.map((rig) => ({
-                      value: rig.id,
-                      label: rig.rigCode
-                    }))}
-                    required
-                  />
+                  {isSingleProjectScope ? (
+                    <div className="rounded-lg border border-brand-200 bg-brand-50/70 px-3 py-2 text-sm text-brand-900 lg:col-span-2">
+                      <p>
+                        <span className="font-semibold">Client:</span> {formProject?.client.name || "-"}
+                      </p>
+                      <p>
+                        <span className="font-semibold">Project rig(s):</span> {formProjectRigsLabel}
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                      <ReadOnlyField label="Client" value={formProject?.client.name || "-"} />
+                      <ReadOnlyField label="Project rig(s)" value={formProjectRigsLabel} />
+                    </>
+                  )}
 
-                  <ReadOnlyField label="Linked Client" value={formProject?.client.name || "-"} />
+                  {formProjectRigOptions.length > 1 ? (
+                    <SelectField
+                      label="Rig"
+                      value={form.rigId}
+                      onChange={(value) => setForm((current) => ({ ...current, rigId: value }))}
+                      options={formProjectRigOptions.map((rigOption) => ({
+                        value: rigOption.id,
+                        label: rigOption.rigCode
+                      }))}
+                      required
+                    />
+                  ) : formProjectRigOptions.length === 1 ? (
+                    <ReadOnlyField label="Rig" value={formProjectRigOptions[0]?.rigCode || "-"} />
+                  ) : (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 lg:col-span-2">
+                      This project has no assigned rig. Assign a rig to the project before saving reports.
+                    </div>
+                  )}
 
-                  <InputField
-                    label="Hole Number"
-                    value={form.holeNumber}
-                    onChange={(value) => setForm((current) => ({ ...current, holeNumber: value }))}
-                    required
-                  />
+                  <div className="lg:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="text-sm font-semibold text-ink-900">Hole progression</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={formProjectHoleProgress.length === 0}
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            holeMode: "CONTINUE",
+                            selectedHoleNumber:
+                              current.selectedHoleNumber || formProjectHoleProgress[0]?.holeNumber || ""
+                          }))
+                        }
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          form.holeMode === "CONTINUE"
+                            ? "border-brand-500 bg-brand-50 text-brand-800"
+                            : "border-slate-200 bg-white text-slate-700"
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                      >
+                        Continue existing hole
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((current) => ({
+                            ...current,
+                            holeMode: "START_NEW",
+                            holeNumber: nextHoleNumberSuggestion
+                          }))
+                        }
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          form.holeMode === "START_NEW"
+                            ? "border-brand-500 bg-brand-50 text-brand-800"
+                            : "border-slate-200 bg-white text-slate-700"
+                        }`}
+                      >
+                        Start new hole
+                      </button>
+                    </div>
 
-                  <InputField
-                    label="Area / Location"
-                    value={form.areaLocation}
-                    onChange={(value) => setForm((current) => ({ ...current, areaLocation: value }))}
-                    required
-                  />
+                    {form.holeMode === "CONTINUE" ? (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <SelectField
+                          label="Hole"
+                          value={form.selectedHoleNumber}
+                          onChange={(value) =>
+                            setForm((current) => ({
+                              ...current,
+                              selectedHoleNumber: value,
+                              holeNumber: value
+                            }))
+                          }
+                          options={formProjectHoleProgress.map((hole) => ({
+                            value: hole.holeNumber,
+                            label: `${hole.holeNumber} (current depth ${formatNumber(hole.currentDepth)}m)`
+                          }))}
+                          required
+                        />
+                        <ReadOnlyField
+                          label="Current drilled depth"
+                          value={
+                            holeProgressLoading
+                              ? "Loading..."
+                              : selectedHoleProgress
+                                ? `${formatNumber(selectedHoleProgress.currentDepth)}m`
+                                : "No saved depth yet"
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <ReadOnlyField label="New hole number" value={nextHoleNumberSuggestion} />
+                    )}
+                  </div>
 
-                  <InputField
-                    label="From Meter"
-                    type="number"
-                    value={form.fromMeter}
-                    onChange={(value) => setForm((current) => ({ ...current, fromMeter: value }))}
-                  />
+                  <div className="lg:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="text-sm font-semibold text-ink-900">Daily activity</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Enter the daily drilling activity. Depth progression is derived automatically.
+                    </p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                      <InputField
+                        label="Meters drilled today"
+                        type="number"
+                        value={form.metersDrilledToday}
+                        onChange={(value) => setForm((current) => ({ ...current, metersDrilledToday: value }))}
+                      />
 
-                  <InputField
-                    label="To Meter"
-                    type="number"
-                    value={form.toMeter}
-                    onChange={(value) => setForm((current) => ({ ...current, toMeter: value }))}
-                  />
+                      <ReadOnlyField label="Previous depth" value={`${formatNumber(derivedFromMeter)}m`} />
+                      <ReadOnlyField label="New depth" value={`${formatNumber(derivedToMeter)}m`} />
+                      <ReadOnlyField label="Stage guidance" value={stageContextText} />
 
-                  <InputField
-                    label="Total Meters Drilled"
-                    type="number"
-                    value={form.totalMetersDrilled}
-                    onChange={(value) => setForm((current) => ({ ...current, totalMetersDrilled: value }))}
-                  />
+                      <InputField
+                        label="Work hours"
+                        type="number"
+                        value={form.workHours}
+                        onChange={(value) => setForm((current) => ({ ...current, workHours: value }))}
+                      />
 
-                  <InputField
-                    label="Work Hours"
-                    type="number"
-                    value={form.workHours}
-                    onChange={(value) => setForm((current) => ({ ...current, workHours: value }))}
-                  />
+                      <InputField
+                        label="Delay hours"
+                        type="number"
+                        value={form.delayHours}
+                        onChange={(value) => setForm((current) => ({ ...current, delayHours: value }))}
+                      />
 
-                  <InputField
-                    label="Rig Moves"
-                    type="number"
-                    value={form.rigMoves}
-                    onChange={(value) => setForm((current) => ({ ...current, rigMoves: value }))}
-                  />
+                      {Number(form.delayHours || 0) > 0 ? (
+                        <SelectField
+                          label="Delay reason"
+                          value={form.delayReasonCategory}
+                          onChange={(value) =>
+                            setForm((current) => ({
+                              ...current,
+                              delayReasonCategory: parseDelayReasonCategoryForForm(value)
+                            }))
+                          }
+                          options={DRILL_DELAY_REASON_OPTIONS.map((option) => ({
+                            value: option.value,
+                            label: option.label
+                          }))}
+                          required
+                        />
+                      ) : null}
 
-                  <InputField
-                    label="Standby Hours"
-                    type="number"
-                    value={form.standbyHours}
-                    onChange={(value) => setForm((current) => ({ ...current, standbyHours: value }))}
-                  />
+                      <InputField
+                        label="Rig moves"
+                        type="number"
+                        value={form.rigMoves}
+                        onChange={(value) => setForm((current) => ({ ...current, rigMoves: value }))}
+                      />
 
-                  <InputField
-                    label="Delay Hours"
-                    type="number"
-                    value={form.delayHours}
-                    onChange={(value) => setForm((current) => ({ ...current, delayHours: value }))}
-                  />
+                      <InputField
+                        label="Standby hours"
+                        type="number"
+                        value={form.standbyHours}
+                        onChange={(value) => setForm((current) => ({ ...current, standbyHours: value }))}
+                      />
 
-                  <InputField
-                    label="Operator / Crew"
-                    value={form.operatorCrew}
-                    onChange={(value) => setForm((current) => ({ ...current, operatorCrew: value }))}
-                  />
+                      <InputField
+                        label="Lead operator"
+                        value={form.leadOperatorName}
+                        onChange={(value) => setForm((current) => ({ ...current, leadOperatorName: value }))}
+                      />
 
-                  <ReadOnlyField label="Computed Meters" value={formatNumber(computedMeters)} />
-                  <ReadOnlyField label="Calculated Billable Amount" value={formatCurrency(computedBillable)} />
+                      <InputField
+                        label="Assistants"
+                        type="number"
+                        value={form.assistantCount}
+                        onChange={(value) => setForm((current) => ({ ...current, assistantCount: value }))}
+                      />
+                    </div>
+                    {Number(form.delayHours || 0) > 0 ? (
+                      <label className="mt-3 block text-sm text-ink-700">
+                        <span className="mb-1 block">Delay note (optional)</span>
+                        <textarea
+                          value={form.delayReasonNote}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              delayReasonNote: event.target.value
+                            }))
+                          }
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none ring-brand-300 focus:ring"
+                          rows={2}
+                        />
+                      </label>
+                    ) : null}
+                    {requiresContinuityOverride || form.holeContinuityOverrideReason.trim().length > 0 ? (
+                      <label className="mt-3 block text-sm text-ink-700">
+                        <span className="mb-1 block">Depth continuity override reason</span>
+                        <textarea
+                          value={form.holeContinuityOverrideReason}
+                          onChange={(event) =>
+                            setForm((current) => ({
+                              ...current,
+                              holeContinuityOverrideReason: event.target.value
+                            }))
+                          }
+                          className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm outline-none ring-brand-300 focus:ring"
+                          rows={2}
+                          placeholder="Add a short reason for the depth difference."
+                        />
+                      </label>
+                    ) : null}
+                    <div className="mt-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                      Estimated revenue (preview):{" "}
+                      <span className="font-semibold text-ink-900">{formatCurrency(estimatedDailyBillable)}</span>
+                    </div>
+                    {guidedBillableInputs.meterMode === "single" && guidedBillableInputs.singleMeterItem ? (
+                      <p className="mt-2 text-xs text-slate-600">
+                        Meters drilled today automatically map to{" "}
+                        <span className="font-medium">{guidedBillableInputs.singleMeterItem.label}</span>.
+                      </p>
+                    ) : null}
+                    {stagedCoverageWarning ? (
+                      <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        {stagedCoverageWarning}
+                      </div>
+                    ) : null}
+                    {guidedBillableLinesResult.hasStagedAutoAllocation ? (
+                      <div className="mt-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                        <p className="font-semibold text-ink-900">Staged meter allocation (auto)</p>
+                        <div className="mt-1 space-y-1">
+                          {guidedBillableLinesResult.stagedAllocationPreview.filter((line) => line.quantity > 0).length === 0 ? (
+                            <p>No meters from this report range match configured stage bands.</p>
+                          ) : (
+                            guidedBillableLinesResult.stagedAllocationPreview
+                              .filter((line) => line.quantity > 0)
+                              .map((line) => (
+                                <p key={line.itemCode}>
+                                  {line.label}: {formatNumber(line.quantity)} {line.unit}
+                                </p>
+                              ))
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {guidedBillableInputs.extraItems.length > 0 ? (
+                    <div className="lg:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                      <p className="text-sm font-semibold text-ink-900">Project extras (if used today)</p>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {guidedBillableInputs.extraItems.map((item) => (
+                          <InputField
+                            key={item.itemCode}
+                            label={`${item.label} (${item.unit})`}
+                            type="number"
+                            value={form.billableQuantities[item.itemCode] || ""}
+                            onChange={(value) =>
+                              setForm((current) => ({
+                                ...current,
+                                billableQuantities: {
+                                  ...current.billableQuantities,
+                                  [item.itemCode]: value
+                                }
+                              }))
+                            }
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="lg:col-span-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                    <p className="text-sm font-semibold text-ink-900">Approved consumables used today</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Optional. Search approved project consumables, then add what was actually used on this report.
+                    </p>
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <label className="text-xs text-ink-700">
+                        <span className="mb-1 block uppercase tracking-wide text-slate-500">
+                          Search consumables
+                        </span>
+                        <input
+                          value={consumableSearch}
+                          onChange={(event) => setConsumableSearch(event.target.value)}
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                          placeholder={
+                            formConsumablesLoading
+                              ? "Loading approved consumables..."
+                              : "Search by item name or SKU"
+                          }
+                          disabled={formConsumablesLoading || !form.projectId}
+                        />
+                      </label>
+                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                        <p className="font-semibold text-ink-900">
+                          {formConsumablesLoading ? "Refreshing approved pool..." : "Approved pool"}
+                        </p>
+                        <p className="mt-1">
+                          {formConsumablesLoading
+                            ? "Checking approved and available quantities for this project."
+                            : `${formConsumablesPool.length} item(s) currently available for use.`}
+                        </p>
+                      </div>
+                    </div>
+
+                    {consumableSearch.trim().length > 0 ? (
+                      <div className="mt-2 max-h-44 overflow-auto rounded-lg border border-slate-200 bg-white">
+                        {filteredConsumableSearchResults.length === 0 ? (
+                          <p className="px-3 py-2 text-xs text-slate-600">
+                            No approved consumables match this search.
+                          </p>
+                        ) : (
+                          filteredConsumableSearchResults.map((entry) => (
+                            <button
+                              key={entry.itemId}
+                              type="button"
+                              onClick={() => {
+                                setPendingConsumableItemId(entry.itemId);
+                                setPendingConsumableQuantity("1");
+                                setConsumableSearch("");
+                              }}
+                              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-slate-100 px-3 py-2 text-left text-xs text-ink-700 last:border-b-0 hover:bg-slate-50"
+                            >
+                              <span className="truncate">
+                                {entry.itemName} <span className="text-slate-500">({entry.sku})</span>
+                              </span>
+                              <span className="font-medium text-slate-600">
+                                Available {formatNumber(entry.availableNow)}
+                              </span>
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
+
+                    {pendingConsumable ? (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700">
+                        <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_120px_auto] md:items-end">
+                          <div>
+                            <p className="font-semibold text-ink-900">
+                              {pendingConsumable.itemName}{" "}
+                              <span className="text-slate-500">({pendingConsumable.sku})</span>
+                            </p>
+                            <p className="mt-0.5 text-slate-600">
+                              Available {formatNumber(pendingConsumable.availableNow)}
+                            </p>
+                          </div>
+                          <InputField
+                            label="Quantity"
+                            type="number"
+                            value={pendingConsumableQuantity}
+                            onChange={setPendingConsumableQuantity}
+                          />
+                          <div className="flex items-center gap-2 pb-1">
+                            <button
+                              type="button"
+                              onClick={addPendingConsumableToStaged}
+                              className="rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+                            >
+                              Use
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPendingConsumableItemId("");
+                                setPendingConsumableQuantity("1");
+                              }}
+                              className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-white">
+                      <div className="border-b border-slate-200 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Used in this report
+                      </div>
+                      {stagedConsumables.length === 0 ? (
+                        <p className="px-3 py-2 text-xs text-slate-600">
+                          No consumables added yet.
+                        </p>
+                      ) : (
+                        <div className="divide-y divide-slate-100">
+                          {stagedConsumables.map((row) => {
+                            const pool = consumablesPoolByItemId.get(row.itemId);
+                            return (
+                              <div
+                                key={row.itemId}
+                                className="grid gap-2 px-3 py-2 text-xs text-ink-700 md:grid-cols-[minmax(0,1fr)_140px_auto]"
+                              >
+                                <div>
+                                  <p className="font-medium text-ink-900">
+                                    {row.itemName} <span className="text-slate-500">({row.sku})</span>
+                                  </p>
+                                  <p className="mt-0.5 text-slate-600">
+                                    Available {formatNumber(pool?.availableNow || 0)}
+                                  </p>
+                                </div>
+                                <InputField
+                                  label="Quantity"
+                                  type="number"
+                                  value={row.quantity}
+                                  onChange={(value) =>
+                                    setStagedConsumables((current) =>
+                                      current.map((entry) =>
+                                        entry.itemId === row.itemId
+                                          ? {
+                                              ...entry,
+                                              quantity: value
+                                            }
+                                          : entry
+                                      )
+                                    )
+                                  }
+                                />
+                                <div className="flex items-center justify-end pb-1">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setStagedConsumables((current) =>
+                                        current.filter((entry) => entry.itemId !== row.itemId)
+                                      )
+                                    }
+                                    className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
                   <label className="text-sm text-ink-700 lg:col-span-4">
                     <span className="mb-1 block">Comments</span>
@@ -1350,54 +2512,18 @@ export default function DrillingReportsPage() {
 
                 <div className="mt-4 flex flex-wrap justify-end gap-2 border-t border-slate-200 pt-4">
                   <button
-                    type="button"
-                    onClick={closeFormModal}
-                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm text-ink-700 hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
                     type="submit"
-                    data-mode="draft"
-                    disabled={formSaving}
-                    className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-ink-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {formSaving ? "Saving..." : formMode === "create" ? "Save Draft" : "Save Changes"}
-                  </button>
-                  <button
-                    type="submit"
-                    data-mode="submit"
                     disabled={formSaving}
                     className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {formSaving
-                      ? "Saving..."
-                      : formMode === "create"
-                        ? "Submit for Approval"
-                        : "Save + Submit"}
+                    {formSaving ? "Saving..." : "Save report"}
                   </button>
                 </div>
               </form>
-            </div>
-          </div>
+          </Card>
         )}
       </div>
     </AccessGate>
-  );
-}
-
-const statusToneClass: Record<DrillReportRecord["approvalStatus"], string> = {
-  DRAFT: "border-slate-300 bg-slate-100 text-slate-700",
-  SUBMITTED: "border-blue-300 bg-blue-100 text-blue-800",
-  APPROVED: "border-emerald-300 bg-emerald-100 text-emerald-800",
-  REJECTED: "border-red-300 bg-red-100 text-red-800"
-};
-
-function StatusBadge({ status }: { status: DrillReportRecord["approvalStatus"] }) {
-  return (
-    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusToneClass[status]}`}>
-      {status.charAt(0) + status.slice(1).toLowerCase()}
-    </span>
   );
 }
 
@@ -1493,18 +2619,210 @@ function createEmptyForm(projectId = "", rigId = ""): DrillReportFormState {
     date: new Date().toISOString().slice(0, 10),
     projectId,
     rigId,
+    holeMode: "CONTINUE",
+    selectedHoleNumber: "",
     holeNumber: "",
-    areaLocation: "",
     fromMeter: "0",
     toMeter: "0",
-    totalMetersDrilled: "",
+    metersDrilledToday: "0",
     workHours: "0",
     rigMoves: "0",
     standbyHours: "0",
     delayHours: "0",
-    operatorCrew: "",
-    comments: ""
+    delayReasonCategory: "",
+    delayReasonNote: "",
+    holeContinuityOverrideReason: "",
+    leadOperatorName: "",
+    assistantCount: "0",
+    comments: "",
+    billableQuantities: {}
   };
+}
+
+function buildHoleProgressSummaries(reports: DrillReportRecord[]) {
+  const byHole = new Map<string, HoleProgressSummary>();
+  for (const report of reports) {
+    if (report.approvalStatus === "REJECTED") {
+      continue;
+    }
+    const holeNumber = report.holeNumber?.trim();
+    if (!holeNumber) {
+      continue;
+    }
+    const rangeEnd = Math.max(Number(report.fromMeter || 0), Number(report.toMeter || 0));
+    const existing = byHole.get(holeNumber);
+    if (!existing) {
+      byHole.set(holeNumber, {
+        holeNumber,
+        currentDepth: rangeEnd,
+        lastReportDate: report.date
+      });
+      continue;
+    }
+    const nextDepth = Math.max(existing.currentDepth, rangeEnd);
+    const nextDate = new Date(report.date).getTime() > new Date(existing.lastReportDate).getTime()
+      ? report.date
+      : existing.lastReportDate;
+    byHole.set(holeNumber, {
+      holeNumber,
+      currentDepth: nextDepth,
+      lastReportDate: nextDate
+    });
+  }
+
+  return Array.from(byHole.values()).sort((left, right) => {
+    const numDiff = extractHoleSequence(left.holeNumber) - extractHoleSequence(right.holeNumber);
+    if (numDiff !== 0) {
+      return numDiff;
+    }
+    return left.holeNumber.localeCompare(right.holeNumber);
+  });
+}
+
+function getNextHoleNumberSuggestion(holes: HoleProgressSummary[]) {
+  const maxSequence = holes.reduce((max, hole) => Math.max(max, extractHoleSequence(hole.holeNumber)), 0);
+  return `H-${maxSequence + 1}`;
+}
+
+function extractHoleSequence(holeNumber: string) {
+  const match = holeNumber.match(/(\d+)(?!.*\d)/);
+  if (!match) {
+    return 0;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveStageContextRows(
+  billingItems: ProjectBillingRateItemOption[],
+  fromMeter: number,
+  toMeter: number
+) {
+  const rangeStart = Math.min(fromMeter, toMeter);
+  const rangeEnd = Math.max(fromMeter, toMeter);
+  if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart) {
+    return [] as Array<{ label: string; rangeStart: number; rangeEnd: number }>;
+  }
+
+  return billingItems
+    .filter((item) => item.isActive && item.unit.toLowerCase() === "meter")
+    .filter(
+      (item) =>
+        Number.isFinite(item.depthBandStartM) &&
+        Number.isFinite(item.depthBandEndM)
+    )
+    .map((item) => {
+      const bandStart = Math.min(item.depthBandStartM as number, item.depthBandEndM as number);
+      const bandEnd = Math.max(item.depthBandStartM as number, item.depthBandEndM as number);
+      const overlapStart = Math.max(rangeStart, bandStart);
+      const overlapEnd = Math.min(rangeEnd, bandEnd);
+      return {
+        label: item.drillingStageLabel || item.label,
+        rangeStart: overlapStart,
+        rangeEnd: overlapEnd
+      };
+    })
+    .filter((item) => item.rangeEnd > item.rangeStart)
+    .sort((left, right) => left.rangeStart - right.rangeStart);
+}
+
+function parseDelayReasonCategoryForForm(
+  value: string | null
+): DrillDelayReasonCategory | "" {
+  if (!value) {
+    return "";
+  }
+  return DRILL_DELAY_REASON_OPTIONS.some((option) => option.value === value)
+    ? (value as DrillDelayReasonCategory)
+    : "";
+}
+
+function formatDelayReasonLabel(value: DrillDelayReasonCategory | null) {
+  if (!value) {
+    return "-";
+  }
+  return DRILL_DELAY_REASON_OPTIONS.find((option) => option.value === value)?.label || value;
+}
+
+function formatCrewSummary(report: {
+  leadOperatorName: string | null;
+  assistantCount: number;
+  operatorCrew: string | null;
+}) {
+  const leadOperatorName = report.leadOperatorName?.trim() || "";
+  const assistantCount = Math.max(0, Math.round(Number(report.assistantCount || 0)));
+  if (leadOperatorName && assistantCount > 0) {
+    return `${leadOperatorName} + ${assistantCount} assistant${assistantCount === 1 ? "" : "s"}`;
+  }
+  if (leadOperatorName) {
+    return leadOperatorName;
+  }
+  if (assistantCount > 0) {
+    return `${assistantCount} assistant${assistantCount === 1 ? "" : "s"}`;
+  }
+  return report.operatorCrew || "-";
+}
+
+function buildProjectBillingSummary(project: ProjectOption | null) {
+  if (!project) {
+    return {
+      label: "Billing setup",
+      value: "-"
+    };
+  }
+
+  const activeBillingItems = (project.billingRateItems || [])
+    .filter((item) => item.isActive)
+    .sort((left, right) => left.sortOrder - right.sortOrder);
+  const stagedMeterItems = activeBillingItems.filter(
+    (item) =>
+      isMeterUnitValue(item.unit) &&
+      Number.isFinite(item.depthBandStartM) &&
+      Number.isFinite(item.depthBandEndM)
+  );
+  const singleMeterItems = activeBillingItems.filter(
+    (item) => isMeterUnitValue(item.unit) && !Number.isFinite(item.depthBandStartM) && !Number.isFinite(item.depthBandEndM)
+  );
+
+  if (stagedMeterItems.length > 1) {
+    const stagedSummary = stagedMeterItems
+      .slice(0, 3)
+      .map((item) => {
+        const bandStart = Math.min(Number(item.depthBandStartM || 0), Number(item.depthBandEndM || 0));
+        const bandEnd = Math.max(Number(item.depthBandStartM || 0), Number(item.depthBandEndM || 0));
+        const label = item.drillingStageLabel?.trim() || item.label;
+        return `${label} ${formatCurrency(item.unitRate)}/m (${formatNumber(bandStart)}m-${formatNumber(bandEnd)}m)`;
+      });
+    const remainingCount = stagedMeterItems.length - stagedSummary.length;
+    return {
+      label: "Staged billing",
+      value: remainingCount > 0 ? `${stagedSummary.join(" • ")} • +${remainingCount} more` : stagedSummary.join(" • ")
+    };
+  }
+
+  if (singleMeterItems.length === 1) {
+    return {
+      label: "Contract rate",
+      value: `${formatCurrency(singleMeterItems[0].unitRate)} / meter`
+    };
+  }
+
+  if (activeBillingItems.length > 0) {
+    return {
+      label: "Billing setup",
+      value: `${activeBillingItems.length} line${activeBillingItems.length === 1 ? "" : "s"} configured`
+    };
+  }
+
+  return {
+    label: "Contract rate",
+    value: `${formatCurrency(project.contractRatePerM)} / meter`
+  };
+}
+
+function isMeterUnitValue(unit: string) {
+  const normalized = unit.trim().toLowerCase();
+  return normalized === "meter" || normalized === "m";
 }
 
 function formatProjectStatus(value: string) {

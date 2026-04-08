@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
@@ -10,133 +10,36 @@ import {
   scrollToFocusElement,
   useCopilotFocusTarget
 } from "@/components/layout/copilot-focus-target";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import {
+  BreakdownStatusChip,
+  breakdownRowSortValue,
+  formatMaintenanceLifecycleStatus,
+  formatBreakdownCurrentState,
+  getProjectRigIds,
+  toDate,
+  toDateTime
+} from "@/app/breakdowns/breakdowns-page-utils";
+import {
+  INITIAL_FORM_STATE,
+  INITIAL_LOG_FILTER_STATE,
+  type AuditRow,
+  type BreakdownFormState,
+  type BreakdownLogFilterState,
+  type BreakdownRecord,
+  type LinkedMaintenanceRow,
+  type LinkedRequisitionRow,
+  type LinkedUsageRequestRow,
+  type ProjectOption,
+  type RigBreakdownHistoryRow,
+  type RigOption
+} from "@/app/breakdowns/breakdowns-page-types";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { isBreakdownOpenStatus, normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { buildScopedHref } from "@/lib/drilldown";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
-
-interface ProjectOption {
-  id: string;
-  name: string;
-  status: string;
-  assignedRigId: string | null;
-  client: {
-    name: string;
-  };
-}
-
-interface RigOption {
-  id: string;
-  rigCode: string;
-}
-
-interface BreakdownRecord {
-  id: string;
-  reportDate: string;
-  title: string;
-  description: string;
-  severity: string;
-  downtimeHours: number;
-  status: string;
-  client: {
-    name: string;
-  };
-  project: {
-    id: string;
-    name: string;
-    status: string;
-  };
-  rig: {
-    id: string;
-    rigCode: string;
-    status: string;
-  };
-  reportedBy: {
-    fullName: string;
-    role: string;
-  };
-}
-
-interface BreakdownFormState {
-  projectId: string;
-  title: string;
-  description: string;
-  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  downtimeHours: string;
-}
-
-interface BreakdownLogFilterState {
-  projectId: string;
-  rigId: string;
-  status: "all" | "OPEN" | "RESOLVED";
-  from: string;
-  to: string;
-}
-
-interface LinkedMaintenanceRow {
-  id: string;
-  requestCode: string;
-  requestDate: string;
-  issueDescription: string;
-  status: string;
-}
-
-interface LinkedUsageRequestRow {
-  id: string;
-  quantity: number;
-  status: string;
-  reason: string;
-  createdAt: string;
-  item: { id: string; name: string; sku: string } | null;
-  requestedBy: { id: string; fullName: string; role: string } | null;
-}
-
-interface LinkedRequisitionRow {
-  id: string;
-  requisitionCode: string;
-  type: string;
-  status: string;
-  submittedAt: string;
-  totals: {
-    estimatedTotalCost: number;
-  };
-}
-
-interface AuditRow {
-  id: string;
-  action: string;
-  description: string;
-  createdAt: string;
-  actorName: string | null;
-}
-
-interface RigBreakdownHistoryRow {
-  rigId: string;
-  resolvedRigId: string | null;
-  rigCode: string;
-  currentStatus: "OPEN" | "RESOLVED" | null;
-  latestBreakdownDate: string;
-  caseCount: number;
-  cases: BreakdownRecord[];
-}
-
-const INITIAL_FORM_STATE: BreakdownFormState = {
-  projectId: "",
-  title: "",
-  description: "",
-  severity: "MEDIUM",
-  downtimeHours: ""
-};
-
-const INITIAL_LOG_FILTER_STATE: BreakdownLogFilterState = {
-  projectId: "",
-  rigId: "",
-  status: "all",
-  from: "",
-  to: ""
-};
 
 export default function BreakdownsPage() {
   const router = useRouter();
@@ -169,14 +72,23 @@ export default function BreakdownsPage() {
   const [rigDetailLoading, setRigDetailLoading] = useState(false);
   const [rigDetailError, setRigDetailError] = useState<string | null>(null);
   const [rigDetailCases, setRigDetailCases] = useState<BreakdownRecord[]>([]);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
 
-  async function loadAll() {
+  const loadAll = useCallback(async () => {
     setLoading(true);
     try {
+      const breakdownsQuery = new URLSearchParams();
+      if (isSingleProjectScope) {
+        breakdownsQuery.set("projectId", scopeProjectId);
+      }
+      const breakdownsUrl = breakdownsQuery.size
+        ? `/api/breakdowns?${breakdownsQuery.toString()}`
+        : "/api/breakdowns";
       const [projectsRes, rigsRes, recordsRes] = await Promise.all([
         fetch("/api/projects", { cache: "no-store" }),
         fetch("/api/rigs", { cache: "no-store" }),
-        fetch("/api/breakdowns", { cache: "no-store" })
+        fetch(breakdownsUrl, { cache: "no-store" })
       ]);
 
       const [projectsData, rigsData, recordsData] = await Promise.all([
@@ -198,11 +110,11 @@ export default function BreakdownsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [isSingleProjectScope, scopeProjectId]);
 
   useEffect(() => {
     void loadAll();
-  }, []);
+  }, [loadAll]);
 
   useEffect(() => {
     if (!notice) {
@@ -216,15 +128,92 @@ export default function BreakdownsPage() {
     () => projects.find((project) => project.id === form.projectId) || null,
     [form.projectId, projects]
   );
+  const scopedProject = useMemo(
+    () => projects.find((project) => project.id === scopeProjectId) || null,
+    [projects, scopeProjectId]
+  );
+  const effectiveProject = isSingleProjectScope ? scopedProject : selectedProject;
+  const scopedProjectRigIds = useMemo(() => getProjectRigIds(scopedProject), [scopedProject]);
+  const effectiveProjectRigIds = useMemo(
+    () => getProjectRigIds(effectiveProject),
+    [effectiveProject]
+  );
+  const effectiveProjectRigOptions = useMemo(
+    () => rigs.filter((rig) => effectiveProjectRigIds.includes(rig.id)),
+    [effectiveProjectRigIds, rigs]
+  );
+  const rigFilterOptions = useMemo(
+    () =>
+      isSingleProjectScope
+        ? rigs.filter((rig) => scopedProjectRigIds.includes(rig.id))
+        : rigs,
+    [isSingleProjectScope, rigs, scopedProjectRigIds]
+  );
+
+  useEffect(() => {
+    if (!isSingleProjectScope) {
+      return;
+    }
+    if (!scopedProject) {
+      return;
+    }
+    setForm((current) =>
+      current.projectId === scopedProject.id
+        ? current
+        : { ...current, projectId: scopedProject.id, rigId: "" }
+    );
+  }, [isSingleProjectScope, scopedProject]);
+
+  useEffect(() => {
+    if (!effectiveProject) {
+      return;
+    }
+    if (effectiveProjectRigOptions.length === 1) {
+      const onlyRigId = effectiveProjectRigOptions[0].id;
+      setForm((current) =>
+        current.rigId === onlyRigId ? current : { ...current, rigId: onlyRigId }
+      );
+      return;
+    }
+    if (
+      effectiveProjectRigOptions.length > 1 &&
+      form.rigId &&
+      !effectiveProjectRigOptions.some((rig) => rig.id === form.rigId)
+    ) {
+      setForm((current) => ({ ...current, rigId: "" }));
+    }
+    if (effectiveProjectRigOptions.length === 0 && form.rigId) {
+      setForm((current) => ({ ...current, rigId: "" }));
+    }
+  }, [effectiveProject, effectiveProjectRigOptions, form.rigId]);
+
+  useEffect(() => {
+    if (!isSingleProjectScope) {
+      return;
+    }
+    setLogFilters((current) => {
+      const scopedRigId =
+        current.rigId && scopedProjectRigIds.includes(current.rigId) ? current.rigId : "";
+      if (current.projectId === scopeProjectId && current.rigId === scopedRigId) {
+        return current;
+      }
+      return {
+        ...current,
+        projectId: scopeProjectId,
+        rigId: scopedRigId
+      };
+    });
+  }, [isSingleProjectScope, scopeProjectId, scopedProjectRigIds]);
+
   const selectedRigCode = useMemo(() => {
-    if (!selectedProject?.assignedRigId) {
+    if (effectiveProjectRigOptions.length === 1) {
+      return effectiveProjectRigOptions[0]?.rigCode || "";
+    }
+    if (!form.rigId) {
       return "";
     }
-    return (
-      rigs.find((rig) => rig.id === selectedProject.assignedRigId)?.rigCode ||
-      ""
-    );
-  }, [rigs, selectedProject?.assignedRigId]);
+    return rigs.find((rig) => rig.id === form.rigId)?.rigCode || "";
+  }, [effectiveProjectRigOptions, form.rigId, rigs]);
   const openRecords = useMemo(
     () => records.filter((record) => isBreakdownOpenStatus(record.status)),
     [records]
@@ -352,17 +341,28 @@ export default function BreakdownsPage() {
     [records, selectedRecordId]
   );
   const formError = useMemo(() => {
-    if (!form.projectId) {
-      return "Select the affected active project.";
+    if (!effectiveProject) {
+      return isSingleProjectScope
+        ? "Select an active project in the top bar first."
+        : "Select the affected active project.";
     }
-    if (!selectedProject?.assignedRigId) {
-      return "Selected project has no assigned rig. Assign a rig on the project first.";
+    if (effectiveProjectRigOptions.length === 0) {
+      return "This project has no assigned rig. Assign a rig to the project first.";
+    }
+    if (effectiveProjectRigOptions.length > 1 && !form.rigId) {
+      return "Select one of the project rigs.";
     }
     if (!form.title.trim()) {
       return "Enter a short issue summary.";
     }
     return null;
-  }, [form.projectId, form.title, selectedProject?.assignedRigId]);
+  }, [
+    effectiveProject,
+    effectiveProjectRigOptions.length,
+    form.rigId,
+    form.title,
+    isSingleProjectScope
+  ]);
 
   const buildHref = useMemo(
     () =>
@@ -526,13 +526,17 @@ export default function BreakdownsPage() {
     setSubmitting(true);
     setErrorMessage(null);
     try {
+      const selectedRigId =
+        form.rigId || (effectiveProjectRigOptions.length === 1 ? effectiveProjectRigOptions[0].id : "");
+      const selectedProjectId = effectiveProject?.id || form.projectId;
       const response = await fetch("/api/breakdowns", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          projectId: form.projectId,
+          projectId: selectedProjectId,
+          rigId: selectedRigId || null,
           title: form.title.trim(),
           description: form.description.trim(),
           severity: form.severity,
@@ -767,45 +771,116 @@ export default function BreakdownsPage() {
             {errorMessage}
           </div>
         )}
+        {isSingleProjectScope ? (
+          <ProjectLockedBanner
+            projectId={scopeProjectId}
+            projectName={scopedProject?.name || null}
+          />
+        ) : null}
 
         <AccessGate permission="breakdowns:submit">
-          <Card title="Report Breakdown">
+          <Card
+            title="Report breakdown"
+            subtitle="Capture the issue quickly, then continue with repair actions."
+          >
             <form onSubmit={submitBreakdown} className="space-y-3">
+              <div className="gf-guided-strip">
+                <p className="gf-guided-strip-title">Guided workflow</p>
+                <div className="gf-guided-step-list">
+                  <p className="gf-guided-step">1. Confirm project rig context.</p>
+                  <p className="gf-guided-step">2. Enter issue summary and severity.</p>
+                  <p className="gf-guided-step">3. Save and continue with repair actions.</p>
+                </div>
+              </div>
+              {isSingleProjectScope ? (
+                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                  <p>
+                    <span className="font-semibold">Project locked:</span>{" "}
+                    {scopedProject?.name || "Selected project"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Client:</span>{" "}
+                    {scopedProject?.client?.name || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Allowed rigs:</span>{" "}
+                    {effectiveProjectRigOptions.length > 0
+                      ? effectiveProjectRigOptions.map((entry) => entry.rigCode).join(", ")
+                      : "None"}
+                  </p>
+                </div>
+              ) : null}
+              {effectiveProject && effectiveProjectRigOptions.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  This project has no assigned rig. Assign a rig to the project first.
+                </div>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                <label className="text-sm text-ink-700">
-                  Project
-                  <select
-                    value={form.projectId}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, projectId: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    required
-                  >
-                    <option value="">Select active project</option>
-                    {activeProjects.map((project) => (
-                      <option key={project.id} value={project.id}>
-                        {project.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700">
-                  Derived rig
-                  <input
-                    value={selectedRigCode || "No assigned rig"}
-                    disabled
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                  />
-                </label>
-                <label className="text-sm text-ink-700">
-                  Client context
-                  <input
-                    value={selectedProject?.client.name || "-"}
-                    disabled
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                  />
-                </label>
+                {isSingleProjectScope ? (
+                  <label className="text-sm text-ink-700">
+                    Project
+                    <input
+                      value={scopedProject?.name || "Selected project"}
+                      disabled
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                    />
+                  </label>
+                ) : (
+                  <label className="text-sm text-ink-700">
+                    Project
+                    <select
+                      value={form.projectId}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          projectId: event.target.value,
+                          rigId: ""
+                        }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      required
+                    >
+                      <option value="">Select active project</option>
+                      {activeProjects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {effectiveProjectRigOptions.length > 1 ? (
+                  <label className="text-sm text-ink-700">
+                    Project rig
+                    <select
+                      value={form.rigId}
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, rigId: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      required
+                    >
+                      <option value="">Select project rig</option>
+                      {effectiveProjectRigOptions.map((rig) => (
+                        <option key={rig.id} value={rig.id}>
+                          {rig.rigCode}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="text-sm text-ink-700">
+                    Project rig
+                    <input
+                      value={
+                        selectedRigCode ||
+                        (effectiveProject ? "No assigned project rig" : "Select project first")
+                      }
+                      disabled
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                    />
+                  </label>
+                )}
                 <label className="text-sm text-ink-700">
                   Severity / priority
                   <select
@@ -865,6 +940,11 @@ export default function BreakdownsPage() {
                   />
                 </label>
               </div>
+              {effectiveProject && effectiveProjectRigOptions.length === 1 ? (
+                <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                  Project rig is fixed to {effectiveProjectRigOptions[0].rigCode}. Continue with issue details.
+                </p>
+              ) : null}
 
               <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
                 <button
@@ -907,27 +987,34 @@ export default function BreakdownsPage() {
           {logOpen && (
             <div className="space-y-3">
               <Card title="Log Filters">
-                <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
-                  <label className="text-sm text-ink-700">
-                    Project
-                    <select
-                      value={logFilters.projectId}
-                      onChange={(event) =>
-                        setLogFilters((current) => ({
-                          ...current,
-                          projectId: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <option value="">All projects</option>
-                      {projects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                {isSingleProjectScope ? (
+                  <p className="mb-3 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                    Project locked to {scopedProject?.name || "selected project"}. Filters below apply only within this project.
+                  </p>
+                ) : null}
+                <div className={`grid gap-3 md:grid-cols-2 ${isSingleProjectScope ? "lg:grid-cols-4" : "lg:grid-cols-5"}`}>
+                  {!isSingleProjectScope ? (
+                    <label className="text-sm text-ink-700">
+                      Project
+                      <select
+                        value={logFilters.projectId}
+                        onChange={(event) =>
+                          setLogFilters((current) => ({
+                            ...current,
+                            projectId: event.target.value
+                          }))
+                        }
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      >
+                        <option value="">All projects</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <label className="text-sm text-ink-700">
                     Rig
                     <select
@@ -941,7 +1028,7 @@ export default function BreakdownsPage() {
                       className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
                     >
                       <option value="">All rigs</option>
-                      {rigs.map((rig) => (
+                      {rigFilterOptions.map((rig) => (
                         <option key={rig.id} value={rig.id}>
                           {rig.rigCode}
                         </option>
@@ -1112,7 +1199,7 @@ export default function BreakdownsPage() {
                         <span className="font-semibold">{rigDetailCaseSummary.critical}</span>
                       </p>
                       <p className="mt-1 text-slate-600">
-                        Rig-level view is summary only. Open a case to review linked requests and
+                        Rig-level view is summary only. Open a case to see linked requests and
                         actions.
                       </p>
                     </div>
@@ -1196,7 +1283,7 @@ export default function BreakdownsPage() {
                     {selectedRecord.rig?.rigCode || "-"}
                   </p>
                   <p>
-                    <span className="font-semibold">Client context:</span>{" "}
+                    <span className="font-semibold">Client:</span>{" "}
                     {selectedRecord.client?.name || "-"}
                   </p>
                   <p>
@@ -1360,70 +1447,4 @@ export default function BreakdownsPage() {
       </div>
     </AccessGate>
   );
-}
-
-function BreakdownStatusChip({ status }: { status: string }) {
-  const normalizedStatus = normalizeBreakdownStatus(status);
-  const className =
-    normalizedStatus === "RESOLVED"
-      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-      : "border-amber-300 bg-amber-100 text-amber-800";
-
-  return (
-    <span
-      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${className}`}
-    >
-      {normalizedStatus}
-    </span>
-  );
-}
-
-function breakdownRowSortValue(entry: BreakdownRecord | undefined) {
-  if (!entry) {
-    return 0;
-  }
-  const date = Date.parse(entry.reportDate || "");
-  if (Number.isFinite(date)) {
-    return date;
-  }
-  return 0;
-}
-
-function formatBreakdownCurrentState(status: string | null | undefined) {
-  const normalized = normalizeBreakdownStatus(status || "");
-  if (normalized === "OPEN") {
-    return "Open";
-  }
-  return "No active case";
-}
-
-function toDate(value: string | null | undefined) {
-  if (!value) {
-    return "-";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toISOString().slice(0, 10);
-}
-
-function toDateTime(value: string | null | undefined) {
-  if (!value) {
-    return "-";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toISOString().replace("T", " ").slice(0, 16);
-}
-
-function formatMaintenanceLifecycleStatus(status: string | null | undefined) {
-  const normalized = (status || "").trim().toUpperCase();
-  if (normalized === "OPEN") return "Open";
-  if (normalized === "IN_REPAIR") return "In repair";
-  if (normalized === "WAITING_FOR_PARTS") return "Waiting for parts";
-  if (normalized === "COMPLETED") return "Completed";
-  return "Open";
 }

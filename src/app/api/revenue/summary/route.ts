@@ -12,9 +12,11 @@ export async function GET(request: NextRequest) {
 
   const fromParam = request.nextUrl.searchParams.get("from");
   const toParam = request.nextUrl.searchParams.get("to");
-  const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
-  const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
+  const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const clientId = projectId ? null : rawClientId;
+  const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(fromParam);
   const toDate = parseDateOrNull(toParam, true);
 
@@ -87,6 +89,13 @@ export async function GET(request: NextRequest) {
   const revenueByRig = sortRevenue(Array.from(rigMap.values()));
 
   return NextResponse.json({
+    filters: {
+      projectId: projectId || "all",
+      clientId: clientId || "all",
+      rigId: rigId || "all",
+      from: fromParam,
+      to: toParam
+    },
     totals: {
       totalRevenue,
       reportsLogged: reports.length

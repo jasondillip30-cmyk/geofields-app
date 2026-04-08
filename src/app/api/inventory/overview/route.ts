@@ -8,6 +8,7 @@ import {
   roundCurrency
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
+import { buildProjectConsumablesPool } from "@/lib/project-consumables-pool";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,12 +20,19 @@ export async function GET(request: NextRequest) {
 
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
 
-  const movementWhere = buildInventoryScopeFilters({ fromDate, toDate, clientId, rigId });
+  const movementWhere = buildInventoryScopeFilters({
+    fromDate,
+    toDate,
+    projectId,
+    clientId,
+    rigId
+  });
 
-  const [items, movements] = await Promise.all([
+  const [items, movements, projectConsumablesPool, projectUsageRequestCounts] = await Promise.all([
     prisma.inventoryItem.findMany({
       orderBy: [{ name: "asc" }],
       include: {
@@ -40,10 +48,84 @@ export async function GET(request: NextRequest) {
         item: { select: { id: true, name: true, sku: true, category: true } },
         rig: { select: { id: true, rigCode: true } },
         project: { select: { id: true, name: true } },
-        supplier: { select: { id: true, name: true } }
+        supplier: { select: { id: true, name: true } },
+        expense: { select: { id: true, approvalStatus: true } }
       }
-    })
+    }),
+    projectId
+      ? buildProjectConsumablesPool({
+          projectId,
+          includeZeroAvailable: true
+        })
+      : Promise.resolve([]),
+    projectId
+      ? prisma.inventoryUsageRequest.groupBy({
+          by: ["status"],
+          where: { projectId },
+          _count: { status: true }
+        })
+      : Promise.resolve([])
   ]);
+
+  const approvedPoolRows = projectConsumablesPool.filter(
+    (row) => row.approvedRequestQty + row.approvedPurchaseQty > 0
+  );
+  const requestCountByStatus = new Map(
+    projectUsageRequestCounts.map((row) => [row.status, row._count.status || 0])
+  );
+  const projectLinkedSummary = projectId
+    ? {
+        approvedItems: approvedPoolRows.length,
+        approvedQuantity: roundCurrency(
+          approvedPoolRows.reduce((sum, row) => sum + row.approvedRequestQty + row.approvedPurchaseQty, 0)
+        ),
+        availableApprovedQuantity: roundCurrency(
+          approvedPoolRows.reduce((sum, row) => sum + row.availableNow, 0)
+        ),
+        availableApprovedValue: roundCurrency(
+          approvedPoolRows.reduce((sum, row) => sum + row.availableNow * row.unitCost, 0)
+        ),
+        usedQuantity: roundCurrency(
+          approvedPoolRows.reduce((sum, row) => sum + row.consumedQty, 0)
+        ),
+        usedValue: roundCurrency(
+          approvedPoolRows.reduce((sum, row) => sum + row.consumedQty * row.unitCost, 0)
+        ),
+        projectLinkedIn: roundCurrency(
+          movements.reduce(
+            (sum, movement) => sum + (movement.movementType === "IN" ? movement.quantity : 0),
+            0
+          )
+        ),
+        projectLinkedOut: roundCurrency(
+          movements.reduce(
+            (sum, movement) => sum + (movement.movementType === "OUT" ? movement.quantity : 0),
+            0
+          )
+        ),
+        recognizedInventoryCost: roundCurrency(
+          movements.reduce((sum, movement) => {
+            if (movement.movementType !== "OUT") {
+              return sum;
+            }
+            if (String(movement.expense?.approvalStatus || "").toUpperCase() !== "APPROVED") {
+              return sum;
+            }
+            return sum + (movement.totalCost || 0);
+          }, 0)
+        ),
+        requestContext: {
+          total: projectUsageRequestCounts.reduce(
+            (sum, row) => sum + (row._count.status || 0),
+            0
+          ),
+          submitted: requestCountByStatus.get("SUBMITTED") || 0,
+          pending: requestCountByStatus.get("PENDING") || 0,
+          approved: requestCountByStatus.get("APPROVED") || 0,
+          rejected: requestCountByStatus.get("REJECTED") || 0
+        }
+      }
+    : null;
 
   const totalItems = items.length;
   const totalUnitsInStock = roundCurrency(items.reduce((sum, item) => sum + item.quantityInStock, 0));
@@ -218,9 +300,11 @@ export async function GET(request: NextRequest) {
     filters: {
       from: request.nextUrl.searchParams.get("from"),
       to: request.nextUrl.searchParams.get("to"),
+      projectId: projectId || "all",
       clientId: clientId || "all",
       rigId: rigId || "all"
     },
+    projectLinked: projectLinkedSummary,
     overview: {
       totalItems,
       totalUnitsInStock,
@@ -292,4 +376,3 @@ export async function GET(request: NextRequest) {
     }
   });
 }
-

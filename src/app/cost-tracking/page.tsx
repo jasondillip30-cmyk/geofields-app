@@ -7,6 +7,7 @@ import { RotateCw } from "lucide-react";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import {
   AnalyticsEmptyState,
   getScopedKpiHelper,
@@ -34,6 +35,7 @@ const COST_TRACKING_DONUT_PALETTE = ["#1e63f5", "#0f766e", "#0ea5e9", "#6366f1",
 
 const emptySummary: CostTrackingSummaryPayload = {
   filters: {
+    projectId: "all",
     clientId: "all",
     rigId: "all",
     from: null,
@@ -60,7 +62,26 @@ export default function CostTrackingPage() {
   const [summary, setSummary] = useState<CostTrackingSummaryPayload>(emptySummary);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const isScoped = hasActiveScopeFilters(filters);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
+  const effectiveScopeFilters = useMemo(
+    () =>
+      isSingleProjectScope
+        ? {
+            ...filters,
+            clientId: "all",
+            rigId: "all"
+          }
+        : filters,
+    [filters, isSingleProjectScope]
+  );
+  const lockedProjectName = useMemo(() => {
+    if (!isSingleProjectScope) {
+      return null;
+    }
+    return summary.costByProject.find((entry) => entry.id === scopeProjectId)?.name || null;
+  }, [isSingleProjectScope, scopeProjectId, summary.costByProject]);
+  const isScoped = hasActiveScopeFilters(effectiveScopeFilters);
   const recognizedSpendTotal = summary.overview.totalRecognizedSpend;
   const hasCostData = useMemo(
     () =>
@@ -92,8 +113,13 @@ export default function CostTrackingPage() {
         const params = new URLSearchParams();
         if (filters.from) params.set("from", filters.from);
         if (filters.to) params.set("to", filters.to);
-        if (filters.clientId !== "all") params.set("clientId", filters.clientId);
-        if (filters.rigId !== "all") params.set("rigId", filters.rigId);
+        if (isSingleProjectScope) {
+          params.set("projectId", scopeProjectId);
+        } else {
+          if (filters.clientId !== "all") params.set("clientId", filters.clientId);
+          if (filters.rigId !== "all") params.set("rigId", filters.rigId);
+          if (filters.projectId !== "all") params.set("projectId", filters.projectId);
+        }
 
         const query = params.toString();
         const response = await fetch(`/api/cost-tracking/summary${query ? `?${query}` : ""}`, {
@@ -111,7 +137,7 @@ export default function CostTrackingPage() {
         }
       }
     },
-    [filters.clientId, filters.from, filters.rigId, filters.to]
+    [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to, isSingleProjectScope, scopeProjectId]
   );
 
   useEffect(() => {
@@ -262,7 +288,8 @@ export default function CostTrackingPage() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+        <ProjectLockedBanner projectId={scopeProjectId} projectName={lockedProjectName} />
+        <FilterScopeBanner filters={effectiveScopeFilters} onClearFilters={handleClearFilters} />
 
         {!loading && !hasCostData ? (
           <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>

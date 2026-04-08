@@ -6,6 +6,7 @@ import { withFinancialDrillReportApproval } from "@/lib/financial-approval-polic
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
+import { resolveSpendingMovementCategory } from "@/lib/spending-expense-category";
 
 interface AggregateRowBase {
   id: string;
@@ -52,18 +53,23 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
-  const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
-  const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
+  const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const clientId = projectId ? null : rawClientId;
+  const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
   const appliedFilters = {
     from: fromDate ? fromDate.toISOString() : null,
     to: toDate ? toDate.toISOString() : null,
+    projectId: projectId || "all",
     clientId: clientId || "all",
     rigId: rigId || "all"
   };
 
   const drillWhere: Prisma.DrillReportWhereInput = withFinancialDrillReportApproval({
+    ...(projectId ? { projectId } : {}),
     ...(clientId ? { clientId } : {}),
     ...(rigId ? { rigId } : {}),
     ...(fromDate || toDate
@@ -76,7 +82,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const [reports, spendContext] = await Promise.all([
+  const [reports, spendContext, expenseMovements] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -89,11 +95,67 @@ export async function GET(request: NextRequest) {
     buildRecognizedSpendContext({
       clientId,
       rigId,
+      projectId,
       fromDate,
       toDate
+    }),
+    prisma.inventoryMovement.findMany({
+      where: {
+        movementType: "OUT",
+        expenseId: {
+          not: null
+        },
+        ...(projectId ? { projectId } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(rigId ? { rigId } : {}),
+        ...(fromDate || toDate
+          ? {
+              date: {
+                ...(fromDate ? { gte: fromDate } : {}),
+                ...(toDate ? { lte: toDate } : {})
+              }
+            }
+          : {})
+      },
+      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+      select: {
+        id: true,
+        date: true,
+        totalCost: true,
+        contextType: true,
+        clientId: true,
+        projectId: true,
+        rigId: true,
+        client: { select: { name: true } },
+        project: { select: { name: true } },
+        rig: { select: { rigCode: true } },
+        item: {
+          select: {
+            category: true
+          }
+        }
+      }
     })
   ]);
-  const expenses = spendContext.recognizedExpenses;
+  const recognizedExpenses = spendContext.recognizedExpenses;
+  const usageExpenses = expenseMovements.map((movement) => ({
+    id: movement.id,
+    amount: safeNumber(movement.totalCost),
+    date: movement.date,
+    contextType: movement.contextType,
+    category: normalizeExpenseCategory(
+      resolveSpendingMovementCategory({
+        itemCategory: movement.item?.category,
+        fallbackCategory: "Uncategorized"
+      })
+    ),
+    clientId: movement.clientId || null,
+    projectId: movement.projectId || null,
+    rigId: movement.rigId || null,
+    clientName: movement.client?.name || null,
+    projectName: movement.project?.name || null,
+    rigName: movement.rig?.rigCode || null
+  }));
   const recognizedExpenseResult = {
     stats: spendContext.recognitionStats
   };
@@ -104,7 +166,7 @@ export async function GET(request: NextRequest) {
     fromDate,
     toDate,
     reportDates: reports.map((entry) => entry.date),
-    expenseDates: expenses.map((entry) => entry.date)
+    expenseDates: usageExpenses.map((entry) => entry.date)
   });
 
   const trendMap = new Map<string, TrendRow>();
@@ -145,19 +207,23 @@ export async function GET(request: NextRequest) {
 
   let totalExpenses = 0;
   let approvedIntentAmount = 0;
-  for (const expense of expenses) {
-    totalExpenses += expense.amount;
+  for (const expense of recognizedExpenses) {
     const status = expense.approvalStatus as ExpenseStatusKey;
     if (status in expenseStatusCounts) {
       expenseStatusCounts[status] += 1;
     }
     if (expense.approvalStatus === "APPROVED") {
-      approvedIntentAmount += expense.amount;
+      approvedIntentAmount += safeNumber(expense.amount);
     }
+  }
 
-    const category = normalizeExpenseCategory(expense.category);
-    expenseCategoryMap.set(category, (expenseCategoryMap.get(category) || 0) + expense.amount);
-    const costGroup = classifyCostGroup(category, expense.subcategory, expense.notes);
+  for (const expense of usageExpenses) {
+    if (expense.amount <= 0) {
+      continue;
+    }
+    totalExpenses += expense.amount;
+    expenseCategoryMap.set(expense.category, (expenseCategoryMap.get(expense.category) || 0) + expense.amount);
+    const costGroup = classifyCostGroup(expense.category, null, expense.contextType);
     costGroupTotals[costGroup] += expense.amount;
 
     const trendKey = buildTrendKey(expense.date, trendGranularity);
@@ -169,9 +235,9 @@ export async function GET(request: NextRequest) {
     const aggregateClientId = expense.clientId || UNASSIGNED_CLIENT_ID;
     const aggregateProjectId = expense.projectId || UNASSIGNED_PROJECT_ID;
     const aggregateRigId = expense.rigId || UNASSIGNED_RIG_ID;
-    const aggregateClientName = expense.client?.name || UNASSIGNED_CLIENT_NAME;
-    const aggregateProjectName = expense.project?.name || UNASSIGNED_PROJECT_NAME;
-    const aggregateRigName = expense.rig?.rigCode || UNASSIGNED_RIG_NAME;
+    const aggregateClientName = expense.clientName || UNASSIGNED_CLIENT_NAME;
+    const aggregateProjectName = expense.projectName || UNASSIGNED_PROJECT_NAME;
+    const aggregateRigName = expense.rigName || UNASSIGNED_RIG_NAME;
 
     upsertAggregate(clientMap, aggregateClientId, aggregateClientName, 0, expense.amount);
     upsertAggregate(projectMap, aggregateProjectId, aggregateProjectName, 0, expense.amount);
@@ -252,7 +318,8 @@ export async function GET(request: NextRequest) {
       appliedFilters,
       reportRecordCount: reports.length,
       expenseRecordCount: spendContext.rawExpenses.length,
-      recognizedExpenseRecordCount: expenses.length,
+      recognizedExpenseRecordCount: recognizedExpenses.length,
+      usageExpenseMovementCount: usageExpenses.length,
       recognition: recognizedExpenseResult.stats,
       totalExpenses,
       approvedIntentAmount,
@@ -265,6 +332,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     filters: {
+      projectId: projectId || "all",
       clientId: clientId || "all",
       rigId: rigId || "all",
       from: request.nextUrl.searchParams.get("from"),
@@ -459,21 +527,23 @@ function pickLowestByProfit(rows: AggregateRow[]) {
 }
 
 function roundCurrency(value: number) {
-  return Math.round(value * 100) / 100;
+  return Math.round(safeNumber(value) * 100) / 100;
 }
 
 function calculateMargin(profit: number, revenue: number) {
-  if (revenue === 0) {
+  const safeRevenue = safeNumber(revenue);
+  if (safeRevenue === 0) {
     return 0;
   }
-  return Math.round((profit / revenue) * 1000) / 10;
+  return Math.round((safeNumber(profit) / safeRevenue) * 1000) / 10;
 }
 
 function calculatePercent(value: number, total: number) {
-  if (total === 0) {
+  const safeTotal = safeNumber(total);
+  if (safeTotal === 0) {
     return 0;
   }
-  return Math.round((value / total) * 1000) / 10;
+  return Math.round((safeNumber(value) / safeTotal) * 1000) / 10;
 }
 
 function normalizeExpenseCategory(category: string | null | undefined) {
@@ -481,8 +551,16 @@ function normalizeExpenseCategory(category: string | null | undefined) {
   return value || "Uncategorized";
 }
 
-function classifyCostGroup(category: string, subcategory: string | null, notes: string | null) {
-  const searchText = `${category} ${subcategory || ""} ${notes || ""}`.toLowerCase();
+function classifyCostGroup(
+  category: string,
+  subcategory: string | null,
+  contextType: string | null | undefined
+) {
+  const searchText = `${category} ${subcategory || ""} ${contextType || ""}`.toLowerCase();
+
+  if (hasAny(searchText, ["maintenance", "maint", "breakdown"])) {
+    return "maintenance";
+  }
 
   if (hasAny(searchText, ["fuel", "diesel", "petrol", "gasoline", "camp fuel", "light plant", "water pump"])) {
     return "fuel";
@@ -509,13 +587,25 @@ function classifyCostGroup(category: string, subcategory: string | null, notes: 
       "hydraulic oil",
       "compressor oil",
       "spare part",
-      "spare parts"
+      "spare parts",
+      "drilling",
+      "consumables",
+      "filters",
+      "hydraulic",
+      "electrical",
+      "oils",
+      "tires"
     ])
   ) {
     return "consumables";
   }
 
   return "other";
+}
+
+function safeNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function hasAny(text: string, tokens: string[]) {

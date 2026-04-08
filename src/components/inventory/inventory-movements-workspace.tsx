@@ -33,6 +33,7 @@ interface MovementWorkspaceRow {
   item?: { id?: string; name?: string | null; sku?: string | null } | null;
   rig?: { id?: string; rigCode?: string | null } | null;
   project?: { id?: string; name?: string | null } | null;
+  drillReport?: { id?: string | null; holeNumber?: string | null } | null;
   maintenanceRequest?: {
     id?: string | null;
     requestCode?: string | null;
@@ -43,8 +44,10 @@ interface MovementWorkspaceRow {
   linkedUsageRequest?: {
     id?: string;
     reasonType?: string | null;
+    drillReportId?: string | null;
     breakdownReportId?: string | null;
     maintenanceRequestId?: string | null;
+    drillReport?: { id?: string | null; holeNumber?: string | null } | null;
     maintenanceRequest?: { id?: string | null; requestCode?: string | null; breakdownReportId?: string | null } | null;
     breakdownReport?: { id?: string | null; title?: string | null } | null;
   } | null;
@@ -55,6 +58,8 @@ interface MovementWorkspaceRow {
 }
 
 export function InventoryMovementsWorkspace({
+  isProjectLocked,
+  projectName,
   focusedSectionId,
   movementLedgerSummary,
   movementTypeFilter,
@@ -66,6 +71,8 @@ export function InventoryMovementsWorkspace({
   focusedRowId,
   openMovementDetail
 }: {
+  isProjectLocked: boolean;
+  projectName?: string | null;
   focusedSectionId: string | null;
   movementLedgerSummary: MovementLedgerSummary;
   movementTypeFilter: string;
@@ -77,6 +84,20 @@ export function InventoryMovementsWorkspace({
   focusedRowId: string | null;
   openMovementDetail: (movementId: string) => void;
 }) {
+  const lockedInOutSummary = isProjectLocked
+    ? filteredMovements.reduce(
+        (summary, movement) => {
+          if (movement.movementType === "IN") {
+            summary.in += 1;
+          } else if (movement.movementType === "OUT") {
+            summary.out += 1;
+          }
+          return summary;
+        },
+        { in: 0, out: 0 }
+      )
+    : null;
+
   return (
     <section
       id="inventory-movements-section"
@@ -88,30 +109,58 @@ export function InventoryMovementsWorkspace({
       <Card
         className="min-w-0"
         title="Movement History"
-        subtitle="Track inventory movement history, operational linkage, and cost recognition."
+        subtitle={
+          isProjectLocked
+            ? `Project-linked movement history for ${projectName || "the locked project"}.`
+            : "Track inventory movement history, operational linkage, and cost recognition."
+        }
       >
         <div id="inventory-stock-movements-section" />
         <div className="mb-3 space-y-2 rounded-xl border border-slate-200/80 bg-slate-50/70 p-3">
           <p className="text-xs text-slate-600">
-            Review stock changes with operational and financial traceability.
+            {isProjectLocked
+              ? "Project mode shows project-linked flow only. Warehouse stock on hand remains global."
+              : "Review stock changes with operational and financial traceability."}
           </p>
-          <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
-            Most movements are created from receipt intake, approved usage, maintenance, and breakdown workflows.
-            Use manual adjustment only when a movement cannot be captured through the normal process.
-          </p>
+          {!isProjectLocked ? (
+            <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+              Most movements are created from receipt intake, approved usage, maintenance, and breakdown workflows.
+              Use manual adjustment only when a movement cannot be captured through the normal process.
+            </p>
+          ) : (
+            <p className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+              Locked project mode keeps only simple stock flow: restocked to project (IN) and used on project (OUT).
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              In scope: {formatNumber(movementLedgerSummary.total)}
-            </span>
-            <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
-              Cost recognized: {formatNumber(movementLedgerSummary.recognized)}
-            </span>
-            <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-              Pending: {formatNumber(movementLedgerSummary.pending)}
-            </span>
-            <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              Stock only: {formatNumber(movementLedgerSummary.stockOnly)}
-            </span>
+            {isProjectLocked ? (
+              <>
+                <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                  Project-linked in scope: {formatNumber(movementLedgerSummary.total)}
+                </span>
+                <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                  IN: {formatNumber(lockedInOutSummary?.in || 0)}
+                </span>
+                <span className="rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
+                  OUT: {formatNumber(lockedInOutSummary?.out || 0)}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                  In scope: {formatNumber(movementLedgerSummary.total)}
+                </span>
+                <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                  Cost recognized: {formatNumber(movementLedgerSummary.recognized)}
+                </span>
+                <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+                  Pending: {formatNumber(movementLedgerSummary.pending)}
+                </span>
+                <span className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                  Stock only: {formatNumber(movementLedgerSummary.stockOnly)}
+                </span>
+              </>
+            )}
           </div>
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Filters</p>
@@ -122,10 +171,18 @@ export function InventoryMovementsWorkspace({
               label="Movement Type"
               value={movementTypeFilter}
               onChange={setMovementTypeFilter}
-              options={[
-                { value: "all", label: "All movement types" },
-                ...inventoryMovementTypeOptions.map((entry) => ({ value: entry.value, label: entry.label }))
-              ]}
+              options={
+                isProjectLocked
+                  ? [
+                      { value: "all", label: "All project-linked movement types" },
+                      { value: "IN", label: "Restocked to project (IN)" },
+                      { value: "OUT", label: "Used on project (OUT)" }
+                    ]
+                  : [
+                      { value: "all", label: "All movement types" },
+                      ...inventoryMovementTypeOptions.map((entry) => ({ value: entry.value, label: entry.label }))
+                    ]
+              }
             />
             <label className="text-xs text-ink-700 md:col-span-2 xl:col-span-3">
               <span className="mb-1 block uppercase tracking-wide text-slate-500">Search movements</span>
@@ -140,17 +197,64 @@ export function InventoryMovementsWorkspace({
           </div>
         </div>
         {filteredMovements.length === 0 ? (
-          <p className="text-sm text-ink-600">No stock movements found for current scope.</p>
+          <p className="text-sm text-ink-600">
+            {isProjectLocked
+              ? "No project-linked stock movements found for this project."
+              : "No stock movements found for current scope."}
+          </p>
         ) : (
           <div>
             <DataTable
               className="border-slate-200/70"
               compact
-              columns={["Date", "Item", "Type", "Qty", "Total Cost", "Purpose", "Linked To", "Financial Status", "Receipt", "Actions"]}
+              columns={
+                isProjectLocked
+                  ? ["Date", "Item", "Type", "Qty", "Total Cost", "Linked To", "Receipt", "Actions"]
+                  : ["Date", "Item", "Type", "Qty", "Total Cost", "Purpose", "Linked To", "Financial Status", "Receipt", "Actions"]
+              }
               rows={visibleMovements.map((movement) => {
                 const purpose = deriveMovementPurpose(movement);
                 const recognition = deriveMovementRecognitionStatus(movement);
                 const financialSubLine = deriveMovementRecognitionSubLine(movement, recognition);
+                if (isProjectLocked) {
+                  return [
+                    toIsoDate(movement.date),
+                    movementItemLabel(movement),
+                    movement.movementType === "IN" ? "Restocked to project (IN)" : "Used on project (OUT)",
+                    formatNumber(movement.quantity),
+                    formatCurrency(movement.totalCost || 0),
+                    movementLinkedToDisplay(movement),
+                    movement.receiptUrl ? (
+                      <a
+                        key={`${movement.id}-receipt`}
+                        href={movement.receiptUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-brand-700 underline"
+                      >
+                        Open
+                      </a>
+                    ) : movement.traReceiptNumber || movement.supplierInvoiceNumber ? (
+                      "Attached"
+                    ) : (
+                      "—"
+                    ),
+                    <button
+                      key={`${movement.id}-view`}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openMovementDetail(movement.id);
+                      }}
+                      className="gf-btn-subtle"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        <Eye size={13} />
+                        View
+                      </span>
+                    </button>
+                  ];
+                }
                 return [
                   toIsoDate(movement.date),
                   movementItemLabel(movement),

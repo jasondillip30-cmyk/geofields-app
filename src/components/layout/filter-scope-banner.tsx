@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface FilterScopeBannerProps {
   filters: AnalyticsFilters;
+  projectLabel?: string | null;
   clientLabel?: string | null;
   rigLabel?: string | null;
   onClearFilters?: () => void;
@@ -12,30 +13,46 @@ interface FilterScopeBannerProps {
 }
 
 export function hasActiveScopeFilters(filters: AnalyticsFilters) {
-  return filters.clientId !== "all" || filters.rigId !== "all" || Boolean(filters.from) || Boolean(filters.to);
+  return (
+    filters.projectId !== "all" ||
+    filters.clientId !== "all" ||
+    filters.rigId !== "all" ||
+    Boolean(filters.from) ||
+    Boolean(filters.to)
+  );
 }
 
 export function buildFilterScopeSummary({
   filters,
+  projectLabel,
   clientLabel,
   rigLabel
 }: {
   filters: AnalyticsFilters;
+  projectLabel?: string | null;
   clientLabel?: string | null;
   rigLabel?: string | null;
 }) {
-  const rigScope = filters.rigId === "all" ? "All rigs" : `Rig ${rigLabel || filters.rigId}`;
-  const clientScope = filters.clientId === "all" ? "All clients" : `Client ${clientLabel || filters.clientId}`;
   const dateScope =
     !filters.from && !filters.to
       ? "Any date"
       : `Date ${formatScopeDate(filters.from) || "Any"} to ${formatScopeDate(filters.to) || "Any"}`;
 
-  return `Filtered view: ${rigScope} • ${clientScope} • ${dateScope}`;
+  if (filters.projectId !== "all") {
+    return `Project locked: ${projectLabel || filters.projectId} • ${dateScope}`;
+  }
+
+  const rigScope = filters.rigId === "all" ? null : `Rig ${rigLabel || filters.rigId}`;
+  const clientScope = filters.clientId === "all" ? null : `Client ${clientLabel || filters.clientId}`;
+  const optionalScopes = [clientScope, rigScope].filter(Boolean).join(" • ");
+  return optionalScopes
+    ? `All projects mode • ${optionalScopes} • ${dateScope}`
+    : `All projects mode • ${dateScope}`;
 }
 
 export function FilterScopeBanner({
   filters,
+  projectLabel,
   clientLabel,
   rigLabel,
   onClearFilters,
@@ -45,12 +62,12 @@ export function FilterScopeBanner({
     return null;
   }
 
-  const scopeSummary = buildFilterScopeSummary({ filters, clientLabel, rigLabel });
+  const scopeSummary = buildFilterScopeSummary({ filters, projectLabel, clientLabel, rigLabel });
 
   return (
     <div
       className={cn(
-        "rounded-xl border border-brand-200 bg-brand-50/90 px-4 py-3 text-sm text-brand-900 shadow-[0_1px_2px_rgba(37,99,235,0.10)]",
+        "rounded-2xl border border-brand-200 bg-gradient-to-r from-brand-50/95 to-white px-4 py-3 text-sm text-brand-900 shadow-[0_1px_2px_rgba(37,99,235,0.08)]",
         className
       )}
     >
@@ -60,9 +77,9 @@ export function FilterScopeBanner({
           <button
             type="button"
             onClick={onClearFilters}
-            className="rounded-md border border-brand-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-800 hover:bg-brand-100/40"
+            className="rounded-lg border border-brand-200 bg-white px-2.5 py-1 text-xs font-medium text-brand-800 hover:bg-brand-100/40"
           >
-            Clear filters
+            Reset scope
           </button>
         ) : null}
       </div>

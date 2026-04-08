@@ -4,174 +4,41 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
+import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useRole } from "@/components/layout/role-provider";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import {
+  MaintenanceStatusChip,
+  formatMaintenanceStatus,
+  formatMaintenanceTypeLabel,
+  getProjectRigIds,
+  maintenanceRowSortValue,
+  normalizeMaintenanceStatus,
+  toDate,
+  toDateTime
+} from "@/app/maintenance/maintenance-page-utils";
+import {
+  INITIAL_FORM_STATE,
+  INITIAL_LOG_FILTERS,
+  MAINTENANCE_TYPE_OPTIONS,
+  STEP_ITEMS,
+  type AuditRow,
+  type BreakdownOption,
+  type LinkedRequisitionRow,
+  type LinkedUsageRequestRow,
+  type LogFilterState,
+  type MaintenanceFormState,
+  type MaintenanceRow,
+  type MaintenanceWizardStep,
+  type ProjectOption,
+  type RigMaintenanceHistoryRow,
+  type RigOption,
+  validateMaintenanceStep as validateMaintenanceFormStep
+} from "@/app/maintenance/maintenance-page-types";
 import { canReportMaintenanceActivity } from "@/lib/auth/approval-policy";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-
-type MaintenanceWizardStep = 1 | 2 | 3;
-type OperationalMaintenanceStatus =
-  | "OPEN"
-  | "IN_REPAIR"
-  | "WAITING_FOR_PARTS"
-  | "COMPLETED";
-
-interface RigOption {
-  id: string;
-  rigCode: string;
-  status: string;
-}
-
-interface ProjectOption {
-  id: string;
-  name: string;
-  status: string;
-  clientId: string;
-  assignedRigId: string | null;
-}
-
-interface BreakdownOption {
-  id: string;
-  title: string;
-  severity: string;
-  status: string;
-  project?: {
-    id: string;
-    name: string;
-  } | null;
-  rig?: {
-    id: string;
-    rigCode: string;
-  } | null;
-}
-
-interface MaintenanceRow {
-  id: string;
-  requestCode: string;
-  date: string;
-  requestDate: string;
-  rigId: string;
-  projectId: string | null;
-  issueType: string;
-  issueDescription: string;
-  status: string;
-  estimatedDowntimeHours: number;
-  notes: string | null;
-  breakdownReportId: string | null;
-  rig: { id: string; rigCode: string } | null;
-  project: { id: string; name: string } | null;
-  breakdownReport:
-    | {
-        id: string;
-        title: string;
-        status: string;
-        severity: string;
-      }
-    | null;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-interface MaintenanceFormState {
-  requestDate: string;
-  rigId: string;
-  linkedBreakdownId: string;
-  maintenanceType:
-    | "ROUTINE_MAINTENANCE"
-    | "INSPECTION_CHECK"
-    | "PREVENTIVE_SERVICE"
-    | "OTHER"
-    | "";
-  status: OperationalMaintenanceStatus;
-  issueDescription: string;
-  estimatedDowntimeHrs: string;
-  notes: string;
-}
-
-interface LogFilterState {
-  rigId: string;
-  status: "all" | OperationalMaintenanceStatus;
-  from: string;
-  to: string;
-  linkage: "all" | "linked" | "unlinked";
-}
-
-interface LinkedUsageRequestRow {
-  id: string;
-  quantity: number;
-  status: string;
-  reason: string;
-  createdAt: string;
-  item: { id: string; name: string; sku: string } | null;
-  requestedBy: { id: string; fullName: string; role: string } | null;
-}
-
-interface LinkedRequisitionRow {
-  id: string;
-  requisitionCode: string;
-  type: string;
-  status: string;
-  submittedAt: string;
-  totals: {
-    estimatedTotalCost: number;
-  };
-  contextLabels?: {
-    projectName: string | null;
-  };
-}
-
-interface AuditRow {
-  id: string;
-  action: string;
-  description: string;
-  createdAt: string;
-  actorName: string | null;
-}
-
-interface RigMaintenanceHistoryRow {
-  rigId: string;
-  rigCode: string;
-  currentStatus: OperationalMaintenanceStatus | null;
-  latestMaintenanceDate: string;
-  caseCount: number;
-  cases: MaintenanceRow[];
-}
-
-const INITIAL_FORM_STATE: MaintenanceFormState = {
-  requestDate: new Date().toISOString().slice(0, 10),
-  rigId: "",
-  linkedBreakdownId: "",
-  maintenanceType: "",
-  status: "OPEN",
-  issueDescription: "",
-  estimatedDowntimeHrs: "",
-  notes: ""
-};
-
-const INITIAL_LOG_FILTERS: LogFilterState = {
-  rigId: "",
-  status: "all",
-  from: "",
-  to: "",
-  linkage: "all"
-};
-
-const STEP_ITEMS: Array<{ step: MaintenanceWizardStep; label: string }> = [
-  { step: 1, label: "Select rig" },
-  { step: 2, label: "Enter details" },
-  { step: 3, label: "Save" }
-];
-
-const MAINTENANCE_TYPE_OPTIONS: Array<{
-  value: MaintenanceFormState["maintenanceType"];
-  label: string;
-}> = [
-  { value: "ROUTINE_MAINTENANCE", label: "Routine Maintenance" },
-  { value: "INSPECTION_CHECK", label: "Inspection / Check" },
-  { value: "PREVENTIVE_SERVICE", label: "Preventive Service" },
-  { value: "OTHER", label: "Other" }
-];
 
 export default function MaintenancePage() {
   return (
@@ -196,10 +63,13 @@ function MaintenanceWorkspaceFallback() {
 function MaintenanceWorkspace() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { filters } = useAnalyticsFilters();
   const { user } = useRole();
   const canReportMaintenance = canReportMaintenanceActivity(user?.role);
   const breakdownPrefillId = searchParams.get("breakdownId")?.trim() || "";
   const hasBreakdownPrefill = Boolean(breakdownPrefillId);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
 
   const [wizardStep, setWizardStep] = useState<MaintenanceWizardStep>(1);
   const [form, setForm] = useState<MaintenanceFormState>(INITIAL_FORM_STATE);
@@ -234,23 +104,46 @@ function MaintenanceWorkspace() {
     () => rigs.find((entry) => entry.id === form.rigId) || null,
     [form.rigId, rigs]
   );
+  const scopedProject = useMemo(
+    () => projects.find((entry) => entry.id === scopeProjectId) || null,
+    [projects, scopeProjectId]
+  );
+  const scopedProjectRigIds = useMemo(() => getProjectRigIds(scopedProject), [scopedProject]);
+  const scopedProjectRigOptions = useMemo(
+    () => rigs.filter((entry) => scopedProjectRigIds.includes(entry.id)),
+    [rigs, scopedProjectRigIds]
+  );
+  const rigOptionsForForm = useMemo(
+    () => (isSingleProjectScope ? scopedProjectRigOptions : rigs),
+    [isSingleProjectScope, rigs, scopedProjectRigOptions]
+  );
+  const shouldSkipRigSelectionStep = isSingleProjectScope && scopedProjectRigOptions.length === 1;
   const activeProjectForSelectedRig = useMemo(
     () =>
       projects.find(
-        (entry) => entry.assignedRigId === form.rigId && entry.status === "ACTIVE"
+        (entry) =>
+          entry.status === "ACTIVE" &&
+          (entry.assignedRigId === form.rigId || entry.backupRigId === form.rigId)
       ) || null,
     [form.rigId, projects]
   );
+  const projectContextForForm = isSingleProjectScope ? scopedProject : activeProjectForSelectedRig;
   const linkedBreakdown = useMemo(
     () => breakdowns.find((entry) => entry.id === form.linkedBreakdownId) || null,
     [breakdowns, form.linkedBreakdownId]
   );
   const breakdownOptionsForRig = useMemo(() => {
     if (!form.rigId) {
-      return breakdowns;
+      return isSingleProjectScope
+        ? breakdowns.filter((entry) => entry.project?.id === scopeProjectId)
+        : breakdowns;
     }
-    return breakdowns.filter((entry) => entry.rig?.id === form.rigId);
-  }, [breakdowns, form.rigId]);
+    return breakdowns.filter(
+      (entry) =>
+        entry.rig?.id === form.rigId &&
+        (!isSingleProjectScope || entry.project?.id === scopeProjectId)
+    );
+  }, [breakdowns, form.rigId, isSingleProjectScope, scopeProjectId]);
   const selectedRecord = useMemo(
     () => rows.find((entry) => entry.id === selectedRecordId) || null,
     [rows, selectedRecordId]
@@ -359,12 +252,44 @@ function MaintenanceWorkspace() {
     [rigDetailCases]
   );
   const isPrefilledFromBreakdown = hasBreakdownPrefill && Boolean(form.linkedBreakdownId);
-  const currentStepError = useMemo(() => validateStep(wizardStep, form), [form, wizardStep]);
+  const validateMaintenanceStep = useCallback(
+    (step: MaintenanceWizardStep) => {
+      const baseError = validateMaintenanceFormStep(step, form);
+      if (baseError) {
+        return baseError;
+      }
+      if (step === 1 && isSingleProjectScope) {
+        if (!scopedProject) {
+          return "Select an active project in the top bar first.";
+        }
+        if (scopedProjectRigOptions.length === 0) {
+          return "This project has no assigned rig. Assign a rig to the project first.";
+        }
+      }
+      return null;
+    },
+    [form, isSingleProjectScope, scopedProject, scopedProjectRigOptions.length]
+  );
+  const activeWizardStep: MaintenanceWizardStep =
+    shouldSkipRigSelectionStep && wizardStep === 1 ? 2 : wizardStep;
+  const currentStepError = useMemo(
+    () => validateMaintenanceStep(activeWizardStep),
+    [activeWizardStep, validateMaintenanceStep]
+  );
+  const detailsStepNumber = shouldSkipRigSelectionStep ? 1 : 2;
+  const saveStepNumber = shouldSkipRigSelectionStep ? 2 : 3;
+  const visibleWizardSteps = useMemo(
+    () => (shouldSkipRigSelectionStep ? STEP_ITEMS.filter((entry) => entry.step !== 1) : STEP_ITEMS),
+    [shouldSkipRigSelectionStep]
+  );
   const loadMaintenanceRows = useCallback(async () => {
     setLoadingRows(true);
     setErrorMessage(null);
     try {
       const query = new URLSearchParams();
+      if (isSingleProjectScope) {
+        query.set("projectId", scopeProjectId);
+      }
       if (logFilters.rigId) query.set("rigId", logFilters.rigId);
       if (logFilters.status !== "all") query.set("status", logFilters.status);
       if (logFilters.from) query.set("from", logFilters.from);
@@ -388,11 +313,14 @@ function MaintenanceWorkspace() {
     } finally {
       setLoadingRows(false);
     }
-  }, [logFilters.from, logFilters.rigId, logFilters.status, logFilters.to]);
-
-  useEffect(() => {
-    void loadReferenceData();
-  }, []);
+  }, [
+    isSingleProjectScope,
+    logFilters.from,
+    logFilters.rigId,
+    logFilters.status,
+    logFilters.to,
+    scopeProjectId
+  ]);
 
   useEffect(() => {
     void loadMaintenanceRows();
@@ -480,13 +408,67 @@ function MaintenanceWorkspace() {
     };
   }, [breakdownPrefillId, prefillApplied]);
 
-  async function loadReferenceData() {
+  useEffect(() => {
+    if (!isSingleProjectScope) {
+      return;
+    }
+    setForm((current) => {
+      const allowedRigIds = scopedProjectRigOptions.map((entry) => entry.id);
+      if (allowedRigIds.length === 1) {
+        const onlyRigId = allowedRigIds[0];
+        if (current.rigId === onlyRigId) {
+          return current;
+        }
+        return {
+          ...current,
+          rigId: onlyRigId,
+          linkedBreakdownId: ""
+        };
+      }
+      if (!current.rigId || allowedRigIds.includes(current.rigId)) {
+        return current;
+      }
+      return {
+        ...current,
+        rigId: "",
+        linkedBreakdownId: ""
+      };
+    });
+  }, [isSingleProjectScope, scopedProjectRigOptions]);
+
+  useEffect(() => {
+    if (!shouldSkipRigSelectionStep) {
+      return;
+    }
+    setWizardStep((current) => (current === 1 ? 2 : current));
+  }, [shouldSkipRigSelectionStep]);
+
+  useEffect(() => {
+    if (!isSingleProjectScope) {
+      return;
+    }
+    setLogFilters((current) => {
+      if (!current.rigId || scopedProjectRigIds.includes(current.rigId)) {
+        return current;
+      }
+      return {
+        ...current,
+        rigId: ""
+      };
+    });
+  }, [isSingleProjectScope, scopedProjectRigIds]);
+
+  const loadReferenceData = useCallback(async () => {
     setLoadingRefs(true);
     try {
+      const breakdownsQuery = new URLSearchParams({ status: "OPEN" });
+      if (isSingleProjectScope) {
+        breakdownsQuery.set("projectId", scopeProjectId);
+      }
       const [rigsRes, projectsRes, breakdownsRes] = await Promise.all([
         fetch("/api/rigs", { cache: "no-store" }),
         fetch("/api/projects", { cache: "no-store" }),
-        fetch("/api/breakdowns?status=OPEN", { cache: "no-store" })
+        fetch(`/api/breakdowns?${breakdownsQuery.toString()}`, { cache: "no-store" })
       ]);
       const [rigsPayload, projectsPayload, breakdownsPayload] = await Promise.all([
         rigsRes.ok ? rigsRes.json() : Promise.resolve({ data: [] }),
@@ -511,13 +493,17 @@ function MaintenanceWorkspace() {
                 name: string;
                 status: string;
                 clientId: string;
+                client?: { name: string } | null;
                 assignedRigId?: string | null;
+                backupRigId?: string | null;
               }) => ({
                 id: entry.id,
                 name: entry.name,
                 status: entry.status,
                 clientId: entry.clientId,
-                assignedRigId: entry.assignedRigId || null
+                assignedRigId: entry.assignedRigId || null,
+                backupRigId: entry.backupRigId || null,
+                client: entry.client || null
               })
             )
           : []
@@ -546,25 +532,40 @@ function MaintenanceWorkspace() {
     } finally {
       setLoadingRefs(false);
     }
-  }
+  }, [isSingleProjectScope, scopeProjectId]);
+
+  useEffect(() => {
+    void loadReferenceData();
+  }, [loadReferenceData]);
 
   function continueWizard() {
-    const validationError = validateStep(wizardStep, form);
+    const validationError = validateMaintenanceStep(activeWizardStep);
     if (validationError) {
       setErrorMessage(validationError);
       return;
     }
     setErrorMessage(null);
-    setWizardStep((current) =>
-      current < 3 ? ((current + 1) as MaintenanceWizardStep) : current
-    );
+    setWizardStep((current) => {
+      const effectiveCurrent =
+        shouldSkipRigSelectionStep && current === 1 ? 2 : current;
+      return effectiveCurrent < 3
+        ? ((effectiveCurrent + 1) as MaintenanceWizardStep)
+        : effectiveCurrent;
+    });
   }
 
   function backWizard() {
     setErrorMessage(null);
-    setWizardStep((current) =>
-      current > 1 ? ((current - 1) as MaintenanceWizardStep) : current
-    );
+    setWizardStep((current) => {
+      const effectiveCurrent =
+        shouldSkipRigSelectionStep && current === 1 ? 2 : current;
+      if (shouldSkipRigSelectionStep && effectiveCurrent <= 2) {
+        return 2;
+      }
+      return effectiveCurrent > 1
+        ? ((effectiveCurrent - 1) as MaintenanceWizardStep)
+        : effectiveCurrent;
+    });
   }
 
   async function saveMaintenance() {
@@ -574,7 +575,7 @@ function MaintenanceWorkspace() {
     }
 
     for (const step of [1, 2] as MaintenanceWizardStep[]) {
-      const validationError = validateStep(step, form);
+      const validationError = validateMaintenanceStep(step);
       if (validationError) {
         setWizardStep(step);
         setErrorMessage(validationError);
@@ -593,8 +594,8 @@ function MaintenanceWorkspace() {
         body: JSON.stringify({
           requestDate: form.requestDate,
           rigId: form.rigId,
-          projectId: activeProjectForSelectedRig?.id || null,
-          clientId: activeProjectForSelectedRig?.clientId || null,
+          projectId: projectContextForForm?.id || null,
+          clientId: projectContextForForm?.clientId || null,
           breakdownReportId: form.linkedBreakdownId || null,
           issueType: form.maintenanceType,
           issueDescription: form.issueDescription.trim(),
@@ -612,7 +613,7 @@ function MaintenanceWorkspace() {
 
       setNotice("Maintenance activity recorded.");
       setForm(INITIAL_FORM_STATE);
-      setWizardStep(1);
+      setWizardStep(shouldSkipRigSelectionStep ? 2 : 1);
       await loadMaintenanceRows();
     } catch (error) {
       setErrorMessage(
@@ -704,6 +705,9 @@ function MaintenanceWorkspace() {
 
     try {
       const maintenanceQuery = new URLSearchParams({ rigId });
+      if (isSingleProjectScope) {
+        maintenanceQuery.set("projectId", scopeProjectId);
+      }
       const maintenanceRes = await fetch(
         `/api/maintenance-requests?${maintenanceQuery.toString()}`,
         {
@@ -859,20 +863,47 @@ function MaintenanceWorkspace() {
           {errorMessage}
         </div>
       )}
+      {isSingleProjectScope ? (
+        <ProjectLockedBanner
+          projectId={scopeProjectId}
+          projectName={scopedProject?.name || null}
+        />
+      ) : null}
 
-      <Card title="Report Maintenance Activity">
+      <Card
+        title="Report maintenance activity"
+        subtitle="Keep this simple: pick project rig, enter work details, save."
+      >
+        <div className="mb-3 gf-guided-strip">
+          <p className="gf-guided-strip-title">Guided workflow</p>
+          <div className="gf-guided-step-list">
+            {shouldSkipRigSelectionStep ? (
+              <>
+                <p className="gf-guided-step">1. Confirm maintenance details.</p>
+                <p className="gf-guided-step">2. Save maintenance record.</p>
+                <p className="gf-guided-step">Project rig is already fixed by project setup.</p>
+              </>
+            ) : (
+              <>
+                <p className="gf-guided-step">1. Select the project rig.</p>
+                <p className="gf-guided-step">2. Enter maintenance details.</p>
+                <p className="gf-guided-step">3. Save maintenance record.</p>
+              </>
+            )}
+          </div>
+        </div>
         <div className="mb-3 grid gap-2 text-xs sm:grid-cols-3">
-          {STEP_ITEMS.map((entry) => (
+          {visibleWizardSteps.map((entry, index) => (
             <div
               key={entry.step}
               className={`rounded-lg border px-2 py-1.5 ${
-                wizardStep === entry.step
+                activeWizardStep === entry.step
                   ? "border-brand-300 bg-brand-50 text-brand-900"
                   : "border-slate-200 bg-slate-50 text-slate-600"
               }`}
             >
               <p className="font-semibold">
-                {entry.step}. {entry.label}
+                {index + 1}. {entry.label}
               </p>
             </div>
           ))}
@@ -884,35 +915,71 @@ function MaintenanceWorkspace() {
           }}
           className="space-y-3"
         >
-          {wizardStep === 1 && (
+          {activeWizardStep === 1 && (
             <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">Step 1 — Select rig</p>
-              <label className="text-sm text-ink-700">
-                Rig
-                <select
-                  value={form.rigId}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      rigId: event.target.value,
-                      linkedBreakdownId:
-                        current.rigId === event.target.value || isPrefilledFromBreakdown
-                          ? current.linkedBreakdownId
-                          : ""
-                    }))
-                  }
-                  className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  required
-                  disabled={loadingRefs || isPrefilledFromBreakdown}
-                >
-                  <option value="">{loadingRefs ? "Loading rigs..." : "Select rig"}</option>
-                  {rigs.map((rig) => (
-                    <option key={rig.id} value={rig.id}>
-                      {rig.rigCode}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <p className="text-sm font-semibold text-slate-900">
+                {isSingleProjectScope ? "Step 1 — Confirm project rig" : "Step 1 — Select rig"}
+              </p>
+              {isSingleProjectScope && (
+                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                  <p>
+                    <span className="font-semibold">Project locked:</span>{" "}
+                    {scopedProject?.name || "Selected project"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Client:</span>{" "}
+                    {scopedProject?.client?.name || "-"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Allowed rigs:</span>{" "}
+                    {scopedProjectRigOptions.length > 0
+                      ? scopedProjectRigOptions.map((entry) => entry.rigCode).join(", ")
+                      : "None"}
+                  </p>
+                </div>
+              )}
+
+              {isSingleProjectScope && scopedProjectRigOptions.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  This project has no assigned rig. Assign a rig to the project first.
+                </div>
+              ) : rigOptionsForForm.length === 1 ? (
+                <label className="text-sm text-ink-700">
+                  Rig
+                  <input
+                    value={rigOptionsForForm[0]?.rigCode || "No project rig"}
+                    disabled
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
+                  />
+                </label>
+              ) : (
+                <label className="text-sm text-ink-700">
+                  Rig
+                  <select
+                    value={form.rigId}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        rigId: event.target.value,
+                        linkedBreakdownId:
+                          current.rigId === event.target.value || isPrefilledFromBreakdown
+                            ? current.linkedBreakdownId
+                            : ""
+                      }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    required
+                    disabled={loadingRefs || isPrefilledFromBreakdown}
+                  >
+                    <option value="">{loadingRefs ? "Loading rigs..." : "Select rig"}</option>
+                    {rigOptionsForForm.map((rig) => (
+                      <option key={rig.id} value={rig.id}>
+                        {rig.rigCode}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               {isPrefilledFromBreakdown ? (
                 <label className="text-sm text-ink-700">
@@ -929,7 +996,7 @@ function MaintenanceWorkspace() {
                 </label>
               ) : (
                 <label className="text-sm text-ink-700">
-                  Link open breakdown (optional)
+                  Link breakdown (optional)
                   <select
                     value={form.linkedBreakdownId}
                     onChange={(event) =>
@@ -959,8 +1026,8 @@ function MaintenanceWorkspace() {
                     <span className="font-semibold">Rig status:</span> {selectedRig?.status || "-"}
                   </p>
                   <p>
-                    <span className="font-semibold">Project context:</span>{" "}
-                    {activeProjectForSelectedRig?.name || "Rig is idle (no active project)"}
+                    <span className="font-semibold">Project:</span>{" "}
+                    {projectContextForForm?.name || "Rig is idle (no active project)"}
                   </p>
                   {selectedRig?.status === "BREAKDOWN" && (
                     <p className="text-amber-800">Rig is currently in breakdown status.</p>
@@ -970,9 +1037,17 @@ function MaintenanceWorkspace() {
             </div>
           )}
 
-          {wizardStep === 2 && (
+          {activeWizardStep === 2 && (
             <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">Step 2 — Enter details</p>
+              <p className="text-sm font-semibold text-slate-900">
+                Step {detailsStepNumber} — Enter details
+              </p>
+              {isSingleProjectScope ? (
+                <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                  Project mode is locked to {scopedProject?.name || "the selected project"}.
+                  {selectedRig?.rigCode ? ` Using rig ${selectedRig.rigCode}.` : ""}
+                </p>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 <label className="text-sm text-ink-700">
                   Date
@@ -1072,9 +1147,9 @@ function MaintenanceWorkspace() {
             </div>
           )}
 
-          {wizardStep === 3 && (
+          {activeWizardStep === 3 && (
             <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">Step 3 — Save</p>
+              <p className="text-sm font-semibold text-slate-900">Step {saveStepNumber} — Save</p>
               <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:grid-cols-2">
                 <p>
                   <span className="font-semibold">Rig:</span>{" "}
@@ -1084,8 +1159,8 @@ function MaintenanceWorkspace() {
                   <span className="font-semibold">Date:</span> {form.requestDate || "-"}
                 </p>
                 <p>
-                  <span className="font-semibold">Project context:</span>{" "}
-                  {activeProjectForSelectedRig?.name || "Idle (no active project)"}
+                  <span className="font-semibold">Project:</span>{" "}
+                  {projectContextForForm?.name || "Idle (no active project)"}
                 </p>
                 <p>
                   <span className="font-semibold">Linked breakdown:</span>{" "}
@@ -1115,7 +1190,7 @@ function MaintenanceWorkspace() {
           )}
 
           <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-            {wizardStep > 1 && (
+            {activeWizardStep > 1 && (
               <button
                 type="button"
                 onClick={backWizard}
@@ -1124,7 +1199,7 @@ function MaintenanceWorkspace() {
                 Back
               </button>
             )}
-            {wizardStep < 3 ? (
+            {activeWizardStep < 3 ? (
               <button
                 type="button"
                 onClick={continueWizard}
@@ -1150,7 +1225,7 @@ function MaintenanceWorkspace() {
                 Your role can view maintenance history but cannot create records.
               </p>
             )}
-            {wizardStep < 3 && currentStepError && (
+            {activeWizardStep < 3 && currentStepError && (
               <p className="text-xs text-amber-800">{currentStepError}</p>
             )}
           </div>
@@ -1179,6 +1254,11 @@ function MaintenanceWorkspace() {
         {logOpen && (
           <div className="space-y-3">
             <Card title="History Filters">
+              {isSingleProjectScope ? (
+                <p className="mb-3 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+                  Project locked to {scopedProject?.name || "selected project"}. History below is limited to this project.
+                </p>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
                 <label className="text-sm text-ink-700">
                   Rig
@@ -1193,7 +1273,7 @@ function MaintenanceWorkspace() {
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
                   >
                     <option value="">All rigs</option>
-                    {rigs.map((rig) => (
+                    {(isSingleProjectScope ? scopedProjectRigOptions : rigs).map((rig) => (
                       <option key={rig.id} value={rig.id}>
                         {rig.rigCode}
                       </option>
@@ -1626,141 +1706,5 @@ function MaintenanceWorkspace() {
         </div>
       )}
     </div>
-  );
-}
-
-function validateStep(step: MaintenanceWizardStep, form: MaintenanceFormState) {
-  if (step === 1 && !form.rigId) {
-    return "Rig is required.";
-  }
-  if (step === 2) {
-    if (!form.requestDate) {
-      return "Date is required.";
-    }
-    if (!form.maintenanceType) {
-      return "Maintenance type is required.";
-    }
-    if (!form.issueDescription.trim()) {
-      return "Issue / work description is required.";
-    }
-  }
-  return null;
-}
-
-function normalizeMaintenanceStatus(value: string): {
-  status: OperationalMaintenanceStatus;
-  legacySource: string | null;
-} {
-  const normalized = value.trim().toUpperCase();
-  if (normalized === "OPEN") {
-    return { status: "OPEN", legacySource: null };
-  }
-  if (normalized === "COMPLETED") {
-    return { status: "COMPLETED", legacySource: null };
-  }
-  if (normalized === "WAITING_FOR_PARTS") {
-    return { status: "WAITING_FOR_PARTS", legacySource: null };
-  }
-  if (normalized === "IN_REPAIR") {
-    return { status: "IN_REPAIR", legacySource: null };
-  }
-  return { status: "OPEN", legacySource: null };
-}
-
-function maintenanceRowSortValue(row: MaintenanceRow | undefined) {
-  if (!row) {
-    return 0;
-  }
-  const parsed = new Date(row.requestDate || row.createdAt || row.date || "");
-  if (Number.isNaN(parsed.getTime())) {
-    return 0;
-  }
-  return parsed.getTime();
-}
-
-function formatMaintenanceStatus(value: string, includeLegacySource = false) {
-  const normalized = normalizeMaintenanceStatus(value);
-  const label =
-    normalized.status === "OPEN"
-      ? "Open"
-      : normalized.status === "IN_REPAIR"
-        ? "In repair"
-        : normalized.status === "WAITING_FOR_PARTS"
-          ? "Waiting for parts"
-          : "Completed";
-  if (!includeLegacySource || !normalized.legacySource) {
-    return label;
-  }
-  return `${label} (legacy: ${toLabelCase(normalized.legacySource)})`;
-}
-
-function formatMaintenanceTypeLabel(value: MaintenanceFormState["maintenanceType"] | string) {
-  const normalized = (value || "").trim().toUpperCase();
-  if (normalized === "ROUTINE_MAINTENANCE") return "Routine Maintenance";
-  if (normalized === "INSPECTION_CHECK") return "Inspection / Check";
-  if (normalized === "PREVENTIVE_SERVICE") return "Preventive Service";
-  if (normalized === "OTHER") return "Other";
-  return value || "-";
-}
-
-function toDate(value: string | null | undefined) {
-  if (!value) {
-    return "-";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toISOString().slice(0, 10);
-}
-
-function toDateTime(value: string | null | undefined) {
-  if (!value) {
-    return "-";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toISOString().replace("T", " ").slice(0, 16);
-}
-
-function toLabelCase(value: string) {
-  return value
-    .toLowerCase()
-    .split("_")
-    .map((entry) => entry.charAt(0).toUpperCase() + entry.slice(1))
-    .join(" ");
-}
-
-function MaintenanceStatusChip({
-  status,
-  legacySource
-}: {
-  status: OperationalMaintenanceStatus;
-  legacySource: string | null;
-}) {
-  const className =
-    status === "COMPLETED"
-      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-      : status === "WAITING_FOR_PARTS"
-        ? "border-amber-300 bg-amber-100 text-amber-800"
-        : status === "IN_REPAIR"
-          ? "border-indigo-300 bg-indigo-100 text-indigo-800"
-          : "border-slate-300 bg-slate-100 text-slate-800";
-
-  return (
-    <span
-      className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${className}`}
-      title={legacySource ? `Legacy source: ${toLabelCase(legacySource)}` : undefined}
-    >
-      {status === "OPEN"
-        ? "Open"
-        : status === "IN_REPAIR"
-          ? "In repair"
-          : status === "WAITING_FOR_PARTS"
-            ? "Waiting for parts"
-            : "Completed"}
-    </span>
   );
 }

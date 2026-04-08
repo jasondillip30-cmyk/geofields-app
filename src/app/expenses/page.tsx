@@ -40,6 +40,7 @@ function ExpensesPageContent() {
   const initialMaintenanceRequestId =
     searchParams.get("maintenanceRequestId")?.trim() || "";
   const filters: AnalyticsFilters = {
+    projectId: "all",
     clientId: "all",
     rigId: "all",
     from: "",

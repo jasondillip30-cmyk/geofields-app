@@ -933,7 +933,7 @@ function buildFallbackExtraction() {
       invoiceReference: "",
       paymentMethod: "",
       taxOffice: "",
-      currency: "TZS",
+      currency: "USD",
       itemCount: 0,
       subtotal: 0,
       tax: 0,

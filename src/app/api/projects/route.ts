@@ -3,6 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
+import {
+  parseProjectBillingRateItemsInput,
+  replaceProjectBillingRateItems
+} from "@/lib/project-billing-rate-card";
 import { prisma } from "@/lib/prisma";
 
 const PROJECT_SETUP_REPORT_TYPE = "PROJECT_SETUP_PROFILE";
@@ -36,6 +40,20 @@ const projectListInclude = Prisma.validator<Prisma.ProjectDefaultArgs>()({
       select: {
         amount: true
       }
+    },
+    billingRateItems: {
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        itemCode: true,
+        label: true,
+        unit: true,
+        unitRate: true,
+        drillingStageLabel: true,
+        depthBandStartM: true,
+        depthBandEndM: true,
+        sortOrder: true,
+        isActive: true
+      }
     }
   }
 });
@@ -48,18 +66,6 @@ interface ParsedProjectSetupProfile {
   contractReferenceName: string;
   teamMemberIds: string[];
   teamMemberNames: string[];
-}
-
-function parseProjectStatus(value: unknown): ProjectStatus {
-  if (typeof value !== "string") {
-    return ProjectStatus.PLANNED;
-  }
-
-  const upper = value.toUpperCase();
-  if (upper in ProjectStatus) {
-    return ProjectStatus[upper as keyof typeof ProjectStatus];
-  }
-  return ProjectStatus.PLANNED;
 }
 
 function parseProjectContractType(value: unknown): ProjectContractType {
@@ -154,18 +160,13 @@ export async function POST(request: NextRequest) {
   const startDate = typeof body?.startDate === "string" ? body.startDate : "";
   const budgetAmount = parsePositiveNumberOrNull(body?.budgetAmount);
   const setupProfile = parseProjectSetupProfileInput(body?.setupProfile);
+  const billingRateItemsResult = parseProjectBillingRateItemsInput(body?.billingRateItems);
   const contractType = parseProjectContractType(body?.contractType);
   const meterRate = parseNonNegativeNumber(body?.contractRatePerM);
   const dayRate = parseNonNegativeNumber(body?.contractDayRate);
   const lumpSumValue = parseNonNegativeNumber(body?.contractLumpSumValue);
   const estimatedMeters = parseNonNegativeNumber(body?.estimatedMeters ?? setupProfile.expectedMeters);
   const estimatedDays = parseNonNegativeNumber(body?.estimatedDays);
-  const commercialValidationError = validateCommercialTerms({
-    contractType,
-    meterRate,
-    dayRate,
-    lumpSumValue
-  });
 
   if (!name || !clientId || !location || !startDate) {
     return NextResponse.json(
@@ -173,8 +174,8 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (commercialValidationError) {
-    return NextResponse.json({ message: commercialValidationError }, { status: 400 });
+  if (billingRateItemsResult.error) {
+    return NextResponse.json({ message: billingRateItemsResult.error }, { status: 400 });
   }
 
   const parsedStartDate = new Date(startDate);
@@ -191,7 +192,7 @@ export async function POST(request: NextRequest) {
         photoUrl: typeof body?.photoUrl === "string" ? body.photoUrl.trim() : null,
         startDate: parsedStartDate,
         endDate: parsedEndDate,
-        status: parseProjectStatus(body?.status),
+        status: deriveProjectStatusFromDates(parsedStartDate, parsedEndDate),
         contractType,
         contractRatePerM: meterRate,
         contractDayRate: dayRate,
@@ -213,6 +214,7 @@ export async function POST(request: NextRequest) {
       budgetAmount,
       setupProfile
     });
+    await replaceProjectBillingRateItems(tx, inserted.id, billingRateItemsResult.items);
 
     await recordAuditLog({
       db: tx,
@@ -324,22 +326,26 @@ function parseNonNegativeNumber(value: unknown) {
   return parsed;
 }
 
-function validateCommercialTerms(options: {
-  contractType: ProjectContractType;
-  meterRate: number;
-  dayRate: number;
-  lumpSumValue: number;
-}) {
-  if (options.contractType === ProjectContractType.PER_METER && options.meterRate <= 0) {
-    return "Meter rate must be greater than zero for per-meter contracts.";
+function deriveProjectStatusFromDates(startDate: Date, endDate: Date | null): ProjectStatus {
+  if (Number.isNaN(startDate.getTime())) {
+    return ProjectStatus.PLANNED;
   }
-  if (options.contractType === ProjectContractType.DAY_RATE && options.dayRate <= 0) {
-    return "Day rate must be greater than zero for per-day contracts.";
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
+
+  if (start > today) {
+    return ProjectStatus.PLANNED;
   }
-  if (options.contractType === ProjectContractType.LUMP_SUM && options.lumpSumValue <= 0) {
-    return "Lump-sum value must be greater than zero for lump-sum contracts.";
+
+  if (endDate && !Number.isNaN(endDate.getTime())) {
+    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
+    if (end < today) {
+      return ProjectStatus.COMPLETED;
+    }
   }
-  return null;
+
+  return ProjectStatus.ACTIVE;
 }
 
 function parseProjectSetupProfileFromReport(payloadJson: string | null): ParsedProjectSetupProfile {
@@ -375,7 +381,8 @@ function mapProjectRecord(project: ProjectRecordWithSetup) {
   return {
     ...project,
     setupProfile,
-    budgetAmount: activeBudget?.amount || null
+    budgetAmount: activeBudget?.amount || null,
+    billingRateItems: project.billingRateItems
   };
 }
 

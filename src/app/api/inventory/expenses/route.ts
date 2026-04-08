@@ -18,10 +18,15 @@ export async function GET(request: NextRequest) {
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const recognizedOnly = parseBoolean(request.nextUrl.searchParams.get("recognizedOnly"));
+  const lockedProjectScope = Boolean(projectId);
+  const effectiveRecognizedOnly = lockedProjectScope ? true : recognizedOnly;
+  const scopedClientId = lockedProjectScope ? null : clientId;
+  const scopedRigId = lockedProjectScope ? null : rigId;
 
   const where = {
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
+    ...(scopedClientId ? { clientId: scopedClientId } : {}),
+    ...(scopedRigId ? { rigId: scopedRigId } : {}),
     ...(projectId ? { projectId } : {}),
     ...(fromDate || toDate
       ? {
@@ -48,6 +53,7 @@ export async function GET(request: NextRequest) {
           item: { select: { id: true, name: true, sku: true } },
           project: { select: { id: true, name: true } },
           rig: { select: { id: true, rigCode: true } },
+          drillReport: { select: { id: true, holeNumber: true, date: true } },
           maintenanceRequest: { select: { id: true, requestCode: true, status: true } }
         }
       }
@@ -57,8 +63,8 @@ export async function GET(request: NextRequest) {
   const recognizedResult = await filterRecognizedApprovedExpenses(rows);
   const recognizedIds = new Set(recognizedResult.expenses.map((entry) => entry.id));
   const classifiedContext = await buildRecognizedSpendContext({
-    clientId,
-    rigId,
+    clientId: scopedClientId,
+    rigId: scopedRigId,
     projectId,
     fromDate: fromDate || null,
     toDate: toDate || null
@@ -66,9 +72,13 @@ export async function GET(request: NextRequest) {
   const classificationByExpenseId = new Map(
     classifiedContext.classifiedRows.map((entry) => [entry.expenseId, entry])
   );
+  const scopedRows = effectiveRecognizedOnly
+    ? rows.filter((row) => recognizedIds.has(row.id))
+    : rows;
+  const scopedRecognizedCount = scopedRows.filter((row) => recognizedIds.has(row.id)).length;
 
   return NextResponse.json({
-    data: rows.map((row) => ({
+    data: scopedRows.map((row) => ({
       id: row.id,
       date: row.date,
       amount: row.amount,
@@ -106,15 +116,21 @@ export async function GET(request: NextRequest) {
         item: movement.item,
         project: movement.project,
         rig: movement.rig,
+        drillReport: movement.drillReport,
         maintenanceRequest: movement.maintenanceRequest
       }))
     })),
     meta: {
-      total: rows.length,
-      recognizedCount: recognizedIds.size,
-      pendingRecognitionCount: rows.filter(
+      total: scopedRows.length,
+      recognizedCount: scopedRecognizedCount,
+      pendingRecognitionCount: scopedRows.filter(
         (row) => row.approvalStatus === "APPROVED" && !recognizedIds.has(row.id)
-      ).length
+      ).length,
+      filters: {
+        projectId,
+        clientId: scopedClientId,
+        rigId: scopedRigId
+      }
     }
   });
 }
@@ -147,4 +163,12 @@ function startOfDayUtc(date: Date) {
 
 function endOfDayUtc(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
+}
+
+function parseBoolean(value: string | null) {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
 }

@@ -173,11 +173,11 @@ export function findItemCount(text: string) {
 
 export function findCurrency(text: string) {
   const upper = text.toUpperCase();
-  if (upper.includes("TZS") || upper.includes("T SH") || upper.includes("TSH")) return "TZS";
   if (upper.includes("USD")) return "USD";
+  if (upper.includes("TZS") || upper.includes("T SH") || upper.includes("TSH")) return "TZS";
   if (upper.includes("KES")) return "KES";
   if (upper.includes("EUR")) return "EUR";
-  return "TZS";
+  return "USD";
 }
 
 export function findLabeledAmount(text: string, labels: string[]) {

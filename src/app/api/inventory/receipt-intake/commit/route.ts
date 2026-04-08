@@ -822,7 +822,7 @@ export async function POST(request: NextRequest) {
       paymentMethod: paymentMethod || null,
       taxOffice: taxOffice || null,
       ocrTextPreview: ocrTextPreview || null,
-      currency: typeof body?.receipt?.currency === "string" ? body.receipt.currency.trim() || "TZS" : "TZS",
+      currency: typeof body?.receipt?.currency === "string" ? body.receipt.currency.trim() || "USD" : "USD",
       subtotal: roundCurrency(receiptSubtotal || 0),
       tax: roundCurrency(receiptTax || 0),
       total: roundCurrency(

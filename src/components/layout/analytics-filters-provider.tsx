@@ -15,6 +15,7 @@ import {
 import { usePathname, useSearchParams } from "next/navigation";
 
 export interface AnalyticsFilters {
+  projectId: string;
   clientId: string;
   rigId: string;
   from: string;
@@ -30,6 +31,7 @@ interface AnalyticsFiltersContextValue {
 const STORAGE_KEY = "gf:analytics-filters";
 
 const defaultFilters: AnalyticsFilters = {
+  projectId: "all",
   clientId: "all",
   rigId: "all",
   from: "",
@@ -55,6 +57,7 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
     try {
       const parsed = JSON.parse(raw) as Partial<AnalyticsFilters>;
       setFilters({
+        projectId: typeof parsed.projectId === "string" && parsed.projectId ? parsed.projectId : defaultFilters.projectId,
         clientId: typeof parsed.clientId === "string" && parsed.clientId ? parsed.clientId : defaultFilters.clientId,
         rigId: typeof parsed.rigId === "string" && parsed.rigId ? parsed.rigId : defaultFilters.rigId,
         from: typeof parsed.from === "string" ? parsed.from : defaultFilters.from,
@@ -66,24 +69,39 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
   }, []);
 
   const syncFiltersFromSearchParams = useCallback((searchParams: URLSearchParams) => {
+    const projectIdParam = searchParams.get("projectId");
     const clientIdParam = searchParams.get("clientId");
     const rigIdParam = searchParams.get("rigId");
     const fromParam = searchParams.get("from");
     const toParam = searchParams.get("to");
-    const hasUrlFilter = clientIdParam !== null || rigIdParam !== null || fromParam !== null || toParam !== null;
+    const hasUrlFilter =
+      projectIdParam !== null || clientIdParam !== null || rigIdParam !== null || fromParam !== null || toParam !== null;
 
     if (!hasUrlFilter) {
       return;
     }
 
-    const nextFilters: AnalyticsFilters = {
-      clientId: clientIdParam && clientIdParam !== "all" ? clientIdParam : "all",
-      rigId: rigIdParam && rigIdParam !== "all" ? rigIdParam : "all",
-      from: fromParam || "",
-      to: toParam || ""
-    };
+    const normalizedProjectId =
+      projectIdParam && projectIdParam !== "all" ? projectIdParam : "all";
+    const nextFilters: AnalyticsFilters =
+      normalizedProjectId !== "all"
+        ? {
+            projectId: normalizedProjectId,
+            clientId: "all",
+            rigId: "all",
+            from: fromParam || "",
+            to: toParam || ""
+          }
+        : {
+            projectId: "all",
+            clientId: clientIdParam && clientIdParam !== "all" ? clientIdParam : "all",
+            rigId: rigIdParam && rigIdParam !== "all" ? rigIdParam : "all",
+            from: fromParam || "",
+            to: toParam || ""
+          };
 
     setFilters((current) =>
+      current.projectId === nextFilters.projectId &&
       current.clientId === nextFilters.clientId &&
       current.rigId === nextFilters.rigId &&
       current.from === nextFilters.from &&
@@ -100,6 +118,21 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
 
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
   }, [filters]);
+
+  useEffect(() => {
+    if (filters.projectId === "all") {
+      return;
+    }
+    if (filters.clientId === "all" && filters.rigId === "all") {
+      return;
+    }
+    setFilters((current) =>
+      current.projectId !== "all" &&
+      (current.clientId !== "all" || current.rigId !== "all")
+        ? { ...current, clientId: "all", rigId: "all" }
+        : current
+    );
+  }, [filters.clientId, filters.projectId, filters.rigId]);
 
   const value = useMemo<AnalyticsFiltersContextValue>(
     () => ({

@@ -8,6 +8,7 @@ import { roleLabels } from "@/lib/auth/roles";
 import { canViewApprovalWorkspace } from "@/lib/auth/approval-policy";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
+import { cn } from "@/lib/utils";
 
 interface TopbarProps {
   sidebarHidden: boolean;
@@ -17,6 +18,12 @@ interface TopbarProps {
 interface PageMeta {
   title: string;
   subtitle: string;
+}
+
+interface ProjectScopeOption {
+  id: string;
+  name: string;
+  status: string;
 }
 
 const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> = [
@@ -66,14 +73,28 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/drilling-reports"),
     meta: {
       title: "Drilling Reports",
-      subtitle: "Operational reporting workspace for drilling output and daily progress."
+      subtitle: "Record daily drilling progress and review what happened on the project."
     }
   },
   {
-    test: (pathname) => pathname.startsWith("/revenue"),
+    test: (pathname) => pathname.startsWith("/spending/profit"),
     meta: {
-      title: "Revenue",
-      subtitle: "Live revenue analytics by client, project, and rig."
+      title: "Spending / Profit",
+      subtitle: "Project-first profit view with margin and trend for the locked project."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/spending/drilling-reports"),
+    meta: {
+      title: "Spending / Drilling Reports",
+      subtitle: "Project-first drilling report list and detail inside the Spending workspace."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/spending"),
+    meta: {
+      title: "Spending",
+      subtitle: "Project-first spending view with revenue, recognized expenses, and profit."
     }
   },
   {
@@ -88,20 +109,6 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     meta: {
       title: "Purchase Receipt Follow-up",
       subtitle: "Continue approved requisitions into guided receipt capture, review, and posting."
-    }
-  },
-  {
-    test: (pathname) => pathname.startsWith("/cost-tracking"),
-    meta: {
-      title: "Cost Tracking",
-      subtitle: "Manager cost workspace for recognized spend across rigs, projects, and maintenance."
-    }
-  },
-  {
-    test: (pathname) => pathname.startsWith("/profit"),
-    meta: {
-      title: "Profit",
-      subtitle: "Profitability, margin insights, and performance drivers."
     }
   },
   {
@@ -143,7 +150,7 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/inventory"),
     meta: {
       title: "Inventory",
-      subtitle: "Stock, movement, supplier, and data quality management."
+      subtitle: "Track what the project can use, what was used, and key stock flow."
     }
   },
   {
@@ -157,7 +164,14 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     test: (pathname) => pathname.startsWith("/maintenance"),
     meta: {
       title: "Maintenance",
-      subtitle: "Breakdown and repair workflow linked to rig status, downtime, and active projects."
+      subtitle: "Record maintenance activity and follow rig repair progress."
+    }
+  },
+  {
+    test: (pathname) => pathname.startsWith("/breakdowns"),
+    meta: {
+      title: "Breakdowns",
+      subtitle: "Report rig breakdowns and track repair follow-up for the project."
     }
   },
   {
@@ -194,12 +208,75 @@ function resolvePageMeta(pathname: string): PageMeta {
   };
 }
 
+function compactTopbarSubtitle(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const firstSentence = trimmed.split(".")[0]?.trim() || trimmed;
+  if (firstSentence.length <= 90) {
+    return firstSentence;
+  }
+  return `${firstSentence.slice(0, 87).trimEnd()}...`;
+}
+
+function resolveProjectStatusChip(status: string | null) {
+  const normalized = `${status || ""}`.trim().toUpperCase();
+  if (normalized === "ACTIVE") {
+    return {
+      label: "Active",
+      toneClass: "text-emerald-800",
+      borderClass: "border-emerald-200",
+      surfaceClass: "bg-emerald-50",
+      dotClass: "bg-emerald-500",
+      dotGlowClass: "bg-emerald-400/70"
+    };
+  }
+  if (normalized === "ON_HOLD") {
+    return {
+      label: "On hold",
+      toneClass: "text-red-800",
+      borderClass: "border-red-200",
+      surfaceClass: "bg-red-50",
+      dotClass: "bg-red-500",
+      dotGlowClass: "bg-red-400/70"
+    };
+  }
+  if (normalized === "COMPLETED") {
+    return {
+      label: "Completed",
+      toneClass: "text-amber-800",
+      borderClass: "border-amber-200",
+      surfaceClass: "bg-amber-50",
+      dotClass: "bg-amber-500",
+      dotGlowClass: "bg-amber-400/70"
+    };
+  }
+  if (normalized === "PLANNED") {
+    return {
+      label: "Planned",
+      toneClass: "text-slate-800",
+      borderClass: "border-slate-300",
+      surfaceClass: "bg-slate-100",
+      dotClass: "bg-slate-500",
+      dotGlowClass: "bg-slate-400/70"
+    };
+  }
+  return {
+    label: "Planned",
+    toneClass: "text-slate-800",
+    borderClass: "border-slate-300",
+    surfaceClass: "bg-slate-100",
+    dotClass: "bg-slate-500",
+    dotGlowClass: "bg-slate-400/70"
+  };
+}
+
 export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
   const pathname = usePathname();
   const { user, logout } = useRole();
   const { filters, setFilters, resetFilters } = useAnalyticsFilters();
-  const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
-  const [rigs, setRigs] = useState<Array<{ id: string; name: string }>>([]);
+  const [projects, setProjects] = useState<ProjectScopeOption[]>([]);
   const [optionsLoaded, setOptionsLoaded] = useState(false);
   const [approvalSummary, setApprovalSummary] = useState<{
     pendingApprovals: number;
@@ -214,31 +291,27 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
 
     async function loadFilterOptions() {
       try {
-        const [clientsRes, rigsRes] = await Promise.all([
-          fetch("/api/clients", { cache: "no-store", signal: controller.signal }),
-          fetch("/api/rigs", { cache: "no-store", signal: controller.signal })
-        ]);
-
-        const clientsPayload = clientsRes.ok ? await clientsRes.json() : { data: [] };
-        const rigsPayload = rigsRes.ok ? await rigsRes.json() : { data: [] };
+        const projectsRes = await fetch("/api/projects", { cache: "no-store", signal: controller.signal });
+        const projectsPayload = projectsRes.ok ? await projectsRes.json() : { data: [] };
 
         if (cancelled) {
           return;
         }
 
-        setClients((clientsPayload.data || []).map((entry: { id: string; name: string }) => ({ id: entry.id, name: entry.name })));
-        setRigs(
-          (rigsPayload.data || []).map((entry: { id: string; rigCode?: string; name?: string }) => ({
-            id: entry.id,
-            name: entry.name || entry.rigCode || "Unnamed Rig"
-          }))
+        setProjects(
+          (projectsPayload.data || []).map(
+            (entry: { id: string; name: string; status?: string }) => ({
+              id: entry.id,
+              name: entry.name,
+              status: entry.status || "ACTIVE"
+            })
+          )
         );
       } catch {
         if (cancelled) {
           return;
         }
-        setClients([]);
-        setRigs([]);
+        setProjects([]);
       } finally {
         window.clearTimeout(timeoutId);
         if (!cancelled) {
@@ -260,27 +333,14 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     if (!optionsLoaded) {
       return;
     }
-    if (filters.clientId === "all") {
+    if (filters.projectId === "all") {
       return;
     }
-    if (clients.some((client) => client.id === filters.clientId)) {
+    if (projects.some((project) => project.id === filters.projectId)) {
       return;
     }
-    setFilters((current) => ({ ...current, clientId: "all" }));
-  }, [clients, filters.clientId, optionsLoaded, setFilters]);
-
-  useEffect(() => {
-    if (!optionsLoaded) {
-      return;
-    }
-    if (filters.rigId === "all") {
-      return;
-    }
-    if (rigs.some((rig) => rig.id === filters.rigId)) {
-      return;
-    }
-    setFilters((current) => ({ ...current, rigId: "all" }));
-  }, [filters.rigId, optionsLoaded, rigs, setFilters]);
+    setFilters((current) => ({ ...current, projectId: "all" }));
+  }, [filters.projectId, optionsLoaded, projects, setFilters]);
 
   useEffect(() => {
     if (!user || !canViewApprovalWorkspace(user.role)) {
@@ -338,27 +398,47 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
   }, [user]);
 
   const hasActiveFilters = useMemo(
-    () => filters.clientId !== "all" || filters.rigId !== "all" || Boolean(filters.from) || Boolean(filters.to),
-    [filters.clientId, filters.from, filters.rigId, filters.to]
+    () =>
+      filters.projectId !== "all" ||
+      Boolean(filters.from) ||
+      Boolean(filters.to),
+    [filters.from, filters.projectId, filters.to]
+  );
+  const selectedProjectLabel = useMemo(() => {
+    if (filters.projectId === "all") {
+      return "All projects";
+    }
+    return projects.find((project) => project.id === filters.projectId)?.name || "Selected project";
+  }, [filters.projectId, projects]);
+  const selectedProjectStatus = useMemo(() => {
+    if (filters.projectId === "all") {
+      return null;
+    }
+    return projects.find((project) => project.id === filters.projectId)?.status || null;
+  }, [filters.projectId, projects]);
+  const selectedProjectStatusChip = useMemo(
+    () => (selectedProjectStatus ? resolveProjectStatusChip(selectedProjectStatus) : null),
+    [selectedProjectStatus]
   );
 
   const pageMeta = useMemo(() => resolvePageMeta(pathname), [pathname]);
+  const compactSubtitle = useMemo(() => compactTopbarSubtitle(pageMeta.subtitle), [pageMeta.subtitle]);
 
   return (
-    <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur md:px-6">
-      <div className="space-y-3">
+    <header className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-3 shadow-sm backdrop-blur md:px-6">
+      <div className="space-y-3.5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-700">GeoFields Operations Dashboard</p>
+          <div className="min-w-0 space-y-1">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-700">Project-first workspace</p>
             <h1 className="text-xl font-semibold tracking-tight text-ink-900">{pageMeta.title}</h1>
-            <p className="text-sm text-slate-600">{pageMeta.subtitle}</p>
+            <p className="text-sm text-slate-600">{compactSubtitle}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onToggleSidebar}
-              className="hidden items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50 lg:inline-flex"
+              className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50 lg:inline-flex"
               aria-label={sidebarHidden ? "Show navigation sidebar" : "Hide navigation sidebar"}
             >
               {sidebarHidden ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
@@ -366,15 +446,15 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
             </button>
 
             {user && (
-              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700">
-                <div className="text-right">
-                  <p className="font-semibold text-ink-900">{user.name}</p>
+              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700">
+                <div className="min-w-0 text-right">
+                  <p className="truncate font-semibold text-ink-900">{user.name}</p>
                   <p className="text-slate-500">{roleLabels[user.role]}</p>
                 </div>
                 <button
                   type="button"
                   onClick={() => void logout()}
-                  className="rounded-md border border-slate-200 px-2 py-1 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-ink-700 hover:bg-slate-50"
                 >
                   Logout
                 </button>
@@ -383,49 +463,41 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
           </div>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
+        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-3">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
               <Filter size={14} />
-              <span>Client</span>
+              <span className="uppercase tracking-wide text-slate-500">Project</span>
               <select
-                value={filters.clientId}
-                onChange={(event) => setFilters((current) => ({ ...current, clientId: event.target.value }))}
-                className="min-w-[150px] rounded-md border border-slate-200 px-2 py-1 text-xs"
+                value={filters.projectId}
+                onChange={(event) => {
+                  const nextProjectId = event.target.value;
+                  setFilters((current) => ({
+                    ...current,
+                    projectId: nextProjectId,
+                    clientId: nextProjectId === "all" ? current.clientId : "all",
+                    rigId: nextProjectId === "all" ? current.rigId : "all"
+                  }));
+                }}
+                className="min-w-[170px] rounded-lg border border-slate-200 px-2 py-1 text-xs"
               >
-                <option value="all">All clients</option>
-                {clients.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
+                <option value="all">All projects</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
                   </option>
                 ))}
               </select>
             </label>
 
-            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
-              <span>Rig</span>
-              <select
-                value={filters.rigId}
-                onChange={(event) => setFilters((current) => ({ ...current, rigId: event.target.value }))}
-                className="min-w-[130px] rounded-md border border-slate-200 px-2 py-1 text-xs"
-              >
-                <option value="all">All rigs</option>
-                {rigs.map((rig) => (
-                  <option key={rig.id} value={rig.id}>
-                    {rig.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
+            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
               <CalendarDays size={14} />
-              <span>Date</span>
+              <span className="uppercase tracking-wide text-slate-500">Date</span>
               <input
                 type="date"
                 value={filters.from}
                 onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
-                className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
                 aria-label="From date"
               />
               <span className="text-slate-500">to</span>
@@ -433,7 +505,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
                 type="date"
                 value={filters.to}
                 onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
-                className="rounded-md border border-slate-200 px-2 py-1 text-xs"
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
                 aria-label="To date"
               />
             </div>
@@ -442,22 +514,59 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               <button
                 type="button"
                 onClick={resetFilters}
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-100"
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-100"
               >
-                Clear filters
+                Reset scope
               </button>
+            )}
+
+            {filters.projectId !== "all" && selectedProjectStatusChip ? (
+              <span
+                className={cn(
+                  "ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold",
+                  selectedProjectStatusChip.borderClass,
+                  selectedProjectStatusChip.surfaceClass,
+                  selectedProjectStatusChip.toneClass
+                )}
+              >
+                <span className={cn("relative inline-flex h-2.5 w-2.5 rounded-full", selectedProjectStatusChip.dotClass)}>
+                  <span
+                    className={cn(
+                      "absolute inset-0 rounded-full blur-[4px] opacity-90",
+                      selectedProjectStatusChip.dotGlowClass
+                    )}
+                  />
+                </span>
+                {selectedProjectStatusChip.label}
+              </span>
+            ) : null}
+          </div>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
+            {filters.projectId !== "all" ? (
+              <>
+                <span className="rounded-full border border-brand-300 bg-brand-100 px-2.5 py-0.5 font-semibold text-brand-900">
+                  Project locked: {selectedProjectLabel}
+                </span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
+                  All actions stay in this project.
+                </span>
+              </>
+            ) : (
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
+                All projects mode
+              </span>
             )}
           </div>
 
-          {approvalSummary && (
+          {approvalSummary && filters.projectId === "all" && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full border border-amber-200 bg-amber-100 px-2 py-0.5 font-semibold text-amber-900">
+              <span className="rounded-full border border-amber-200 bg-amber-100 px-2.5 py-0.5 font-semibold text-amber-900">
                 Pending approvals: {approvalSummary.pendingApprovals}
               </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-700">
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
                 Rejected this week: {approvalSummary.rejectedThisWeek}
               </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-slate-700">
+              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
                 Approved today: {approvalSummary.approvedToday}
               </span>
             </div>

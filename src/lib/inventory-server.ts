@@ -138,18 +138,22 @@ export function resolveExpenseApprovalStatus({
 export function buildInventoryScopeFilters({
   fromDate,
   toDate,
+  projectId,
   clientId,
   rigId
 }: {
   fromDate: Date | null;
   toDate: Date | null;
+  projectId: string | null;
   clientId: string | null;
   rigId: string | null;
 }) {
   const date = buildDateFilter(fromDate, toDate);
+  const lockedProjectScope = Boolean(projectId);
   const where: Prisma.InventoryMovementWhereInput = {
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
+    ...(projectId ? { projectId } : {}),
+    ...(!lockedProjectScope && clientId ? { clientId } : {}),
+    ...(!lockedProjectScope && rigId ? { rigId } : {}),
     ...(date ? { date } : {})
   };
   return where;

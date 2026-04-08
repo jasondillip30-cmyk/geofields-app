@@ -4,6 +4,11 @@
 
 :root {
   color-scheme: light;
+  --gf-surface: #ffffff;
+  --gf-surface-soft: #f8fbff;
+  --gf-border: #dbe4f0;
+  --gf-text: #1d222b;
+  --gf-text-muted: #536174;
 }
 
 * {
@@ -17,10 +22,11 @@ body {
 }
 
 body {
-  color: #1d222b;
-  background: radial-gradient(circle at top, #f7f9fd 0%, #f1f5fb 44%, #eef3f9 100%);
+  color: var(--gf-text);
+  background: radial-gradient(circle at top, #f8fbff 0%, #f2f7ff 48%, #edf3fb 100%);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  line-height: 1.42;
 }
 
 a {
@@ -39,7 +45,7 @@ a {
   input,
   select,
   textarea {
-    @apply border-slate-300 bg-white text-ink-900 placeholder:text-slate-400 shadow-sm transition-shadow;
+    @apply rounded-xl border-slate-300 bg-white text-ink-900 placeholder:text-slate-400 shadow-sm transition-shadow;
   }
 
   input:focus,
@@ -54,7 +60,7 @@ a {
   }
 
   button {
-    @apply rounded-lg transition-colors;
+    @apply rounded-xl transition-colors;
   }
 }
 
@@ -64,7 +70,7 @@ a {
   }
 
   .gf-page-header {
-    @apply rounded-2xl border border-slate-200/90 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_8px_20px_rgba(15,23,42,0.05)] md:px-5 md:py-4;
+    @apply rounded-2xl border border-slate-200/90 bg-white/95 px-4 py-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.03),0_12px_28px_rgba(15,23,42,0.06)] md:px-5 md:py-4;
   }
 
   .gf-section {
@@ -103,6 +109,30 @@ a {
     @apply rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700;
   }
 
+  .gf-guided-strip {
+    @apply rounded-xl border border-brand-200 bg-brand-50/80 px-3.5 py-3;
+  }
+
+  .gf-guided-strip-title {
+    @apply text-[11px] font-semibold uppercase tracking-wide text-brand-800;
+  }
+
+  .gf-guided-step-list {
+    @apply mt-2 grid gap-2 md:grid-cols-3;
+  }
+
+  .gf-guided-step {
+    @apply rounded-lg border border-brand-200/80 bg-white/85 px-2.5 py-2 text-xs text-brand-900;
+  }
+
+  .gf-context-chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700;
+  }
+
+  .gf-muted-note {
+    @apply text-xs text-slate-600;
+  }
+
   .gf-empty-state {
     @apply rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-600;
   }
@@ -120,15 +150,15 @@ a {
   }
 
   .gf-btn-primary {
-    @apply rounded-lg bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_3px_10px_rgba(37,99,235,0.32)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:bg-brand-800 hover:shadow-[0_10px_20px_rgba(37,99,235,0.3)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
+    @apply rounded-xl bg-brand-700 px-3.5 py-1.5 text-xs font-semibold text-white shadow-[0_3px_10px_rgba(37,99,235,0.28)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:bg-brand-800 hover:shadow-[0_8px_16px_rgba(37,99,235,0.24)] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
   }
 
   .gf-btn-secondary {
-    @apply rounded-lg border border-slate-200/90 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
+    @apply rounded-xl border border-slate-200/90 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-all duration-200 ease-out hover:-translate-y-[1px] hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0;
   }
 
   .gf-btn-subtle {
-    @apply rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition-all duration-200 ease-out hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 transition-all duration-200 ease-out hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .gf-section-shell {

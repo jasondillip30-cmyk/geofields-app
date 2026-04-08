@@ -190,10 +190,20 @@ export async function readApiError(response: Response, fallback: string) {
   return fallback;
 }
 
-export function buildFiltersQuery(filters: { clientId: string; rigId: string; from: string; to: string }) {
+export function buildFiltersQuery(filters: {
+  projectId: string;
+  clientId: string;
+  rigId: string;
+  from: string;
+  to: string;
+}) {
   const params = new URLSearchParams();
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
+  if (filters.projectId !== "all") {
+    params.set("projectId", filters.projectId);
+    return params;
+  }
   if (filters.clientId !== "all") params.set("clientId", filters.clientId);
   if (filters.rigId !== "all") params.set("rigId", filters.rigId);
   return params;

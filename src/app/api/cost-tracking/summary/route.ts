@@ -65,14 +65,18 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
-  const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
-  const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
+  const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const clientId = projectId ? null : rawClientId;
+  const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
 
   const spendContext = await buildRecognizedSpendContext({
     clientId,
     rigId,
+    projectId,
     fromDate,
     toDate
   });
@@ -347,6 +351,7 @@ export async function GET(request: NextRequest) {
 
   const response: CostTrackingSummaryPayload = {
     filters: {
+      projectId: projectId || "all",
       clientId: clientId || "all",
       rigId: rigId || "all",
       from: request.nextUrl.searchParams.get("from"),

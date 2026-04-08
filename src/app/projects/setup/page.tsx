@@ -53,10 +53,44 @@ interface ProjectRecord {
   photoUrl: string | null;
   budgetAmount?: number | null;
   setupProfile?: Partial<ProjectSetupProfile> | null;
+  billingRateItems?: ProjectBillingRateItemRecord[];
+}
+
+interface ProjectBillingRateItemRecord {
+  itemCode: string;
+  label: string;
+  unit: string;
+  unitRate: number;
+  drillingStageLabel?: string | null;
+  depthBandStartM?: number | null;
+  depthBandEndM?: number | null;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+interface ProjectBillingRateItemFormLine {
+  itemCode: string;
+  label: string;
+  unit: string;
+  unitRate: number;
+  drillingStageLabel?: string | null;
+  depthBandStartM?: number | null;
+  depthBandEndM?: number | null;
+  sortOrder: number;
+  isActive: boolean;
+}
+
+interface BillableItemTemplate {
+  itemCode: string;
+  label: string;
+  unit: string;
+  sortOrder: number;
+  isMeterBased?: boolean;
+  allowMultiple?: boolean;
 }
 
 type ProjectSetupStep = 1 | 2 | 3 | 4 | 5 | 6;
-type ProjectStatusOption = "PLANNED" | "ACTIVE" | "ON_HOLD" | "COMPLETED";
+type ProjectStatusOption = "PLANNED" | "ACTIVE" | "COMPLETED";
 type ProjectContractTypeOption = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 type LocationLinkMode = "EXISTING" | "NEW";
 
@@ -69,8 +103,6 @@ interface ProjectFormState {
   locationNew: string;
   startDate: string;
   endDate: string;
-  status: ProjectStatusOption;
-  statusManuallySet: boolean;
   contractType: ProjectContractTypeOption;
   contractRatePerM: string;
   contractDayRate: string;
@@ -89,11 +121,31 @@ interface ProjectFormState {
 
 const STEP_LABELS: Array<{ step: ProjectSetupStep; title: string; subtitle: string }> = [
   { step: 1, title: "Client and Location", subtitle: "Define who and where this project belongs." },
-  { step: 2, title: "Project Timing", subtitle: "Set schedule and project status." },
-  { step: 3, title: "Commercial Setup", subtitle: "Capture contract model, rates, and commercial scope." },
+  { step: 2, title: "Project Timing", subtitle: "Set project dates. Status updates automatically." },
+  { step: 3, title: "Commercial Setup", subtitle: "Define how this project is billed." },
   { step: 4, title: "Rig Assignment", subtitle: "Assign primary rig and optional backup support." },
   { step: 5, title: "Team Assignment", subtitle: "Attach workers/employees to this project setup." },
   { step: 6, title: "Review and Create", subtitle: "Confirm setup details before saving." }
+];
+
+const BILLABLE_ITEM_TEMPLATES: BillableItemTemplate[] = [
+  {
+    itemCode: "METER_DRILLED",
+    label: "Drilled meters",
+    unit: "meter",
+    sortOrder: 10,
+    isMeterBased: true,
+    allowMultiple: true
+  },
+  { itemCode: "WORK_TIME", label: "Work time", unit: "hour", sortOrder: 20 },
+  { itemCode: "WATER_PUMP_HOURS", label: "Water pump hours", unit: "hour", sortOrder: 30 },
+  { itemCode: "RIG_MOVE", label: "Rig move", unit: "move", sortOrder: 40 },
+  { itemCode: "STANDBY", label: "Standby", unit: "hour", sortOrder: 50 },
+  { itemCode: "SURVEY", label: "Survey", unit: "each", sortOrder: 60 },
+  { itemCode: "REFLEX", label: "Reflex", unit: "run", sortOrder: 70 },
+  { itemCode: "SURVEY_SHOT", label: "Survey shot", unit: "shot", sortOrder: 80 },
+  { itemCode: "SURVEY_ORI", label: "Survey ori", unit: "ori", sortOrder: 90 },
+  { itemCode: "ONE_OFF_CHARGE", label: "One-off project charge", unit: "each", sortOrder: 100 }
 ];
 
 function createEmptyProjectForm(): ProjectFormState {
@@ -106,8 +158,6 @@ function createEmptyProjectForm(): ProjectFormState {
     locationNew: "",
     startDate: "",
     endDate: "",
-    status: "PLANNED",
-    statusManuallySet: false,
     contractType: "PER_METER",
     contractRatePerM: "0",
     contractDayRate: "0",
@@ -148,6 +198,15 @@ function ProjectSetupPageContent() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<string | null>(null);
   const [hydratedProjectId, setHydratedProjectId] = useState("");
+  const [billingRateItems, setBillingRateItems] = useState<ProjectBillingRateItemFormLine[]>(() =>
+    defaultBillingRateItems("PER_METER", 0)
+  );
+  const [billingLineCode, setBillingLineCode] = useState(BILLABLE_ITEM_TEMPLATES[0].itemCode);
+  const [billingLineRate, setBillingLineRate] = useState("");
+  const [billingLineStageLabel, setBillingLineStageLabel] = useState("");
+  const [billingLineDepthEnd, setBillingLineDepthEnd] = useState("");
+  const [billingLineError, setBillingLineError] = useState<string | null>(null);
+  const [editingBillingCode, setEditingBillingCode] = useState<string | null>(null);
 
   const locationOptions = useMemo(
     () =>
@@ -218,12 +277,66 @@ function ProjectSetupPageContent() {
   }, [loadSetupData]);
 
   useEffect(() => {
-    if (form.statusManuallySet) {
+    if (billingLineRate.trim().length > 0) {
       return;
     }
-    const suggestedStatus = deriveStatusFromDates(form.startDate, form.endDate);
-    setForm((current) => ({ ...current, status: suggestedStatus }));
-  }, [form.endDate, form.startDate, form.statusManuallySet]);
+    const selectedTemplate = BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === billingLineCode);
+    if (!selectedTemplate?.isMeterBased) {
+      return;
+    }
+    const meterRate = Number(form.contractRatePerM);
+    if (!Number.isFinite(meterRate) || meterRate <= 0) {
+      return;
+    }
+    setBillingLineRate(String(meterRate));
+  }, [billingLineCode, billingLineRate, form.contractRatePerM]);
+
+  const activeBillingItemCodeSet = useMemo(
+    () =>
+      new Set(
+        billingRateItems.filter((entry) => entry.isActive).map((entry) => entry.itemCode)
+      ),
+    [billingRateItems]
+  );
+
+  const addModeBillingTemplates = useMemo(
+    () =>
+      BILLABLE_ITEM_TEMPLATES.filter(
+        (entry) => Boolean(entry.allowMultiple) || !activeBillingItemCodeSet.has(entry.itemCode)
+      ),
+    [activeBillingItemCodeSet]
+  );
+
+  useEffect(() => {
+    const selectedTemplate = BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === billingLineCode);
+    if (selectedTemplate?.isMeterBased) {
+      return;
+    }
+    if (billingLineStageLabel || billingLineDepthEnd) {
+      setBillingLineStageLabel("");
+      setBillingLineDepthEnd("");
+    }
+  }, [billingLineCode, billingLineDepthEnd, billingLineStageLabel]);
+
+  useEffect(() => {
+    if (editingBillingCode) {
+      return;
+    }
+    if (addModeBillingTemplates.length === 0) {
+      if (billingLineCode) {
+        setBillingLineCode("");
+      }
+      return;
+    }
+    const hasSelectedTemplate = addModeBillingTemplates.some((entry) => entry.itemCode === billingLineCode);
+    if (!hasSelectedTemplate) {
+      setBillingLineCode(addModeBillingTemplates[0].itemCode);
+      setBillingLineRate("");
+      setBillingLineStageLabel("");
+      setBillingLineDepthEnd("");
+      setBillingLineError(null);
+    }
+  }, [addModeBillingTemplates, billingLineCode, editingBillingCode]);
 
   const stepIssues = useMemo(
     () =>
@@ -245,7 +358,7 @@ function ProjectSetupPageContent() {
     return {
       clientName: resolvedClientName,
       location: resolvedLocation || "-",
-      status: form.status,
+      status: deriveStatusFromDates(form.startDate, form.endDate),
       primaryRig,
       secondaryRig,
       team: selectedTeam
@@ -259,13 +372,21 @@ function ProjectSetupPageContent() {
     form.locationNew,
     form.primaryRigId,
     form.secondaryRigId,
-    form.status,
+    form.startDate,
+    form.endDate,
     form.teamMemberIds,
     rigs
   ]);
 
   function resetFormState() {
     setForm(createEmptyProjectForm());
+    setBillingRateItems(defaultBillingRateItems("PER_METER", 0));
+    setBillingLineCode(BILLABLE_ITEM_TEMPLATES[0].itemCode);
+    setBillingLineRate("");
+    setBillingLineStageLabel("");
+    setBillingLineDepthEnd("");
+    setBillingLineError(null);
+    setEditingBillingCode(null);
     setCurrentStep(1);
     setFormError(null);
   }
@@ -284,8 +405,6 @@ function ProjectSetupPageContent() {
         locationNew: locationExists ? "" : project.location,
         startDate: project.startDate.slice(0, 10),
         endDate: project.endDate ? project.endDate.slice(0, 10) : "",
-        status: normalizeProjectStatus(project.status),
-        statusManuallySet: true,
         contractType: normalizeContractType(project.contractType),
         contractRatePerM: String(project.contractRatePerM),
         contractDayRate: String(project.contractDayRate || 0),
@@ -312,6 +431,19 @@ function ProjectSetupPageContent() {
         description: project.description || "",
         photoUrl: project.photoUrl || ""
       });
+      setBillingRateItems(
+        normalizeBillingRateItems(
+          project.billingRateItems || [],
+          normalizeContractType(project.contractType),
+          project.contractRatePerM
+        )
+      );
+      setBillingLineCode(BILLABLE_ITEM_TEMPLATES[0].itemCode);
+      setBillingLineRate("");
+      setBillingLineStageLabel("");
+      setBillingLineDepthEnd("");
+      setBillingLineError(null);
+      setEditingBillingCode(null);
 
       setCurrentStep(1);
       setFormError(null);
@@ -354,10 +486,141 @@ function ProjectSetupPageContent() {
     setCurrentStep((current) => (current >= 6 ? 6 : ((current + 1) as ProjectSetupStep)));
   }
 
-  async function saveProject(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function resetBillingLineForm(nextCode?: string) {
+    const fallbackCode = addModeBillingTemplates[0]?.itemCode || "";
+    setBillingLineCode(nextCode ?? fallbackCode);
+    setBillingLineRate("");
+    setBillingLineStageLabel("");
+    setBillingLineDepthEnd("");
+    setBillingLineError(null);
+    setEditingBillingCode(null);
+  }
+
+  function startEditBillingLine(line: ProjectBillingRateItemFormLine) {
+    const template =
+      findTemplateByItemCode(line.itemCode) ||
+      BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === line.itemCode) ||
+      BILLABLE_ITEM_TEMPLATES[0];
+    setEditingBillingCode(line.itemCode);
+    setBillingLineCode(template?.itemCode || line.itemCode);
+    setBillingLineRate(String(line.unitRate));
+    setBillingLineStageLabel(line.drillingStageLabel || "");
+    setBillingLineDepthEnd(
+      typeof line.depthBandEndM === "number" && Number.isFinite(line.depthBandEndM)
+        ? String(line.depthBandEndM)
+        : ""
+    );
+    setBillingLineError(null);
+  }
+
+  function archiveBillingLine(itemCode: string) {
+    setBillingRateItems((current) =>
+      current.map((entry) =>
+        entry.itemCode === itemCode
+          ? {
+              ...entry,
+              isActive: false
+            }
+          : entry
+      )
+    );
+    if (editingBillingCode === itemCode) {
+      resetBillingLineForm();
+    }
+  }
+
+  function saveBillingLine() {
+    setBillingLineError(null);
+    if (!editingBillingCode && addModeBillingTemplates.length === 0) {
+      setBillingLineError("All billable items are already added. Use Edit to update a line.");
+      return;
+    }
+    if (
+      !editingBillingCode &&
+      !addModeBillingTemplates.some((entry) => entry.itemCode === billingLineCode)
+    ) {
+      setBillingLineError("Select a billable item.");
+      return;
+    }
+    const template = BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === billingLineCode);
+    if (!template) {
+      setBillingLineError("Select a billable item.");
+      return;
+    }
+
+    const rate = Number(billingLineRate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      setBillingLineError("Rate must be greater than zero.");
+      return;
+    }
+    const isMeterBased = Boolean(template.isMeterBased);
+    const stageLabel = isMeterBased ? billingLineStageLabel.trim() : "";
+    const hasDepthEnd = billingLineDepthEnd.trim().length > 0;
+    if (isMeterBased && !hasDepthEnd) {
+      setBillingLineError("Enter the next end depth.");
+      return;
+    }
+    const depthStart =
+      isMeterBased && Number.isFinite(derivedBillingLineDepthStartM)
+        ? (derivedBillingLineDepthStartM as number)
+        : null;
+    const depthEnd = hasDepthEnd ? Number(billingLineDepthEnd) : null;
+    if (isMeterBased && hasDepthEnd && (!Number.isFinite(depthEnd) || (depthEnd as number) < 0)) {
+      setBillingLineError("Depth values must be zero or greater.");
+      return;
+    }
+    if (isMeterBased && depthStart !== null && depthEnd !== null && depthEnd <= depthStart) {
+      setBillingLineError("End depth must be higher than the current start depth.");
+      return;
+    }
+
+    const nextLine: ProjectBillingRateItemFormLine = {
+      itemCode: buildBillingItemCode({
+        template,
+        stageLabel,
+        depthBandStartM: depthStart,
+        depthBandEndM: depthEnd
+      }),
+      label: template.label,
+      unit: template.unit,
+      unitRate: rate,
+      drillingStageLabel: isMeterBased && stageLabel ? stageLabel : null,
+      depthBandStartM: isMeterBased ? depthStart : null,
+      depthBandEndM: isMeterBased ? depthEnd : null,
+      sortOrder: template.sortOrder,
+      isActive: true
+    };
+
+    const existingIndex = editingBillingCode
+      ? billingRateItems.findIndex((entry) => entry.itemCode === editingBillingCode)
+      : billingRateItems.findIndex((entry) => entry.itemCode === nextLine.itemCode);
+    const duplicateIndex = billingRateItems.findIndex((entry) => entry.itemCode === nextLine.itemCode);
+    if (duplicateIndex >= 0 && duplicateIndex !== existingIndex) {
+      setBillingLineError("That billable item line already exists.");
+      return;
+    }
+
+    setBillingRateItems((current) => {
+      if (existingIndex >= 0) {
+        const next = [...current];
+        next[existingIndex] = nextLine;
+        return sortBillingRateItems(next);
+      }
+
+      return sortBillingRateItems([...current, nextLine]);
+    });
+
+    resetBillingLineForm();
+  }
+
+  async function saveProject() {
     setFormError(null);
     setFormNotice(null);
+
+    if (currentStep !== 6) {
+      setFormError("Use Next Step and confirm on the final step before saving.");
+      return;
+    }
 
     const finalStepIssues = validateProjectSetupStep({ form, step: 6 });
     if (finalStepIssues.length > 0) {
@@ -369,9 +632,7 @@ function ProjectSetupPageContent() {
     setSaving(true);
     try {
       const location = form.locationMode === "NEW" ? form.locationNew.trim() : form.locationExisting.trim();
-      const statusToSave = form.statusManuallySet
-        ? form.status
-        : deriveStatusFromDates(form.startDate, form.endDate);
+      const statusToSave = deriveStatusFromDates(form.startDate, form.endDate);
       const selectedTeam = employees.filter((employee) => form.teamMemberIds.includes(employee.id));
 
       const payload = {
@@ -398,7 +659,18 @@ function ProjectSetupPageContent() {
           contractReferenceName: form.contractReferenceName.trim(),
           teamMemberIds: form.teamMemberIds,
           teamMemberNames: selectedTeam.map((employee) => employee.fullName)
-        }
+        },
+        billingRateItems: billingRateItems.map((line) => ({
+          itemCode: line.itemCode,
+          label: line.label,
+          unit: line.unit,
+          unitRate: line.unitRate,
+          drillingStageLabel: line.drillingStageLabel || null,
+          depthBandStartM: line.depthBandStartM ?? null,
+          depthBandEndM: line.depthBandEndM ?? null,
+          sortOrder: line.sortOrder,
+          isActive: line.isActive
+        }))
       };
 
       const isUpdate = Boolean(form.id);
@@ -428,9 +700,46 @@ function ProjectSetupPageContent() {
     }
   }
 
-  const recommendedStatus = deriveStatusFromDates(form.startDate, form.endDate);
+  const derivedProjectStatus = deriveStatusFromDates(form.startDate, form.endDate);
   const activeStepMeta = STEP_LABELS.find((entry) => entry.step === currentStep) || STEP_LABELS[0];
   const secondaryRigOptions = rigs.filter((rig) => rig.id !== form.primaryRigId);
+  const activeBillingRateItems = sortBillingRateItems(billingRateItems.filter((entry) => entry.isActive));
+  const archivedBillingItemCount = billingRateItems.filter((entry) => !entry.isActive).length;
+  const billingTemplateOptions = editingBillingCode ? BILLABLE_ITEM_TEMPLATES : addModeBillingTemplates;
+  const addModeBlocked = !editingBillingCode && addModeBillingTemplates.length === 0;
+  const selectedBillingTemplate =
+    billingTemplateOptions.find((entry) => entry.itemCode === billingLineCode) ||
+    billingTemplateOptions[0] ||
+    null;
+  const selectedBillingTemplateIsMeter = Boolean(selectedBillingTemplate?.isMeterBased);
+  const activeStagedMeterLines = activeBillingRateItems.filter(
+    (line) =>
+      line.unit.trim().toLowerCase() === "meter" &&
+      Number.isFinite(line.depthBandStartM) &&
+      Number.isFinite(line.depthBandEndM)
+  );
+  const editingLine = editingBillingCode
+    ? activeBillingRateItems.find((line) => line.itemCode === editingBillingCode) || null
+    : null;
+  const derivedBillingLineDepthStartM = selectedBillingTemplateIsMeter
+    ? deriveGuidedMeterStartDepth({
+        stagedLines: activeStagedMeterLines,
+        editingCode: editingBillingCode,
+        editingLine
+      })
+    : null;
+  const derivedBillingLineDepthStartText =
+    selectedBillingTemplateIsMeter && Number.isFinite(derivedBillingLineDepthStartM)
+      ? String(derivedBillingLineDepthStartM)
+      : "";
+  const billingLineItemCodePreview = selectedBillingTemplate
+    ? buildBillingItemCode({
+        template: selectedBillingTemplate,
+        stageLabel: billingLineStageLabel.trim(),
+        depthBandStartM: selectedBillingTemplateIsMeter ? derivedBillingLineDepthStartM : null,
+        depthBandEndM: billingLineDepthEnd.trim().length > 0 ? Number(billingLineDepthEnd) : null
+      })
+    : "-";
 
   return (
     <AccessGate permission="projects:manage">
@@ -493,7 +802,12 @@ function ProjectSetupPageContent() {
                 </p>
               ) : null}
 
-              <form onSubmit={saveProject} className="space-y-4">
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                }}
+                className="space-y-4"
+              >
                 {currentStep === 1 ? (
                   <div className="grid gap-3 md:grid-cols-2">
                     <Input
@@ -562,135 +876,242 @@ function ProjectSetupPageContent() {
                       value={form.endDate}
                       onChange={(value) => setForm((current) => ({ ...current, endDate: value }))}
                     />
-                    <Select
-                      label="Project Status"
-                      value={form.status}
-                      onChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          status: normalizeProjectStatus(value),
-                          statusManuallySet: true
-                        }))
-                      }
-                      options={[
-                        { value: "PLANNED", label: "PLANNED" },
-                        { value: "ACTIVE", label: "ACTIVE" },
-                        { value: "ON_HOLD", label: "ON_HOLD" },
-                        { value: "COMPLETED", label: "COMPLETED" }
-                      ]}
-                      required
-                    />
-                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                      <p>
-                        Suggested status from dates: <span className="font-semibold">{recommendedStatus}</span>
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setForm((current) => ({
-                            ...current,
-                            status: recommendedStatus,
-                            statusManuallySet: false
-                          }))
-                        }
-                        className="mt-2 rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        Use suggested status
-                      </button>
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 md:col-span-2">
+                      Project status is automatic from dates:{" "}
+                      <span className="font-semibold text-slate-900">{derivedProjectStatus}</span>
                     </div>
                   </div>
                 ) : null}
 
                 {currentStep === 3 ? (
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <Select
-                      label="Contract Type"
-                      value={form.contractType}
-                      onChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          contractType: normalizeContractType(value)
-                        }))
-                      }
-                      options={[
-                        { value: "PER_METER", label: "Per meter drilled" },
-                        { value: "DAY_RATE", label: "Per day / day rate" },
-                        { value: "LUMP_SUM", label: "Lump sum" }
-                      ]}
-                      required
-                    />
-                    {form.contractType === "PER_METER" ? (
+                  <div className="space-y-4">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                      <p className="text-sm font-semibold text-ink-900">Billing setup</p>
+                      <p className="mt-1 text-xs text-slate-700">Add what you charge the client for on this project.</p>
+
+                      <div className="mt-3 grid gap-2 md:grid-cols-4">
+                        <label className="text-sm text-ink-700">
+                          <span className="mb-1 block">Billable item</span>
+                          <select
+                            value={billingLineCode}
+                            onChange={(event) => setBillingLineCode(event.target.value)}
+                            disabled={addModeBlocked}
+                            className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                          >
+                            {billingTemplateOptions.length === 0 ? (
+                              <option value="">All billable items already added</option>
+                            ) : (
+                              billingTemplateOptions.map((template) => (
+                                <option key={template.itemCode} value={template.itemCode}>
+                                  {template.label}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </label>
+                        <label className="text-sm text-ink-700">
+                          <span className="mb-1 block">Unit</span>
+                          <input
+                            value={selectedBillingTemplate?.unit || ""}
+                            readOnly
+                            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-slate-700"
+                          />
+                        </label>
+                        <label className="text-sm text-ink-700">
+                          <span className="mb-1 block">Rate</span>
+                          <input
+                            type="number"
+                            min="0.01"
+                            step="0.01"
+                            value={billingLineRate}
+                            onChange={(event) => setBillingLineRate(event.target.value)}
+                            className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                          />
+                        </label>
+                        <div className="text-sm text-ink-700">
+                          <span className="mb-1 block">Action</span>
+                          <button
+                            type="button"
+                            onClick={saveBillingLine}
+                            disabled={addModeBlocked}
+                            className="w-full rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 font-semibold text-brand-800 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {editingBillingCode ? "Save line" : "Add line"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {selectedBillingTemplateIsMeter ? (
+                        <div className="mt-2 grid gap-2 md:grid-cols-3">
+                          <label className="text-sm text-ink-700">
+                            <span className="mb-1 block">Stage label (optional)</span>
+                            <input
+                              value={billingLineStageLabel}
+                              onChange={(event) => setBillingLineStageLabel(event.target.value)}
+                              placeholder="PQ, HQ, NQ"
+                              className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                            />
+                          </label>
+                          <label className="text-sm text-ink-700">
+                            <span className="mb-1 block">From depth (m)</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={derivedBillingLineDepthStartText}
+                              readOnly
+                              className="w-full rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-700"
+                            />
+                          </label>
+                          <label className="text-sm text-ink-700">
+                            <span className="mb-1 block">To depth (m)</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={billingLineDepthEnd}
+                              onChange={(event) => setBillingLineDepthEnd(event.target.value)}
+                              className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                            />
+                          </label>
+                        </div>
+                      ) : null}
+
+                      <p className="mt-2 text-[11px] text-slate-600">
+                        Item code: <span className="font-semibold">{billingLineItemCodePreview}</span>
+                      </p>
+                      {addModeBlocked ? (
+                        <p className="mt-2 rounded-lg border border-slate-200 bg-slate-100 px-2 py-1 text-xs text-slate-700">
+                          All billable items are already added. Use Edit to update a line.
+                        </p>
+                      ) : null}
+
+                      {billingLineError ? (
+                        <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-800">
+                          {billingLineError}
+                        </p>
+                      ) : null}
+
+                      <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
+                            <tr>
+                              <th className="px-3 py-2">Billable item</th>
+                              <th className="px-3 py-2">Unit</th>
+                              <th className="px-3 py-2">Rate</th>
+                              <th className="px-3 py-2 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeBillingRateItems.length === 0 ? (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-3 text-sm text-slate-600">
+                                  No lines yet. Add line to define how this project is billed.
+                                </td>
+                              </tr>
+                            ) : (
+                              activeBillingRateItems.map((line) => (
+                                <tr key={line.itemCode} className="border-t border-slate-200">
+                                  <td className="px-3 py-2">
+                                    <p className="font-semibold text-ink-900">{line.label}</p>
+                                    {line.drillingStageLabel ? (
+                                      <p className="text-[11px] text-slate-600">
+                                        Stage: {line.drillingStageLabel}
+                                      </p>
+                                    ) : null}
+                                    {typeof line.depthBandStartM === "number" && typeof line.depthBandEndM === "number" ? (
+                                      <p className="text-[11px] text-slate-600">
+                                        Depth: {formatNumber(line.depthBandStartM)}m - {formatNumber(line.depthBandEndM)}m
+                                      </p>
+                                    ) : null}
+                                    <p className="text-[11px] text-slate-600">{line.itemCode}</p>
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-700">{line.unit}</td>
+                                  <td className="px-3 py-2 text-slate-700">{formatCurrency(line.unitRate)}</td>
+                                  <td className="px-3 py-2 text-right">
+                                    <div className="inline-flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => startEditBillingLine(line)}
+                                        className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => archiveBillingLine(line.itemCode)}
+                                        className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                                      >
+                                        Archive
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {archivedBillingItemCount > 0 ? (
+                        <p className="mt-2 text-[11px] text-slate-600">
+                          Archived lines: {archivedBillingItemCount}
+                        </p>
+                      ) : null}
+                      {activeBillingRateItems.length === 0 ? (
+                        <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                          No billable lines yet. You can finish setup now and add lines later.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
                       <Input
-                        label="Meter Rate"
+                        label="Budget (optional)"
                         type="number"
-                        value={form.contractRatePerM}
-                        onChange={(value) => setForm((current) => ({ ...current, contractRatePerM: value }))}
-                        required
+                        value={form.budgetAmount}
+                        onChange={(value) => setForm((current) => ({ ...current, budgetAmount: value }))}
                       />
-                    ) : null}
-                    {form.contractType === "DAY_RATE" ? (
                       <Input
-                        label="Day Rate"
+                        label="Expected Meters (optional)"
                         type="number"
-                        value={form.contractDayRate}
-                        onChange={(value) => setForm((current) => ({ ...current, contractDayRate: value }))}
-                        required
+                        value={form.estimatedMeters}
+                        onChange={(value) => setForm((current) => ({ ...current, estimatedMeters: value }))}
                       />
-                    ) : null}
-                    {form.contractType === "LUMP_SUM" ? (
                       <Input
-                        label="Lump Sum Value"
+                        label="Expected Days (optional)"
                         type="number"
-                        value={form.contractLumpSumValue}
-                        onChange={(value) => setForm((current) => ({ ...current, contractLumpSumValue: value }))}
-                        required
+                        value={form.estimatedDays}
+                        onChange={(value) => setForm((current) => ({ ...current, estimatedDays: value }))}
                       />
-                    ) : null}
-                    <Input
-                      label="Budget (optional)"
-                      type="number"
-                      value={form.budgetAmount}
-                      onChange={(value) => setForm((current) => ({ ...current, budgetAmount: value }))}
-                    />
-                    <Input
-                      label="Expected Meters (optional)"
-                      type="number"
-                      value={form.estimatedMeters}
-                      onChange={(value) => setForm((current) => ({ ...current, estimatedMeters: value }))}
-                    />
-                    <Input
-                      label="Expected Days (optional)"
-                      type="number"
-                      value={form.estimatedDays}
-                      onChange={(value) => setForm((current) => ({ ...current, estimatedDays: value }))}
-                    />
-                    <Input
-                      label="Contract / Reference URL (optional)"
-                      value={form.contractReferenceUrl}
-                      onChange={(value) => setForm((current) => ({ ...current, contractReferenceUrl: value }))}
-                    />
-                    <label className="text-sm text-ink-700">
-                      <span className="mb-1 block">Contract/Reference Document (optional)</span>
-                      <input
-                        type="file"
-                        onChange={(event) => {
-                          const fileName =
-                            event.target.files && event.target.files.length > 0
-                              ? event.target.files[0].name
-                              : "";
-                          setForm((current) => ({
-                            ...current,
-                            contractReferenceName: fileName || current.contractReferenceName
-                          }));
-                        }}
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                      <Input
+                        label="Contract / Reference URL (optional)"
+                        value={form.contractReferenceUrl}
+                        onChange={(value) => setForm((current) => ({ ...current, contractReferenceUrl: value }))}
                       />
-                    </label>
-                    <Input
-                      label="Stored Document Name (optional)"
-                      value={form.contractReferenceName}
-                      onChange={(value) => setForm((current) => ({ ...current, contractReferenceName: value }))}
-                    />
+                      <label className="text-sm text-ink-700">
+                        <span className="mb-1 block">Contract/Reference Document (optional)</span>
+                        <input
+                          type="file"
+                          onChange={(event) => {
+                            const fileName =
+                              event.target.files && event.target.files.length > 0
+                                ? event.target.files[0].name
+                                : "";
+                            setForm((current) => ({
+                              ...current,
+                              contractReferenceName: fileName || current.contractReferenceName
+                            }));
+                          }}
+                          className="w-full rounded-lg border border-slate-200 px-3 py-2"
+                        />
+                      </label>
+                      <Input
+                        label="Stored Document Name (optional)"
+                        value={form.contractReferenceName}
+                        onChange={(value) => setForm((current) => ({ ...current, contractReferenceName: value }))}
+                      />
+                    </div>
                   </div>
                 ) : null}
 
@@ -802,14 +1223,6 @@ function ProjectSetupPageContent() {
                           <span className="font-semibold">End Date:</span> {form.endDate || "-"}
                         </p>
                         <p>
-                          <span className="font-semibold">Contract Type:</span>{" "}
-                          {projectContractTypeLabel(form.contractType)}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Commercial Rate/Value:</span>{" "}
-                          {formatCurrency(resolveCommercialValue(form))}
-                        </p>
-                        <p>
                           <span className="font-semibold">Budget:</span>{" "}
                           {form.budgetAmount ? formatCurrency(Number(form.budgetAmount)) : "-"}
                         </p>
@@ -824,6 +1237,10 @@ function ProjectSetupPageContent() {
                         <p>
                           <span className="font-semibold">Contract reference:</span>{" "}
                           {form.contractReferenceUrl || form.contractReferenceName || "-"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Billable lines:</span>{" "}
+                          {formatNumber(activeBillingRateItems.length)}
                         </p>
                         <p>
                           <span className="font-semibold">Primary Rig:</span> {reviewSummary.primaryRig}
@@ -887,7 +1304,8 @@ function ProjectSetupPageContent() {
                     </button>
                   ) : (
                     <button
-                      type="submit"
+                      type="button"
+                      onClick={() => void saveProject()}
                       disabled={saving}
                       className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
                     >
@@ -968,18 +1386,6 @@ function validateProjectSetupStep({
   }
 
   if (step >= 3) {
-    const meterRate = Number(form.contractRatePerM);
-    const dayRate = Number(form.contractDayRate);
-    const lumpSumValue = Number(form.contractLumpSumValue);
-    if (form.contractType === "PER_METER" && (!Number.isFinite(meterRate) || meterRate <= 0)) {
-      issues.push("Meter rate must be greater than zero.");
-    }
-    if (form.contractType === "DAY_RATE" && (!Number.isFinite(dayRate) || dayRate <= 0)) {
-      issues.push("Day rate must be greater than zero.");
-    }
-    if (form.contractType === "LUMP_SUM" && (!Number.isFinite(lumpSumValue) || lumpSumValue <= 0)) {
-      issues.push("Lump-sum value must be greater than zero.");
-    }
     if (form.budgetAmount && (!Number.isFinite(Number(form.budgetAmount)) || Number(form.budgetAmount) <= 0)) {
       issues.push("Budget must be a positive number.");
     }
@@ -1022,38 +1428,11 @@ function parseOptionalNonNegative(value: string) {
   return parsed;
 }
 
-function normalizeProjectStatus(value: string): ProjectStatusOption {
-  if (value === "ACTIVE" || value === "ON_HOLD" || value === "COMPLETED" || value === "PLANNED") {
-    return value;
-  }
-  return "PLANNED";
-}
-
 function normalizeContractType(value: string | undefined): ProjectContractTypeOption {
   if (value === "DAY_RATE" || value === "LUMP_SUM" || value === "PER_METER") {
     return value;
   }
   return "PER_METER";
-}
-
-function projectContractTypeLabel(value: ProjectContractTypeOption) {
-  if (value === "DAY_RATE") {
-    return "Per day / day rate";
-  }
-  if (value === "LUMP_SUM") {
-    return "Lump sum";
-  }
-  return "Per meter drilled";
-}
-
-function resolveCommercialValue(form: ProjectFormState) {
-  if (form.contractType === "DAY_RATE") {
-    return Number(form.contractDayRate || 0);
-  }
-  if (form.contractType === "LUMP_SUM") {
-    return Number(form.contractLumpSumValue || 0);
-  }
-  return Number(form.contractRatePerM || 0);
 }
 
 function deriveStatusFromDates(startDate: string, endDate: string): ProjectStatusOption {
@@ -1093,6 +1472,171 @@ function normalizeSetupProfile(value: Partial<ProjectSetupProfile> | null | unde
       ? value.teamMemberNames.filter((entry): entry is string => typeof entry === "string")
       : []
   };
+}
+
+function defaultBillingRateItems(
+  contractType: ProjectContractTypeOption,
+  contractRatePerM: number
+): ProjectBillingRateItemFormLine[] {
+  const meterTemplate = BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === "METER_DRILLED");
+  if (!meterTemplate) {
+    return [];
+  }
+  const meterRate = contractType === "PER_METER" && contractRatePerM > 0 ? contractRatePerM : 0;
+  if (meterRate <= 0) {
+    return [];
+  }
+  return [
+    {
+      itemCode: meterTemplate.itemCode,
+      label: meterTemplate.label,
+      unit: meterTemplate.unit,
+      unitRate: meterRate,
+      drillingStageLabel: null,
+      depthBandStartM: null,
+      depthBandEndM: null,
+      sortOrder: meterTemplate.sortOrder,
+      isActive: true
+    }
+  ];
+}
+
+function normalizeBillingRateItems(
+  value: ProjectBillingRateItemRecord[],
+  contractType: ProjectContractTypeOption,
+  contractRatePerM: number
+) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return defaultBillingRateItems(contractType, contractRatePerM);
+  }
+
+  const cleaned = value
+    .filter((entry) => Boolean(entry.itemCode && entry.label && entry.unit))
+    .map((entry) => ({
+      itemCode: entry.itemCode,
+      label: entry.label,
+      unit: entry.unit,
+      unitRate: Number(entry.unitRate || 0),
+      drillingStageLabel:
+        typeof entry.drillingStageLabel === "string" && entry.drillingStageLabel.trim().length > 0
+          ? entry.drillingStageLabel.trim()
+          : null,
+      depthBandStartM:
+        typeof entry.depthBandStartM === "number" && Number.isFinite(entry.depthBandStartM)
+          ? entry.depthBandStartM
+          : null,
+      depthBandEndM:
+        typeof entry.depthBandEndM === "number" && Number.isFinite(entry.depthBandEndM)
+          ? entry.depthBandEndM
+          : null,
+      sortOrder: Number.isFinite(entry.sortOrder) ? entry.sortOrder : 0,
+      isActive: entry.isActive !== false
+    }))
+    .filter((entry) => Number.isFinite(entry.unitRate) && entry.unitRate > 0)
+    .sort(compareBillingRateItems);
+
+  if (cleaned.length > 0) {
+    return cleaned;
+  }
+
+  return defaultBillingRateItems(contractType, contractRatePerM);
+}
+
+function sortBillingRateItems(value: ProjectBillingRateItemFormLine[]) {
+  return [...value].sort(compareBillingRateItems);
+}
+
+function compareBillingRateItems(left: ProjectBillingRateItemFormLine, right: ProjectBillingRateItemFormLine) {
+  if (left.sortOrder !== right.sortOrder) {
+    return left.sortOrder - right.sortOrder;
+  }
+  const leftDepth = typeof left.depthBandStartM === "number" ? left.depthBandStartM : Number.POSITIVE_INFINITY;
+  const rightDepth = typeof right.depthBandStartM === "number" ? right.depthBandStartM : Number.POSITIVE_INFINITY;
+  if (leftDepth !== rightDepth) {
+    return leftDepth - rightDepth;
+  }
+  return left.itemCode.localeCompare(right.itemCode);
+}
+
+function findTemplateByItemCode(itemCode: string) {
+  const direct = BILLABLE_ITEM_TEMPLATES.find((entry) => entry.itemCode === itemCode);
+  if (direct) {
+    return direct;
+  }
+  return BILLABLE_ITEM_TEMPLATES.find(
+    (entry) => Boolean(entry.allowMultiple) && itemCode.startsWith(`${entry.itemCode}_`)
+  );
+}
+
+function deriveGuidedMeterStartDepth(options: {
+  stagedLines: ProjectBillingRateItemFormLine[];
+  editingCode: string | null;
+  editingLine: ProjectBillingRateItemFormLine | null;
+}) {
+  if (options.editingCode) {
+    const editingIndex = options.stagedLines.findIndex((line) => line.itemCode === options.editingCode);
+    if (editingIndex > 0) {
+      return options.stagedLines[editingIndex - 1].depthBandEndM ?? 0;
+    }
+    if (editingIndex === 0) {
+      return 0;
+    }
+    if (
+      options.editingLine &&
+      Number.isFinite(options.editingLine.depthBandStartM)
+    ) {
+      return options.editingLine.depthBandStartM ?? 0;
+    }
+    return 0;
+  }
+
+  if (options.stagedLines.length === 0) {
+    return 0;
+  }
+
+  return options.stagedLines[options.stagedLines.length - 1].depthBandEndM ?? 0;
+}
+
+function buildBillingItemCode(options: {
+  template: BillableItemTemplate;
+  stageLabel: string;
+  depthBandStartM: number | null;
+  depthBandEndM: number | null;
+}) {
+  const baseCode = options.template.itemCode;
+  if (!options.template.isMeterBased) {
+    return baseCode;
+  }
+  const stageCode = normalizeCodeSegment(options.stageLabel);
+  const hasDepth = Number.isFinite(options.depthBandStartM) && Number.isFinite(options.depthBandEndM);
+  if (!stageCode && !hasDepth) {
+    return baseCode;
+  }
+  const segments = [baseCode];
+  if (stageCode) {
+    segments.push(stageCode);
+  }
+  if (hasDepth) {
+    segments.push(`${formatDepthCode(options.depthBandStartM as number)}M`);
+    segments.push(`${formatDepthCode(options.depthBandEndM as number)}M`);
+  }
+  return segments.join("_");
+}
+
+function normalizeCodeSegment(value: string) {
+  const upper = value.trim().toUpperCase();
+  if (!upper) {
+    return "";
+  }
+  return upper
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function formatDepthCode(value: number) {
+  const normalized = value.toString();
+  return normalized.replace(".", "P");
 }
 
 function Input({

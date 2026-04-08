@@ -55,6 +55,8 @@ npm run db:sync
 npm run db:seed
 ```
 
+Demo/sample financial records are seeded in **USD** and aligned to the billing-rate-card + drill-report billable-line workflow.
+
 If you need a fully clean local demo dataset (recommended after major workflow refactors):
 
 ```bash

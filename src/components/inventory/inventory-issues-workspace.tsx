@@ -44,6 +44,8 @@ interface InventoryIssuesResponseLike {
 }
 
 export function InventoryIssuesWorkspace({
+  isProjectLocked,
+  projectName,
   focusedSectionId,
   issuesLoading,
   issuesResponse,
@@ -75,6 +77,8 @@ export function InventoryIssuesWorkspace({
   lowRiskNamingFixes,
   applyBulkLowRiskNamingAutoFix
 }: {
+  isProjectLocked: boolean;
+  projectName?: string | null;
   focusedSectionId: string | null;
   issuesLoading: boolean;
   issuesResponse: InventoryIssuesResponseLike;
@@ -118,12 +122,27 @@ export function InventoryIssuesWorkspace({
       )}
     >
       <div className="space-y-3">
-        <Card className="min-w-0" title="Triage Header" subtitle="Resolve gaps in inventory, usage, and cost flow.">
+        <Card
+          className="min-w-0"
+          title="Triage Header"
+          subtitle={
+            isProjectLocked
+              ? `Resolve project-linked inventory flow gaps for ${projectName || "the locked project"} (warehouse stock remains global).`
+              : "Resolve gaps in inventory, usage, and cost flow."
+          }
+        >
+          {isProjectLocked ? (
+            <p className="mb-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
+              Project-linked issue view only. Warehouse stock on hand remains global.
+            </p>
+          ) : null}
           {issuesLoading ? (
             <p className="text-sm text-ink-600">Analyzing inventory quality issues...</p>
           ) : issuesResponse.summary.total === 0 ? (
             <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-              No major inventory inconsistencies detected in current scope.
+              {isProjectLocked
+                ? "No major project-linked inventory inconsistencies detected."
+                : "No major inventory inconsistencies detected in current scope."}
             </p>
           ) : (
             <div className="space-y-2.5">

@@ -8,8 +8,12 @@ export function buildScopedHref(
   const search = new URLSearchParams();
   if (filters.from) search.set("from", filters.from);
   if (filters.to) search.set("to", filters.to);
-  if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-  if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+  if (filters.projectId !== "all") {
+    search.set("projectId", filters.projectId);
+  } else {
+    if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+    if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+  }
 
   if (overrides) {
     for (const [key, value] of Object.entries(overrides)) {
@@ -19,6 +23,12 @@ export function buildScopedHref(
         search.set(key, value);
       }
     }
+  }
+
+  const effectiveProjectId = search.get("projectId");
+  if (effectiveProjectId && effectiveProjectId !== "all") {
+    search.delete("clientId");
+    search.delete("rigId");
   }
 
   const query = search.toString();

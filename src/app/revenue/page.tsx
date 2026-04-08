@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import {
   AnalyticsEmptyState,
   getScopedKpiHelper,
@@ -71,7 +72,20 @@ function RevenuePageContent() {
   const [summary, setSummary] = useState<RevenueSummary>(emptySummary);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const projectIdFilter = searchParams.get("projectId") || "all";
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
+  const projectIdFilter = isSingleProjectScope ? scopeProjectId : searchParams.get("projectId") || "all";
+  const effectiveScopeFilters = useMemo(
+    () =>
+      isSingleProjectScope
+        ? {
+            ...filters,
+            clientId: "all",
+            rigId: "all"
+          }
+        : filters,
+    [filters, isSingleProjectScope]
+  );
 
   const loadRevenueSummary = useCallback(async (silent = false) => {
     if (!silent) {
@@ -84,9 +98,13 @@ function RevenuePageContent() {
       const search = new URLSearchParams();
       if (filters.from) search.set("from", filters.from);
       if (filters.to) search.set("to", filters.to);
-      if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") search.set("rigId", filters.rigId);
-      if (projectIdFilter !== "all") search.set("projectId", projectIdFilter);
+      if (isSingleProjectScope) {
+        search.set("projectId", scopeProjectId);
+      } else {
+        if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+        if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+        if (projectIdFilter !== "all") search.set("projectId", projectIdFilter);
+      }
 
       const query = search.toString();
       const response = await fetch(`/api/revenue/summary${query ? `?${query}` : ""}`, {
@@ -104,7 +122,7 @@ function RevenuePageContent() {
         setRefreshing(false);
       }
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to, projectIdFilter]);
+  }, [filters.clientId, filters.from, filters.rigId, filters.to, isSingleProjectScope, projectIdFilter, scopeProjectId]);
 
   useEffect(() => {
     void loadRevenueSummary();
@@ -147,14 +165,32 @@ function RevenuePageContent() {
   const bestRig = useMemo(() => summary.revenueByRig[0]?.name || "N/A", [summary.revenueByRig]);
   const bestClient = useMemo(() => summary.revenueByClient[0]?.name || "N/A", [summary.revenueByClient]);
   const bestProject = useMemo(() => summary.revenueByProject[0]?.name || "N/A", [summary.revenueByProject]);
-  const isScoped = hasActiveScopeFilters(filters);
+  const lockedProjectName = useMemo(() => {
+    if (!isSingleProjectScope) {
+      return null;
+    }
+    return summary.revenueByProject.find((entry) => entry.id === scopeProjectId)?.name || null;
+  }, [isSingleProjectScope, scopeProjectId, summary.revenueByProject]);
+  const isScoped = hasActiveScopeFilters(effectiveScopeFilters);
+  const canDrillByClientOrRig = !isSingleProjectScope;
   const buildHref = useCallback(
-    (path: string, overrides?: Record<string, string | null | undefined>) =>
-      buildScopedHref(filters, path, {
-        ...(projectIdFilter !== "all" ? { projectId: projectIdFilter } : {}),
-        ...overrides
-      }),
-    [filters, projectIdFilter]
+    (path: string, overrides?: Record<string, string | null | undefined>) => {
+      const nextOverrides = { ...(overrides || {}) };
+      if (isSingleProjectScope) {
+        delete nextOverrides.projectId;
+        delete nextOverrides.clientId;
+        delete nextOverrides.rigId;
+      }
+      return buildScopedHref(filters, path, {
+        ...(isSingleProjectScope
+          ? { projectId: scopeProjectId, clientId: null, rigId: null }
+          : projectIdFilter !== "all"
+            ? { projectId: projectIdFilter }
+            : {}),
+        ...nextOverrides
+      });
+    },
+    [filters, isSingleProjectScope, projectIdFilter, scopeProjectId]
   );
   const hasRevenueData = useMemo(
     () =>
@@ -201,7 +237,8 @@ function RevenuePageContent() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+        <ProjectLockedBanner projectId={scopeProjectId} projectName={lockedProjectName} />
+        <FilterScopeBanner filters={effectiveScopeFilters} onClearFilters={handleClearFilters} />
 
         {!loading && !hasRevenueData ? (
           <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
@@ -342,13 +379,21 @@ function RevenuePageContent() {
                 xKey="name"
                 yKey="revenue"
                 color="#0f766e"
-                clickHint="Click rig bar to filter revenue by rig"
+                clickHint={
+                  canDrillByClientOrRig
+                    ? "Click rig bar to filter revenue by rig"
+                    : "Project locked: rig drill is disabled."
+                }
                 onBackgroundClick={() => {
                   router.push(buildHref("/revenue"));
                 }}
-                onElementClick={(entry) => {
-                  router.push(buildHref("/revenue", { rigId: entry.id }));
-                }}
+                onElementClick={
+                  canDrillByClientOrRig
+                    ? (entry) => {
+                        router.push(buildHref("/revenue", { rigId: entry.id }));
+                      }
+                    : undefined
+                }
               />
             )}
           </Card>
@@ -415,13 +460,21 @@ function RevenuePageContent() {
                 data={summary.revenueByClient}
                 xKey="name"
                 yKey="revenue"
-                clickHint="Click client bar to filter revenue by client"
+                clickHint={
+                  canDrillByClientOrRig
+                    ? "Click client bar to filter revenue by client"
+                    : "Project locked: client drill is disabled."
+                }
                 onBackgroundClick={() => {
                   router.push(buildHref("/revenue"));
                 }}
-                onElementClick={(entry) => {
-                  router.push(buildHref("/revenue", { clientId: entry.id }));
-                }}
+                onElementClick={
+                  canDrillByClientOrRig
+                    ? (entry) => {
+                        router.push(buildHref("/revenue", { clientId: entry.id }));
+                      }
+                    : undefined
+                }
               />
             )}
           </Card>

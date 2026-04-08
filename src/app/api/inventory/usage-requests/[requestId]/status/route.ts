@@ -3,7 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
+import {
+  deriveInventoryUsageContextType,
+  deriveInventoryUsageReasonType
+} from "@/lib/inventory-usage-context";
 import { roundCurrency } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 
@@ -23,6 +26,12 @@ const includeRequest = {
     select: {
       id: true,
       clientId: true
+    }
+  },
+  drillReport: {
+    select: {
+      id: true,
+      holeNumber: true
     }
   },
   maintenanceRequest: {
@@ -105,6 +114,13 @@ export async function POST(
 
   const now = new Date();
   const movementDate = existing.requestedForDate || now;
+  const contextType = deriveInventoryUsageContextType({
+    explicitContextType: existing.contextType,
+    explicitReasonType: null,
+    maintenanceRequestId: existing.maintenanceRequestId,
+    breakdownReportId: existing.breakdownReportId || existing.maintenanceRequest?.breakdownReportId || null,
+    drillReportId: existing.drillReportId
+  });
   const resolvedBreakdownReportId =
     existing.breakdownReportId ||
     existing.maintenanceRequest?.breakdownReportId ||
@@ -112,6 +128,81 @@ export async function POST(
   const movementBreakdownReportId =
     resolvedBreakdownReportId || existing.maintenanceRequest?.breakdownReportId || null;
   const noteReason = existing.reason;
+
+  if (contextType === "DRILLING_REPORT") {
+    try {
+      const approved = await prisma.$transaction(async (tx) => {
+        const approvalLock = await tx.inventoryUsageRequest.updateMany({
+          where: {
+            id: existing.id,
+            status: { in: ["SUBMITTED", "PENDING"] },
+            approvedMovementId: null
+          },
+          data: {
+            status: "APPROVED",
+            decisionNote: note || null,
+            decidedById: auth.session.userId,
+            decidedAt: now
+          }
+        });
+
+        if (approvalLock.count === 0) {
+          throw new Error("UsageRequestAlreadyProcessed");
+        }
+
+        const next = await tx.inventoryUsageRequest.findUniqueOrThrow({
+          where: { id: existing.id }
+        });
+
+        await recordAuditLog({
+          db: tx,
+          module: "inventory_usage_requests",
+          entityType: "inventory_usage_request",
+          entityId: next.id,
+          action: "approve",
+          description: `${auth.session.name} approved usage request ${next.id}.`,
+          before: { status: existing.status, contextType },
+          after: {
+            status: next.status,
+            contextType,
+            approvedMovementId: next.approvedMovementId,
+            effect: "authorization_only"
+          },
+          actor: auditActorFromSession(auth.session)
+        });
+
+        return next;
+      });
+
+      return NextResponse.json({
+        data: approved,
+        movementId: null,
+        expenseId: null
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === "UsageRequestAlreadyProcessed") {
+        return NextResponse.json(
+          { message: "Usage request has already been processed." },
+          { status: 409 }
+        );
+      }
+      console.error("[inventory/usage-requests:status]", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        message: error instanceof Error ? error.message : String(error),
+        ...(error instanceof Prisma.PrismaClientKnownRequestError
+          ? {
+              prismaCode: error.code,
+              prismaMeta: error.meta || null
+            }
+          : {})
+      });
+      return NextResponse.json(
+        { message: "Failed to update usage request status." },
+        { status: 500 }
+      );
+    }
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const approvalLock = await tx.inventoryUsageRequest.updateMany({
@@ -150,9 +241,10 @@ export async function POST(
       const unitCost = currentItem.unitCost || 0;
       const totalCost = roundCurrency(existing.quantity * unitCost);
       const reasonType = deriveInventoryUsageReasonType({
-        explicitReasonType: null,
+        explicitReasonType: existing.contextType,
         maintenanceRequestId: existing.maintenanceRequestId,
-        breakdownReportId: resolvedBreakdownReportId
+        breakdownReportId: resolvedBreakdownReportId,
+        drillReportId: existing.drillReportId
       });
       const expenseCategory =
         reasonType === "BREAKDOWN"
@@ -188,6 +280,7 @@ export async function POST(
         data: {
           itemId: existing.itemId,
           movementType: "OUT",
+          contextType,
           quantity: roundCurrency(existing.quantity),
           unitCost,
           totalCost,
@@ -196,6 +289,7 @@ export async function POST(
           clientId: existing.project?.clientId || null,
           projectId: existing.projectId,
           rigId: existing.rigId,
+          drillReportId: existing.drillReportId,
           maintenanceRequestId: existing.maintenanceRequestId,
           breakdownReportId: movementBreakdownReportId,
           expenseId: expense.id,

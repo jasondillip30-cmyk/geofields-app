@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
 
   const status = parseStatusFilter(request.nextUrl.searchParams.get("status"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
   const maintenanceRequestId = nullableFilter(
@@ -37,6 +38,7 @@ export async function GET(request: NextRequest) {
   const where: Prisma.MaintenanceRequestWhereInput = {
     ...(status ? { status } : {}),
     ...(clientId ? { clientId } : {}),
+    ...(projectId ? { projectId } : {}),
     ...(rigId ? { rigId } : {}),
     ...(breakdownReportId ? { breakdownReportId } : {}),
     ...(maintenanceRequestId ? { id: maintenanceRequestId } : {}),
@@ -108,7 +110,13 @@ export async function POST(request: NextRequest) {
       projectId
         ? prisma.project.findUnique({
             where: { id: projectId },
-            select: { id: true, name: true, clientId: true }
+            select: {
+              id: true,
+              name: true,
+              clientId: true,
+              assignedRigId: true,
+              backupRigId: true
+            }
           })
         : Promise.resolve(null),
       clientId
@@ -151,6 +159,23 @@ export async function POST(request: NextRequest) {
     }
     if (projectId && !project) {
       return NextResponse.json({ message: "Project not found." }, { status: 404 });
+    }
+    if (projectId && project) {
+      const allowedProjectRigIds = [project.assignedRigId, project.backupRigId].filter(
+        (value): value is string => Boolean(value)
+      );
+      if (allowedProjectRigIds.length === 0) {
+        return NextResponse.json(
+          { message: "This project has no assigned rig. Assign a rig to the project first." },
+          { status: 400 }
+        );
+      }
+      if (!allowedProjectRigIds.includes(rigId)) {
+        return NextResponse.json(
+          { message: "Selected rig is not assigned to this project. Choose one of the project rigs." },
+          { status: 400 }
+        );
+      }
     }
     if (clientId && !selectedClient) {
       return NextResponse.json({ message: "Client not found." }, { status: 404 });

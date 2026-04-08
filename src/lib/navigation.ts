@@ -22,10 +22,7 @@ export const navItems: NavItem[] = [
   { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
   { href: "/inventory", label: "Inventory", permission: "inventory:view" },
   { href: "/approvals", label: "Approvals", permission: "reports:view" },
-  { href: "/revenue", label: "Revenue", permission: "finance:view" },
-  { href: "/cost-tracking", label: "Cost Tracking", permission: "finance:view" },
-  { href: "/cost-tracking/budget-vs-actual", label: "Budget vs Actual", permission: "finance:view" },
-  { href: "/profit", label: "Profit", permission: "finance:view" },
+  { href: "/spending", label: "Spending", permission: "finance:view" },
   { href: "/activity-log", label: "Activity Log", permission: "reports:view" },
   { href: "/clients", label: "Clients", permission: "clients:view" },
   { href: "/employees", label: "Employees", permission: "employees:view" },
@@ -37,8 +34,7 @@ export const inventoryNavChildren: NavChildItem[] = [
   { href: "/inventory", label: "Inventory Overview", permission: "inventory:view" },
   { href: "/inventory/items", label: "Items", permission: "inventory:view" },
   { href: "/inventory/stock-movements", label: "Stock Movements", permission: "inventory:view" },
-  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" },
-  { href: "/inventory/expenses", label: "Expenses", permission: "inventory:view" }
+  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" }
 ];
 
 export const setupNavChildren: NavChildItem[] = [

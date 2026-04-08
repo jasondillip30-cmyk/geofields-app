@@ -9,6 +9,7 @@ import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-contex
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import {
   AnalyticsEmptyState,
   getScopedKpiHelper,
@@ -129,6 +130,19 @@ export default function ProfitPage() {
   const [rigSortBy, setRigSortBy] = useState<"profit" | "margin">("profit");
   const [projectSortBy, setProjectSortBy] = useState<"profit" | "margin">("profit");
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
+  const effectiveScopeFilters = useMemo(
+    () =>
+      isSingleProjectScope
+        ? {
+            ...filters,
+            clientId: "all",
+            rigId: "all"
+          }
+        : filters,
+    [filters, isSingleProjectScope]
+  );
 
   const loadProfitSummary = useCallback(
     async (silent = false) => {
@@ -142,8 +156,13 @@ export default function ProfitPage() {
         const search = new URLSearchParams();
         if (filters.from) search.set("from", filters.from);
         if (filters.to) search.set("to", filters.to);
-        if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-        if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+        if (isSingleProjectScope) {
+          search.set("projectId", scopeProjectId);
+        } else {
+          if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+          if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+          if (filters.projectId !== "all") search.set("projectId", filters.projectId);
+        }
 
         const query = search.toString();
         const response = await fetch(`/api/profit/summary${query ? `?${query}` : ""}`, { cache: "no-store" });
@@ -159,7 +178,7 @@ export default function ProfitPage() {
         }
       }
     },
-    [filters.clientId, filters.from, filters.rigId, filters.to]
+    [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to, isSingleProjectScope, scopeProjectId]
   );
 
   useEffect(() => {
@@ -240,7 +259,14 @@ export default function ProfitPage() {
     () => buildRigCostInsight(summary.costBreakdownByRig),
     [summary.costBreakdownByRig]
   );
-  const isScoped = hasActiveScopeFilters(filters);
+  const lockedProjectName = useMemo(() => {
+    if (!isSingleProjectScope) {
+      return null;
+    }
+    return summary.profitByProject.find((entry) => entry.id === scopeProjectId)?.name || null;
+  }, [isSingleProjectScope, scopeProjectId, summary.profitByProject]);
+  const isScoped = hasActiveScopeFilters(effectiveScopeFilters);
+  const canDrillByClientOrRig = !isSingleProjectScope;
   const hasProfitData = useMemo(
     () =>
       summary.profitTrend.length > 0 ||
@@ -270,9 +296,19 @@ export default function ProfitPage() {
   );
   const isFilteredEmpty = !loading && isScoped && !hasProfitData;
   const buildHref = useCallback(
-    (path: string, overrides?: Record<string, string | null | undefined>) =>
-      buildScopedHref(filters, path, overrides),
-    [filters]
+    (path: string, overrides?: Record<string, string | null | undefined>) => {
+      const nextOverrides = { ...(overrides || {}) };
+      if (isSingleProjectScope) {
+        delete nextOverrides.projectId;
+        delete nextOverrides.clientId;
+        delete nextOverrides.rigId;
+      }
+      return buildScopedHref(filters, path, {
+        ...(isSingleProjectScope ? { projectId: scopeProjectId, clientId: null, rigId: null } : {}),
+        ...nextOverrides
+      });
+    },
+    [filters, isSingleProjectScope, scopeProjectId]
   );
   const applyDatePreset = useCallback(
     (days: number) => {
@@ -303,10 +339,10 @@ export default function ProfitPage() {
       pageKey: "profit",
       pageName: "Profit",
       filters: {
-        clientId: filters.clientId,
-        rigId: filters.rigId,
-        from: filters.from || null,
-        to: filters.to || null
+        clientId: effectiveScopeFilters.clientId,
+        rigId: effectiveScopeFilters.rigId,
+        from: effectiveScopeFilters.from || null,
+        to: effectiveScopeFilters.to || null
       },
       summaryMetrics: [
         { key: "totalRevenue", label: "Total Revenue", value: summary.totals.totalRevenue },
@@ -421,10 +457,10 @@ export default function ProfitPage() {
     }),
     [
       buildHref,
-      filters.clientId,
-      filters.from,
-      filters.rigId,
-      filters.to,
+      effectiveScopeFilters.clientId,
+      effectiveScopeFilters.from,
+      effectiveScopeFilters.rigId,
+      effectiveScopeFilters.to,
       overallMargin,
       sortedProjectRows,
       sortedRigRows,
@@ -463,7 +499,8 @@ export default function ProfitPage() {
   return (
     <AccessGate permission="finance:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} onClearFilters={handleClearFilters} />
+        <ProjectLockedBanner projectId={scopeProjectId} projectName={lockedProjectName} />
+        <FilterScopeBanner filters={effectiveScopeFilters} onClearFilters={handleClearFilters} />
 
         {!loading && !hasProfitData ? (
           <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
@@ -685,13 +722,21 @@ export default function ProfitPage() {
                 xKey="name"
                 yKey="profit"
                 color="#166534"
-                clickHint="Click rig bar to filter profit"
+                clickHint={
+                  canDrillByClientOrRig
+                    ? "Click rig bar to filter profit"
+                    : "Project locked: rig drill is disabled."
+                }
                 onBackgroundClick={() => {
                   router.push(buildHref("/profit"));
                 }}
-                onElementClick={(entry) => {
-                  router.push(buildHref("/profit", { rigId: entry.id }));
-                }}
+                onElementClick={
+                  canDrillByClientOrRig
+                    ? (entry) => {
+                        router.push(buildHref("/profit", { rigId: entry.id }));
+                      }
+                    : undefined
+                }
               />
             )}
           </Card>
@@ -759,17 +804,25 @@ export default function ProfitPage() {
                 xKey="name"
                 yKey="profit"
                 color="#1d4ed8"
-                clickHint="Click client bar to filter profit"
+                clickHint={
+                  canDrillByClientOrRig
+                    ? "Click client bar to filter profit"
+                    : "Project locked: client drill is disabled."
+                }
                 onBackgroundClick={() => {
                   router.push(buildHref("/profit"));
                 }}
-                onElementClick={(entry) => {
-                  if (!entry.id || entry.id.startsWith("__unassigned")) {
-                    router.push(buildHref("/profit", { clientId: null }));
-                    return;
-                  }
-                  router.push(buildHref("/profit", { clientId: entry.id }));
-                }}
+                onElementClick={
+                  canDrillByClientOrRig
+                    ? (entry) => {
+                        if (!entry.id || entry.id.startsWith("__unassigned")) {
+                          router.push(buildHref("/profit", { clientId: null }));
+                          return;
+                        }
+                        router.push(buildHref("/profit", { clientId: entry.id }));
+                      }
+                    : undefined
+                }
               />
             )}
           </Card>
@@ -800,17 +853,25 @@ export default function ProfitPage() {
                 xKey="name"
                 yKey="margin"
                 color="#15803d"
-                clickHint="Click rig bar to filter margin details"
+                clickHint={
+                  canDrillByClientOrRig
+                    ? "Click rig bar to filter margin details"
+                    : "Project locked: rig drill is disabled."
+                }
                 onBackgroundClick={() => {
                   router.push(buildHref("/profit"));
                 }}
-                onElementClick={(entry) => {
-                  if (!entry.id || entry.id.startsWith("__unassigned")) {
-                    router.push(buildHref("/profit", { rigId: null }));
-                    return;
-                  }
-                  router.push(buildHref("/profit", { rigId: entry.id }));
-                }}
+                onElementClick={
+                  canDrillByClientOrRig
+                    ? (entry) => {
+                        if (!entry.id || entry.id.startsWith("__unassigned")) {
+                          router.push(buildHref("/profit", { rigId: null }));
+                          return;
+                        }
+                        router.push(buildHref("/profit", { rigId: entry.id }));
+                      }
+                    : undefined
+                }
               />
             )}
           </Card>
@@ -966,17 +1027,25 @@ export default function ProfitPage() {
                     { key: "consumables", label: "Consumables", color: "#8b5cf6" },
                     { key: "other", label: "Other", color: "#64748b" }
                   ]}
-                  clickHint="Click rig stacks to filter profit by rig"
+                  clickHint={
+                    canDrillByClientOrRig
+                      ? "Click rig stacks to filter profit by rig"
+                      : "Project locked: rig drill is disabled."
+                  }
                   onBackgroundClick={() => {
                     router.push(buildHref("/profit"));
                   }}
-                  onElementClick={(entry) => {
-                    if (!entry.id || entry.id.startsWith("__unassigned")) {
-                      router.push(buildHref("/profit", { rigId: null }));
-                      return;
-                    }
-                    router.push(buildHref("/profit", { rigId: entry.id }));
-                  }}
+                  onElementClick={
+                    canDrillByClientOrRig
+                      ? (entry) => {
+                          if (!entry.id || entry.id.startsWith("__unassigned")) {
+                            router.push(buildHref("/profit", { rigId: null }));
+                            return;
+                          }
+                          router.push(buildHref("/profit", { rigId: entry.id }));
+                        }
+                      : undefined
+                  }
                 />
                 <p className="mt-3 text-xs text-ink-600">{rigCostInsight}</p>
               </>

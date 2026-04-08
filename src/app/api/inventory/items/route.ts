@@ -11,6 +11,7 @@ import {
   roundCurrency
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
+import { buildProjectConsumablesPool } from "@/lib/project-consumables-pool";
 
 const itemInclude = {
   supplier: { select: { id: true, name: true } },
@@ -32,6 +33,41 @@ export async function GET(request: NextRequest) {
   const locationId = nullableFilter(request.nextUrl.searchParams.get("locationId"));
   const status = parseInventoryStatus(request.nextUrl.searchParams.get("status"));
   const stockFilter = parseStockFilter(request.nextUrl.searchParams.get("stock"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+
+  let approvedProjectItemIds: string[] | null = null;
+  let approvedPoolByItemId = new Map<
+    string,
+    {
+      approvedQuantity: number;
+      availableApprovedQuantity: number;
+      availableApprovedValue: number;
+      usedQuantity: number;
+      usedValue: number;
+    }
+  >();
+
+  if (projectId) {
+    const poolRows = await buildProjectConsumablesPool({
+      projectId,
+      includeZeroAvailable: true
+    });
+    approvedProjectItemIds = poolRows
+      .filter((row) => row.approvedRequestQty + row.approvedPurchaseQty > 0)
+      .map((row) => row.itemId);
+    approvedPoolByItemId = new Map(
+      poolRows.map((row) => [
+        row.itemId,
+        {
+          approvedQuantity: roundCurrency(row.approvedRequestQty + row.approvedPurchaseQty),
+          availableApprovedQuantity: row.availableNow,
+          availableApprovedValue: roundCurrency(row.availableNow * row.unitCost),
+          usedQuantity: row.consumedQty,
+          usedValue: roundCurrency(row.consumedQty * row.unitCost)
+        }
+      ])
+    );
+  }
 
   const where: Prisma.InventoryItemWhereInput = {
     ...(search
@@ -46,7 +82,14 @@ export async function GET(request: NextRequest) {
     ...(category ? { category } : {}),
     ...(supplierId ? { supplierId } : {}),
     ...(locationId ? { locationId } : {}),
-    ...(status ? { status } : {})
+    ...(status ? { status } : {}),
+    ...(approvedProjectItemIds
+      ? {
+          id: {
+            in: approvedProjectItemIds.length > 0 ? approvedProjectItemIds : ["__none__"]
+          }
+        }
+      : {})
   };
 
   const items = await prisma.inventoryItem.findMany({
@@ -110,6 +153,10 @@ export async function GET(request: NextRequest) {
       outOfStock,
       latestMovementDate: latestMovement?.date || null,
       latestMovementType: latestMovement?.movementType || null,
+      approvedProjectContext:
+        projectId && approvedPoolByItemId.has(item.id)
+          ? approvedPoolByItemId.get(item.id)
+          : null,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt
     };
@@ -134,7 +181,8 @@ export async function GET(request: NextRequest) {
       totalItems: normalizedItems.length,
       lowStockCount: normalizedItems.filter((item) => item.lowStock).length,
       outOfStockCount: normalizedItems.filter((item) => item.outOfStock).length,
-      totalInventoryValue: roundCurrency(normalizedItems.reduce((sum, item) => sum + item.inventoryValue, 0))
+      totalInventoryValue: roundCurrency(normalizedItems.reduce((sum, item) => sum + item.inventoryValue, 0)),
+      projectId: projectId || "all"
     }
   });
 }

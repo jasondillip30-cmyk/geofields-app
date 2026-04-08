@@ -37,6 +37,7 @@ const movementInclude = {
   client: { select: { id: true, name: true } },
   rig: { select: { id: true, rigCode: true } },
   project: { select: { id: true, name: true } },
+  drillReport: { select: { id: true, holeNumber: true, date: true } },
   maintenanceRequest: { select: { id: true, requestCode: true, status: true } },
   breakdownReport: { select: { id: true, title: true, status: true, severity: true } },
   expense: { select: { id: true, amount: true, category: true, approvalStatus: true } },
@@ -55,6 +56,7 @@ interface ParsedMovementInput {
   notes: string | null;
   rigId: string | null;
   projectId: string | null;
+  drillReportId: string | null;
   clientId: string | null;
   maintenanceRequestId: string | null;
   breakdownReportId: string | null;
@@ -82,18 +84,34 @@ export async function GET(request: NextRequest) {
   const movementType = parseMovementType(request.nextUrl.searchParams.get("movementType"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const projectView = nullableFilter(request.nextUrl.searchParams.get("projectView"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
   const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
+  const drillReportId = nullableFilter(request.nextUrl.searchParams.get("drillReportId"));
   const supplierId = nullableFilter(request.nextUrl.searchParams.get("supplierId"));
   const date = buildDateFilter(fromDate, toDate);
 
+  const lockedProjectScope = Boolean(projectId);
+  const lockedProjectOperationalView = lockedProjectScope && projectView === "locked";
+
+  const movementTypeFilter: Prisma.InventoryMovementWhereInput = lockedProjectOperationalView
+    ? {
+        movementType: {
+          in: ["IN", "OUT"]
+        }
+      }
+    : movementType
+      ? { movementType }
+      : {};
+
   const where: Prisma.InventoryMovementWhereInput = {
     ...(itemId ? { itemId } : {}),
-    ...(movementType ? { movementType } : {}),
-    ...(rigId ? { rigId } : {}),
+    ...movementTypeFilter,
     ...(projectId ? { projectId } : {}),
-    ...(clientId ? { clientId } : {}),
+    ...(drillReportId ? { drillReportId } : {}),
+    ...(!lockedProjectScope && rigId ? { rigId } : {}),
+    ...(!lockedProjectScope && clientId ? { clientId } : {}),
     ...(maintenanceRequestId ? { maintenanceRequestId } : {}),
     ...(breakdownReportId ? { breakdownReportId } : {}),
     ...(supplierId ? { supplierId } : {}),
@@ -127,6 +145,12 @@ export async function GET(request: NextRequest) {
     data: movements,
     meta: {
       count: movements.length,
+      filters: {
+        projectId: projectId || "all",
+        clientId: clientId || "all",
+        rigId: rigId || "all",
+        projectView: projectView || "all"
+      },
       totals: {
         in: roundCurrency(totals.in),
         out: roundCurrency(totals.out),
@@ -150,7 +174,7 @@ export async function POST(request: NextRequest) {
   }
   const input = parsed.value;
 
-  const [item, project, rig, maintenanceRequest, breakdownReport, expense, supplier, locationFrom, locationTo] =
+  const [item, project, rig, drillReport, maintenanceRequest, breakdownReport, expense, supplier, locationFrom, locationTo] =
     await Promise.all([
     prisma.inventoryItem.findUnique({
       where: { id: input.itemId },
@@ -175,6 +199,12 @@ export async function POST(request: NextRequest) {
       ? prisma.rig.findUnique({
           where: { id: input.rigId },
           select: { id: true, rigCode: true }
+        })
+      : Promise.resolve(null),
+    input.drillReportId
+      ? prisma.drillReport.findUnique({
+          where: { id: input.drillReportId },
+          select: { id: true, projectId: true, rigId: true }
         })
       : Promise.resolve(null),
     input.maintenanceRequestId
@@ -224,6 +254,9 @@ export async function POST(request: NextRequest) {
   if (input.rigId && !rig) {
     return NextResponse.json({ message: "Rig not found." }, { status: 404 });
   }
+  if (input.drillReportId && !drillReport) {
+    return NextResponse.json({ message: "Drilling report not found." }, { status: 404 });
+  }
   if (input.maintenanceRequestId && !maintenanceRequest) {
     return NextResponse.json({ message: "Maintenance request not found." }, { status: 404 });
   }
@@ -268,6 +301,18 @@ export async function POST(request: NextRequest) {
       {
         message: "Selected breakdown does not belong to the selected rig."
       },
+      { status: 400 }
+    );
+  }
+  if (input.drillReportId && drillReport && input.projectId && drillReport.projectId !== input.projectId) {
+    return NextResponse.json(
+      { message: "Selected drilling report does not belong to the selected project." },
+      { status: 400 }
+    );
+  }
+  if (input.drillReportId && drillReport && input.rigId && drillReport.rigId !== input.rigId) {
+    return NextResponse.json(
+      { message: "Selected drilling report does not belong to the selected rig." },
       { status: 400 }
     );
   }
@@ -355,6 +400,7 @@ export async function POST(request: NextRequest) {
         clientId: resolvedClientId,
         rigId: input.rigId,
         projectId: input.projectId,
+        drillReportId: input.drillReportId,
         maintenanceRequestId: input.maintenanceRequestId,
         breakdownReportId: resolvedBreakdownReportId,
         expenseId: createdExpenseId,
@@ -392,6 +438,7 @@ export async function POST(request: NextRequest) {
         movementType: input.movementType,
         quantity: input.quantity,
         maintenanceRequestId: input.maintenanceRequestId,
+        drillReportId: input.drillReportId,
         breakdownReportId: resolvedBreakdownReportId,
         totalCost,
         previousStock: item.quantityInStock,
@@ -453,6 +500,7 @@ async function parseMovementInput(request: NextRequest) {
         notes: nullableString(asString(formData.get("notes"))),
         rigId: nullableString(asString(formData.get("rigId"))),
         projectId: nullableString(asString(formData.get("projectId"))),
+        drillReportId: nullableString(asString(formData.get("drillReportId"))),
         clientId: nullableString(asString(formData.get("clientId"))),
         maintenanceRequestId: nullableString(asString(formData.get("maintenanceRequestId"))),
         breakdownReportId: nullableString(asString(formData.get("breakdownReportId"))),
@@ -502,6 +550,7 @@ async function parseMovementInput(request: NextRequest) {
       notes: typeof body?.notes === "string" ? body.notes.trim() : null,
       rigId: nullableString(typeof body?.rigId === "string" ? body.rigId : ""),
       projectId: nullableString(typeof body?.projectId === "string" ? body.projectId : ""),
+      drillReportId: nullableString(typeof body?.drillReportId === "string" ? body.drillReportId : ""),
       clientId: nullableString(typeof body?.clientId === "string" ? body.clientId : ""),
       maintenanceRequestId: nullableString(
         typeof body?.maintenanceRequestId === "string" ? body.maintenanceRequestId : ""

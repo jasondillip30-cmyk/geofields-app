@@ -5,7 +5,10 @@ import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { canAccess } from "@/lib/auth/permissions";
 import { isBreakdownOpenStatus } from "@/lib/breakdown-lifecycle";
-import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
+import {
+  deriveInventoryUsageContextType,
+  deriveInventoryUsageReasonType
+} from "@/lib/inventory-usage-context";
 import {
   buildDateFilter,
   nullableFilter,
@@ -26,6 +29,15 @@ const requestInclude = {
   },
   project: { select: { id: true, name: true, clientId: true } },
   rig: { select: { id: true, rigCode: true } },
+  drillReport: {
+    select: {
+      id: true,
+      holeNumber: true,
+      date: true,
+      project: { select: { id: true, name: true } },
+      rig: { select: { id: true, rigCode: true } }
+    }
+  },
   maintenanceRequest: {
     select: {
       id: true,
@@ -69,6 +81,7 @@ export async function GET(request: NextRequest) {
   const itemId = nullableFilter(request.nextUrl.searchParams.get("itemId"));
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
   const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
+  const drillReportId = nullableFilter(request.nextUrl.searchParams.get("drillReportId"));
   const statusFilter = parseUsageRequestStatusFilter(request.nextUrl.searchParams.get("status"));
   const date = buildDateFilter(fromDate, toDate);
 
@@ -81,6 +94,7 @@ export async function GET(request: NextRequest) {
     ...(clientId ? [{ project: { clientId } }] : []),
     ...(itemId ? [{ itemId }] : []),
     ...(maintenanceRequestId ? [{ maintenanceRequestId }] : []),
+    ...(drillReportId ? [{ drillReportId }] : []),
     ...(breakdownReportId
       ? [
           {
@@ -110,6 +124,7 @@ export async function GET(request: NextRequest) {
         clientId,
         itemId,
         maintenanceRequestId,
+        drillReportId,
         breakdownReportId
       }
     });
@@ -143,6 +158,10 @@ export async function POST(request: NextRequest) {
     typeof payload.breakdownReportId === "string" && payload.breakdownReportId.trim()
       ? payload.breakdownReportId
       : null;
+  const drillReportId =
+    typeof payload.drillReportId === "string" && payload.drillReportId.trim()
+      ? payload.drillReportId
+      : null;
   const projectIdInput =
     typeof payload.projectId === "string" && payload.projectId.trim()
       ? payload.projectId
@@ -163,7 +182,25 @@ export async function POST(request: NextRequest) {
           ? payload.usageReason
           : null,
     maintenanceRequestId,
-    breakdownReportId
+    breakdownReportId,
+    drillReportId
+  });
+  const contextType = deriveInventoryUsageContextType({
+    explicitContextType:
+      typeof payload.contextType === "string"
+        ? payload.contextType
+        : typeof payload.usageContextType === "string"
+          ? payload.usageContextType
+          : null,
+    explicitReasonType:
+      typeof payload.reasonType === "string"
+        ? payload.reasonType
+        : typeof payload.usageReason === "string"
+          ? payload.usageReason
+          : null,
+    maintenanceRequestId,
+    breakdownReportId,
+    drillReportId
   });
 
   if (!itemId) {
@@ -180,6 +217,45 @@ export async function POST(request: NextRequest) {
       {
         message:
           "Link usage request to either maintenance or breakdown, not both."
+      },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "DRILLING_REPORT" && !projectIdInput) {
+    return NextResponse.json(
+      { message: "Select a project for drilling usage requests." },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "DRILLING_REPORT" && !rigIdInput) {
+    return NextResponse.json(
+      { message: "Select a project rig for drilling usage requests." },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "DRILLING_REPORT" && (maintenanceRequestId || breakdownReportId)) {
+    return NextResponse.json(
+      {
+        message:
+          "Drilling report usage cannot also be linked to maintenance or breakdown."
+      },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "MAINTENANCE" && drillReportId) {
+    return NextResponse.json(
+      {
+        message:
+          "Maintenance usage cannot include a drilling report link."
+      },
+      { status: 400 }
+    );
+  }
+  if (reasonType === "BREAKDOWN" && drillReportId) {
+    return NextResponse.json(
+      {
+        message:
+          "Breakdown usage cannot include a drilling report link."
       },
       { status: 400 }
     );
@@ -217,11 +293,15 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   }
-  if (reasonType !== "MAINTENANCE" && reasonType !== "BREAKDOWN") {
+  if (
+    reasonType !== "MAINTENANCE" &&
+    reasonType !== "BREAKDOWN" &&
+    reasonType !== "DRILLING_REPORT"
+  ) {
     return NextResponse.json(
       {
         message:
-          "Inventory usage must be linked to either an open maintenance record or an open breakdown record."
+          "Inventory usage must be linked to maintenance, breakdown, or drilling report context."
       },
       { status: 400 }
     );
@@ -268,7 +348,14 @@ export async function POST(request: NextRequest) {
             })
           : Promise.resolve(null),
         projectIdInput
-          ? prisma.project.findUnique({ where: { id: projectIdInput }, select: { id: true } })
+          ? prisma.project.findUnique({
+              where: { id: projectIdInput },
+              select: {
+                id: true,
+                assignedRigId: true,
+                backupRigId: true
+              }
+            })
           : Promise.resolve(null),
         rigIdInput
           ? prisma.rig.findUnique({ where: { id: rigIdInput }, select: { id: true } })
@@ -385,23 +472,68 @@ export async function POST(request: NextRequest) {
         { status: 409 }
       );
     }
+    if (reasonType === "DRILLING_REPORT" && !project) {
+      return NextResponse.json({ message: "Project not found." }, { status: 404 });
+    }
+    if (reasonType === "DRILLING_REPORT" && !rig) {
+      return NextResponse.json({ message: "Rig not found." }, { status: 404 });
+    }
+    const assignedProjectRigIds =
+      reasonType === "DRILLING_REPORT"
+        ? [project?.assignedRigId || null, project?.backupRigId || null].filter(
+            (value): value is string => Boolean(value)
+          )
+        : [];
+    if (reasonType === "DRILLING_REPORT" && assignedProjectRigIds.length === 0) {
+      return NextResponse.json(
+        { message: "This project has no assigned rig. Assign a rig to the project first." },
+        { status: 409 }
+      );
+    }
+    if (
+      reasonType === "DRILLING_REPORT" &&
+      rigIdInput &&
+      !assignedProjectRigIds.includes(rigIdInput)
+    ) {
+      return NextResponse.json(
+        { message: "Selected rig is not assigned to this project. Choose one of the project rigs." },
+        { status: 400 }
+      );
+    }
 
     const resolvedProjectId =
       reasonType === "MAINTENANCE"
         ? maintenanceContext?.projectId || null
         : reasonType === "BREAKDOWN"
           ? breakdownContext?.projectId || null
+          : reasonType === "DRILLING_REPORT"
+            ? projectIdInput
           : null;
     const resolvedRigId =
       reasonType === "MAINTENANCE"
         ? maintenanceContext?.rigId || null
         : reasonType === "BREAKDOWN"
           ? breakdownContext?.rigId || null
+          : reasonType === "DRILLING_REPORT"
+            ? rigIdInput
           : null;
     const resolvedMaintenanceRequestId =
       reasonType === "MAINTENANCE" ? maintenanceContext?.id || null : null;
     const resolvedBreakdownReportId =
       reasonType === "BREAKDOWN" ? breakdownContext?.id || null : null;
+    const resolvedDrillReportId = null;
+    if (reasonType === "DRILLING_REPORT" && !resolvedProjectId) {
+      return NextResponse.json(
+        { message: "Select a project for drilling usage requests." },
+        { status: 409 }
+      );
+    }
+    if (reasonType === "DRILLING_REPORT" && !resolvedRigId) {
+      return NextResponse.json(
+        { message: "Select a project rig for drilling usage requests." },
+        { status: 409 }
+      );
+    }
     const reason =
       reasonDetailsRaw ||
       legacyReasonRaw ||
@@ -409,15 +541,19 @@ export async function POST(request: NextRequest) {
         ? "Maintenance item usage"
         : reasonType === "BREAKDOWN"
           ? "Breakdown item usage"
+          : reasonType === "DRILLING_REPORT"
+            ? "Drilling report item usage"
           : "Operational item usage");
 
     const created = await prisma.inventoryUsageRequest.create({
       data: {
         itemId: item.id,
+        contextType,
         quantity: roundCurrency(quantity),
         reason,
         projectId: resolvedProjectId,
         rigId: resolvedRigId,
+        drillReportId: resolvedDrillReportId,
         maintenanceRequestId: resolvedMaintenanceRequestId,
         breakdownReportId: resolvedBreakdownReportId,
         locationId: locationIdInput,
@@ -439,8 +575,10 @@ export async function POST(request: NextRequest) {
         quantity: created.quantity,
         reason: created.reason,
         reasonType,
+        contextType,
         projectId: created.projectId,
         rigId: created.rigId,
+        drillReportId: created.drillReportId,
         maintenanceRequestId: created.maintenanceRequestId,
         breakdownReportId: created.breakdownReportId,
         locationId: created.locationId,
@@ -459,6 +597,7 @@ export async function POST(request: NextRequest) {
         quantity,
         reasonType,
         maintenanceRequestId,
+        drillReportId,
         breakdownReportId,
         locationId: locationIdInput,
         projectIdInput,
@@ -473,10 +612,11 @@ function serializeUsageRequestForClient(row: UsageRequestWithRelations) {
     row.breakdownReportId || row.maintenanceRequest?.breakdownReportId || null;
   const normalizedStatus: InventoryUsageRequestStatus =
     row.status === "APPROVED" || row.approvedMovementId ? "APPROVED" : row.status;
-  const reasonType = deriveInventoryUsageReasonType({
-    explicitReasonType: null,
+      const reasonType = deriveInventoryUsageReasonType({
+    explicitReasonType: row.contextType,
     maintenanceRequestId: row.maintenanceRequestId,
-    breakdownReportId: fallbackBreakdownId
+    breakdownReportId: fallbackBreakdownId,
+    drillReportId: row.drillReportId
   });
 
   return {
@@ -484,6 +624,7 @@ function serializeUsageRequestForClient(row: UsageRequestWithRelations) {
     status: normalizedStatus,
     reason: row.reason,
     reasonType,
+    contextType: row.contextType,
     breakdownReportId: fallbackBreakdownId,
     legacyStatusNormalized: normalizedStatus !== row.status
   };

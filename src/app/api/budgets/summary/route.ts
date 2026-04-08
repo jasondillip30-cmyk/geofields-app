@@ -25,38 +25,49 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
-  const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
-  const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
+  const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
+  const clientId = projectId ? null : rawClientId;
+  const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
 
   const spendContext = await buildRecognizedSpendContext({
     clientId,
     rigId,
+    projectId,
     fromDate,
     toDate
   });
 
   const budgetWhere = {
     isActive: true,
-    ...(clientId ? { clientId } : {}),
     ...buildBudgetDateOverlapWhere({ fromDate, toDate }),
-    ...(rigId
+    ...(projectId
       ? {
-          OR: [
-            {
-              scopeType: "RIG" as const,
-              rigId
-            },
-            {
-              scopeType: "PROJECT" as const,
-              project: {
-                assignedRigId: rigId
-              }
-            }
-          ]
+          scopeType: "PROJECT" as const,
+          projectId
         }
-      : {})
+      : {
+          ...(clientId ? { clientId } : {}),
+          ...(rigId
+            ? {
+                OR: [
+                  {
+                    scopeType: "RIG" as const,
+                    rigId
+                  },
+                  {
+                    scopeType: "PROJECT" as const,
+                    project: {
+                      assignedRigId: rigId
+                    }
+                  }
+                ]
+              }
+            : {})
+        })
   };
 
   const budgetPlans = await prisma.budgetPlan.findMany({
@@ -176,6 +187,7 @@ export async function GET(request: NextRequest) {
 
   const response: BudgetVsActualSummaryResponse = {
     filters: {
+      projectId: projectId || "all",
       clientId: clientId || "all",
       rigId: rigId || "all",
       from: request.nextUrl.searchParams.get("from"),

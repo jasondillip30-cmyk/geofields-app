@@ -18,6 +18,7 @@ import type { PurchaseRequisitionPayload, RequisitionType } from "../src/lib/req
 import { PURCHASE_REQUISITION_REPORT_TYPE } from "../src/lib/requisition-workflow";
 import type { PurchaseRequisitionSetupPayload } from "../src/lib/requisition-master-data";
 import { PURCHASE_REQUISITION_SETUP_REPORT_TYPE } from "../src/lib/requisition-master-data";
+import { calculateDrillReportBillableAmount } from "../src/lib/drill-report-billable-amount";
 import { buildRecognizedSpendContext } from "../src/lib/recognized-spend-context";
 
 const prisma = new PrismaClient();
@@ -276,6 +277,320 @@ const PROJECTS = [
     contractRatePerM: 700,
     assignedRigId: null,
     backupRigId: null
+  }
+] as const;
+
+const PROJECT_BILLING_RATE_ITEMS = [
+  // Alpha
+  {
+    projectId: "prj-alpha",
+    itemCode: "METER_DRILLED",
+    label: "Meters drilled",
+    unit: "meter",
+    unitRate: 790,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-alpha",
+    itemCode: "RIG_MOVE",
+    label: "Rig move",
+    unit: "move",
+    unitRate: 450,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 1,
+    isActive: true
+  },
+  {
+    projectId: "prj-alpha",
+    itemCode: "STANDBY_HOURS",
+    label: "Standby",
+    unit: "hour",
+    unitRate: 120,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 2,
+    isActive: true
+  },
+  {
+    projectId: "prj-alpha",
+    itemCode: "SURVEY_SHOT",
+    label: "Survey shot",
+    unit: "count",
+    unitRate: 95,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 3,
+    isActive: true
+  },
+  {
+    projectId: "prj-alpha",
+    itemCode: "WATER_PUMP_HOURS",
+    label: "Water pump hours",
+    unit: "hour",
+    unitRate: 140,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 4,
+    isActive: true
+  },
+
+  // Bravo (staged meter lines)
+  {
+    projectId: "prj-bravo",
+    itemCode: "PQ_0_100",
+    label: "PQ 0-100m",
+    unit: "meter",
+    unitRate: 760,
+    drillingStageLabel: "PQ",
+    depthBandStartM: 0,
+    depthBandEndM: 100,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-bravo",
+    itemCode: "HQ_100_200",
+    label: "HQ 100-200m",
+    unit: "meter",
+    unitRate: 810,
+    drillingStageLabel: "HQ",
+    depthBandStartM: 100,
+    depthBandEndM: 200,
+    sortOrder: 1,
+    isActive: true
+  },
+  {
+    projectId: "prj-bravo",
+    itemCode: "NQ_200_320",
+    label: "NQ 200-320m",
+    unit: "meter",
+    unitRate: 865,
+    drillingStageLabel: "NQ",
+    depthBandStartM: 200,
+    depthBandEndM: 320,
+    sortOrder: 2,
+    isActive: true
+  },
+  {
+    projectId: "prj-bravo",
+    itemCode: "RIG_MOVE",
+    label: "Rig move",
+    unit: "move",
+    unitRate: 420,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 3,
+    isActive: true
+  },
+  {
+    projectId: "prj-bravo",
+    itemCode: "STANDBY_HOURS",
+    label: "Standby",
+    unit: "hour",
+    unitRate: 110,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 4,
+    isActive: true
+  },
+
+  // Charlie
+  {
+    projectId: "prj-charlie",
+    itemCode: "METER_DRILLED",
+    label: "Meters drilled",
+    unit: "meter",
+    unitRate: 710,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-charlie",
+    itemCode: "WORK_HOURS",
+    label: "Work hours",
+    unit: "hour",
+    unitRate: 52,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 1,
+    isActive: true
+  },
+  {
+    projectId: "prj-charlie",
+    itemCode: "SURVEY",
+    label: "Survey",
+    unit: "count",
+    unitRate: 260,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 2,
+    isActive: true
+  },
+  {
+    projectId: "prj-charlie",
+    itemCode: "REFLEX",
+    label: "Reflex",
+    unit: "count",
+    unitRate: 190,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 3,
+    isActive: true
+  },
+  {
+    projectId: "prj-charlie",
+    itemCode: "SURVEY_ORI",
+    label: "Survey ori",
+    unit: "count",
+    unitRate: 210,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 4,
+    isActive: true
+  },
+
+  // Delta
+  {
+    projectId: "prj-delta",
+    itemCode: "METER_DRILLED",
+    label: "Meters drilled",
+    unit: "meter",
+    unitRate: 735,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-delta",
+    itemCode: "WATER_PUMP_HOURS",
+    label: "Water pump hours",
+    unit: "hour",
+    unitRate: 180,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 1,
+    isActive: true
+  },
+  {
+    projectId: "prj-delta",
+    itemCode: "STANDBY_HOURS",
+    label: "Standby",
+    unit: "hour",
+    unitRate: 100,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 2,
+    isActive: true
+  },
+  {
+    projectId: "prj-delta",
+    itemCode: "RIG_MOVE",
+    label: "Rig move",
+    unit: "move",
+    unitRate: 380,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 3,
+    isActive: true
+  },
+
+  // Echo
+  {
+    projectId: "prj-echo",
+    itemCode: "METER_DRILLED",
+    label: "Meters drilled",
+    unit: "meter",
+    unitRate: 770,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-echo",
+    itemCode: "RIG_MOVE",
+    label: "Rig move",
+    unit: "move",
+    unitRate: 390,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 1,
+    isActive: true
+  },
+  {
+    projectId: "prj-echo",
+    itemCode: "STANDBY_HOURS",
+    label: "Standby",
+    unit: "hour",
+    unitRate: 105,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 2,
+    isActive: true
+  },
+  {
+    projectId: "prj-echo",
+    itemCode: "SURVEY_SHOT",
+    label: "Survey shot",
+    unit: "count",
+    unitRate: 90,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 3,
+    isActive: true
+  },
+
+  // Foxtrot
+  {
+    projectId: "prj-foxtrot",
+    itemCode: "METER_DRILLED",
+    label: "Meters drilled",
+    unit: "meter",
+    unitRate: 700,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 0,
+    isActive: true
+  },
+  {
+    projectId: "prj-foxtrot",
+    itemCode: "RIG_MOVE",
+    label: "Rig move",
+    unit: "move",
+    unitRate: 300,
+    drillingStageLabel: null,
+    depthBandStartM: null,
+    depthBandEndM: null,
+    sortOrder: 1,
+    isActive: true
   }
 ] as const;
 
@@ -635,28 +950,28 @@ const INVENTORY_ITEMS = [
 
 const DRILL_REPORTS = [
   // Alpha (profitable, under budget)
-  buildDrillReport("dr-alpha-001", 36, "prj-alpha", "cli-northstar", "rig-gf001", 85_000, "APPROVED"),
-  buildDrillReport("dr-alpha-002", 22, "prj-alpha", "cli-northstar", "rig-gf001", 78_000, "APPROVED"),
-  buildDrillReport("dr-alpha-003", 9, "prj-alpha", "cli-northstar", "rig-gf001", 74_000, "APPROVED"),
+  buildDrillReport("dr-alpha-001", 36, "prj-alpha", "cli-northstar", "rig-gf001", 112, "APPROVED"),
+  buildDrillReport("dr-alpha-002", 22, "prj-alpha", "cli-northstar", "rig-gf001", 103, "APPROVED"),
+  buildDrillReport("dr-alpha-003", 9, "prj-alpha", "cli-northstar", "rig-gf001", 97, "APPROVED"),
   // Bravo (overspent)
-  buildDrillReport("dr-bravo-001", 35, "prj-bravo", "cli-northstar", "rig-gf002", 46_000, "APPROVED"),
-  buildDrillReport("dr-bravo-002", 18, "prj-bravo", "cli-northstar", "rig-gf002", 39_000, "APPROVED"),
-  buildDrillReport("dr-bravo-003", 7, "prj-bravo", "cli-northstar", "rig-gf002", 32_000, "APPROVED"),
+  buildDrillReport("dr-bravo-001", 35, "prj-bravo", "cli-northstar", "rig-gf002", 61, "APPROVED"),
+  buildDrillReport("dr-bravo-002", 18, "prj-bravo", "cli-northstar", "rig-gf002", 51, "APPROVED"),
+  buildDrillReport("dr-bravo-003", 7, "prj-bravo", "cli-northstar", "rig-gf002", 42, "APPROVED"),
   // Charlie (no budget)
-  buildDrillReport("dr-charlie-001", 24, "prj-charlie", "cli-rift", "rig-gf005", 44_000, "APPROVED"),
-  buildDrillReport("dr-charlie-002", 12, "prj-charlie", "cli-rift", "rig-gf005", 38_000, "APPROVED"),
+  buildDrillReport("dr-charlie-001", 24, "prj-charlie", "cli-rift", "rig-gf005", 58, "APPROVED"),
+  buildDrillReport("dr-charlie-002", 12, "prj-charlie", "cli-rift", "rig-gf005", 50, "APPROVED"),
   // Delta (maintenance-heavy)
-  buildDrillReport("dr-delta-001", 28, "prj-delta", "cli-horizon", "rig-gf004", 72_000, "APPROVED"),
-  buildDrillReport("dr-delta-002", 16, "prj-delta", "cli-horizon", "rig-gf004", 68_000, "APPROVED"),
-  buildDrillReport("dr-delta-003", 6, "prj-delta", "cli-horizon", "rig-gf004", 64_000, "APPROVED"),
+  buildDrillReport("dr-delta-001", 28, "prj-delta", "cli-horizon", "rig-gf004", 95, "APPROVED"),
+  buildDrillReport("dr-delta-002", 16, "prj-delta", "cli-horizon", "rig-gf004", 89, "APPROVED"),
+  buildDrillReport("dr-delta-003", 6, "prj-delta", "cli-horizon", "rig-gf004", 84, "APPROVED"),
   // Echo (breakdown-heavy)
-  buildDrillReport("dr-echo-001", 27, "prj-echo", "cli-rift", "rig-gf003", 30_000, "APPROVED"),
-  buildDrillReport("dr-echo-002", 20, "prj-echo", "cli-rift", "rig-gf003", 24_000, "APPROVED"),
+  buildDrillReport("dr-echo-001", 27, "prj-echo", "cli-rift", "rig-gf003", 40, "APPROVED"),
+  buildDrillReport("dr-echo-002", 20, "prj-echo", "cli-rift", "rig-gf003", 40, "APPROVED"),
   // Foxtrot completed
-  buildDrillReport("dr-foxtrot-001", 45, "prj-foxtrot", "cli-horizon", "rig-gf006", 40_000, "APPROVED"),
+  buildDrillReport("dr-foxtrot-001", 45, "prj-foxtrot", "cli-horizon", "rig-gf006", 53, "APPROVED"),
   // Pending and draft coverage
-  buildDrillReport("dr-echo-submitted", 5, "prj-echo", "cli-rift", "rig-gf003", 21_000, "SUBMITTED"),
-  buildDrillReport("dr-charlie-draft", 3, "prj-charlie", "cli-rift", "rig-gf005", 18_000, "DRAFT")
+  buildDrillReport("dr-echo-submitted", 5, "prj-echo", "cli-rift", "rig-gf003", 40, "SUBMITTED"),
+  buildDrillReport("dr-charlie-draft", 3, "prj-charlie", "cli-rift", "rig-gf005", 40, "DRAFT")
 ] as const;
 
 const EXPENSES = [
@@ -1430,6 +1745,22 @@ async function seedCoreReferences() {
     });
   }
 
+  await prisma.projectBillingRateItem.createMany({
+    data: PROJECT_BILLING_RATE_ITEMS.map((item) => ({
+      projectId: item.projectId,
+      itemCode: item.itemCode,
+      label: item.label,
+      unit: item.unit,
+      unitRate: item.unitRate,
+      drillingStageLabel: item.drillingStageLabel,
+      depthBandStartM: item.depthBandStartM,
+      depthBandEndM: item.depthBandEndM,
+      sortOrder: item.sortOrder,
+      isActive: item.isActive
+    })),
+    skipDuplicates: true
+  });
+
   await prisma.rigUsage.createMany({
     data: RIG_USAGE.map((entry) => ({
       id: entry.id,
@@ -1541,8 +1872,84 @@ async function seedFinanceAndInventory() {
     skipDuplicates: true
   });
 
+  const contractRateByProjectId = new Map<string, number>(
+    PROJECTS.map((project) => [project.id, project.contractRatePerM] as [string, number])
+  );
+  const activeRateItemsByProjectId = new Map<
+    string,
+    Array<{
+      itemCode: string;
+      unit: string;
+      unitRate: number;
+      depthBandStartM: number | null;
+      depthBandEndM: number | null;
+    }>
+  >();
+  for (const item of PROJECT_BILLING_RATE_ITEMS) {
+    if (!item.isActive) {
+      continue;
+    }
+    const current = activeRateItemsByProjectId.get(item.projectId) || [];
+    current.push({
+      itemCode: item.itemCode,
+      unit: item.unit,
+      unitRate: item.unitRate,
+      depthBandStartM: item.depthBandStartM,
+      depthBandEndM: item.depthBandEndM
+    });
+    activeRateItemsByProjectId.set(item.projectId, current);
+  }
+
   for (const report of DRILL_REPORTS) {
     await prisma.drillReport.create({ data: report });
+
+    const activeRateItems = activeRateItemsByProjectId.get(report.projectId) || [];
+    const shouldSeedBillableLines = report.approvalStatus === EntryApprovalStatus.APPROVED;
+    const billableLines = shouldSeedBillableLines
+      ? buildSeedDrillReportBillableLines(report, activeRateItems)
+      : [];
+
+    if (billableLines.length > 0) {
+      await prisma.drillReportBillableLine.createMany({
+        data: billableLines.map((line) => ({
+          drillReportId: report.id,
+          itemCode: line.itemCode,
+          unit: line.unit,
+          quantity: line.quantity
+        })),
+        skipDuplicates: true
+      });
+    }
+
+    const fallbackContractRate = contractRateByProjectId.get(report.projectId) || 0;
+    const billableAmount = calculateDrillReportBillableAmount({
+      billableLines,
+      activeRateItems: activeRateItems.map((item) => ({
+        itemCode: item.itemCode,
+        unit: item.unit,
+        unitRate: item.unitRate
+      })),
+      fallbackMeters: report.totalMetersDrilled,
+      fallbackContractRate
+    });
+
+    if (shouldSeedBillableLines && billableLines.length === 0) {
+      throw new Error(
+        `Seed quality gate failed: approved drill report ${report.id} has no billable lines.`
+      );
+    }
+    if (shouldSeedBillableLines && billableAmount <= 0) {
+      throw new Error(
+        `Seed quality gate failed: approved drill report ${report.id} has non-positive billable amount.`
+      );
+    }
+
+    await prisma.drillReport.update({
+      where: { id: report.id },
+      data: {
+        billableAmount: roundCurrency(billableAmount)
+      }
+    });
   }
 
   for (const expense of EXPENSES) {
@@ -1627,7 +2034,9 @@ async function printSeedSummary() {
     approvedUsage,
     pendingUsage,
     budgetPlans,
-    purchaseRequisitions
+    purchaseRequisitions,
+    billingRateItems,
+    drillReportBillableLines
   ] = await Promise.all([
     prisma.user.count(),
     prisma.client.count(),
@@ -1642,7 +2051,9 @@ async function printSeedSummary() {
     prisma.inventoryUsageRequest.count({ where: { status: InventoryUsageRequestStatus.APPROVED } }),
     prisma.inventoryUsageRequest.count({ where: { status: InventoryUsageRequestStatus.SUBMITTED } }),
     prisma.budgetPlan.count({ where: { scopeType: "PROJECT" } }),
-    prisma.summaryReport.count({ where: { reportType: PURCHASE_REQUISITION_REPORT_TYPE } })
+    prisma.summaryReport.count({ where: { reportType: PURCHASE_REQUISITION_REPORT_TYPE } }),
+    prisma.projectBillingRateItem.count({ where: { isActive: true } }),
+    prisma.drillReportBillableLine.count()
   ]);
 
   console.log(
@@ -1663,7 +2074,9 @@ async function printSeedSummary() {
           approvedInventoryUsageRequests: approvedUsage,
           submittedInventoryUsageRequests: pendingUsage,
           projectBudgetPlans: budgetPlans,
-          purchaseRequisitionReports: purchaseRequisitions
+          purchaseRequisitionReports: purchaseRequisitions,
+          activeBillingRateItems: billingRateItems,
+          drillReportBillableLines
         },
         scenarios: {
           underBudgetProject: "prj-alpha",
@@ -1730,11 +2143,11 @@ function buildDrillReport(
   projectId: string,
   clientId: string,
   rigId: string,
-  billableAmount: number,
+  totalMetersDrilled: number,
   approvalStatus: EntryApprovalStatus
 ) {
   const date = daysAgo(days);
-  const totalMeters = Math.max(40, Math.round(billableAmount / 760));
+  const totalMeters = Math.max(0, Math.round(totalMetersDrilled));
   const fromMeter = 0;
   const toMeter = totalMeters;
 
@@ -1761,8 +2174,113 @@ function buildDrillReport(
     delayHours: approvalStatus === "SUBMITTED" ? 1.5 : 0.8,
     comments: "Seeded project-first operational report.",
     operatorCrew: "Crew A",
-    billableAmount
+    billableAmount: 0
   };
+}
+
+function buildSeedDrillReportBillableLines(
+  report: {
+    id: string;
+    fromMeter: number;
+    toMeter: number;
+    totalMetersDrilled: number;
+    workHours: number;
+    rigMoves: number;
+    standbyHours: number;
+  },
+  activeRateItems: Array<{
+    itemCode: string;
+    unit: string;
+    unitRate: number;
+    depthBandStartM: number | null;
+    depthBandEndM: number | null;
+  }>
+) {
+  const lines: Array<{ itemCode: string; unit: string; quantity: number }> = [];
+  const rangeStart = Math.min(report.fromMeter, report.toMeter);
+  const rangeEnd = Math.max(report.fromMeter, report.toMeter);
+
+  const meterItems = activeRateItems.filter((item) => item.unit.trim().toLowerCase() === "meter");
+  const stagedMeterItems = meterItems
+    .filter((item) => Number.isFinite(item.depthBandStartM) && Number.isFinite(item.depthBandEndM))
+    .map((item) => {
+      const start = Math.min(item.depthBandStartM as number, item.depthBandEndM as number);
+      const end = Math.max(item.depthBandStartM as number, item.depthBandEndM as number);
+      return {
+        itemCode: item.itemCode,
+        unit: item.unit,
+        start,
+        end
+      };
+    })
+    .sort((left, right) => left.start - right.start);
+
+  if (stagedMeterItems.length > 0) {
+    for (const stage of stagedMeterItems) {
+      const overlap = Math.max(0, Math.min(rangeEnd, stage.end) - Math.max(rangeStart, stage.start));
+      if (overlap > 0) {
+        lines.push({
+          itemCode: stage.itemCode,
+          unit: stage.unit,
+          quantity: roundQuantity(overlap)
+        });
+      }
+    }
+  } else {
+    const primaryMeterItem = meterItems[0];
+    if (primaryMeterItem && report.totalMetersDrilled > 0) {
+      lines.push({
+        itemCode: primaryMeterItem.itemCode,
+        unit: primaryMeterItem.unit,
+        quantity: roundQuantity(report.totalMetersDrilled)
+      });
+    }
+  }
+
+  addOptionalLine(lines, activeRateItems, "RIG_MOVE", report.rigMoves);
+  addOptionalLine(lines, activeRateItems, "WORK_HOURS", report.workHours);
+  addOptionalLine(lines, activeRateItems, "STANDBY_HOURS", report.standbyHours);
+  addOptionalLine(lines, activeRateItems, "WATER_PUMP_HOURS", report.totalMetersDrilled / 30);
+  addOptionalLine(lines, activeRateItems, "SURVEY", report.totalMetersDrilled / 55);
+  addOptionalLine(lines, activeRateItems, "REFLEX", report.totalMetersDrilled / 120);
+  addOptionalLine(lines, activeRateItems, "SURVEY_SHOT", report.totalMetersDrilled / 45);
+  addOptionalLine(lines, activeRateItems, "SURVEY_ORI", report.totalMetersDrilled / 90);
+
+  return lines
+    .map((line) => ({
+      itemCode: line.itemCode,
+      unit: line.unit,
+      quantity: roundQuantity(line.quantity)
+    }))
+    .filter((line) => line.quantity > 0 && Number.isFinite(line.quantity));
+}
+
+function addOptionalLine(
+  lines: Array<{ itemCode: string; unit: string; quantity: number }>,
+  activeRateItems: Array<{ itemCode: string; unit: string }>,
+  itemCode: string,
+  quantity: number
+) {
+  const item = activeRateItems.find((entry) => entry.itemCode === itemCode);
+  if (!item) {
+    return;
+  }
+  const normalizedQuantity = roundQuantity(quantity);
+  if (!Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) {
+    return;
+  }
+  lines.push({
+    itemCode: item.itemCode,
+    unit: item.unit,
+    quantity: normalizedQuantity
+  });
+}
+
+function roundQuantity(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(value * 100) / 100;
 }
 
 function buildExpense(

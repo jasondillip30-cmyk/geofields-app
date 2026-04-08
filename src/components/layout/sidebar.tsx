@@ -29,11 +29,9 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Projects: ClipboardList,
   "Drilling Reports": Drill,
   Breakdowns: Drill,
-  Revenue: BarChart3,
+  Spending: BarChart3,
   Approvals: ClipboardList,
   "Purchase Requests": Gauge,
-  "Cost Tracking": Gauge,
-  "Budget vs Actual": Gauge,
   Inventory: Boxes,
   "Inventory Overview": Boxes,
   Items: Boxes,
@@ -41,7 +39,6 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Issues: ClipboardList,
   Vendors: Factory,
   Locations: Factory,
-  Profit: BarChart3,
   "Activity Log": ClipboardList,
   Rigs: HardHat,
   Employees: Settings,
@@ -70,7 +67,7 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
   },
   {
     title: "Profitability",
-    labels: ["Revenue", "Cost Tracking", "Profit", "Budget vs Actual"]
+    labels: ["Spending"]
   },
   {
     title: "System",
@@ -296,15 +293,11 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                         item.href === "/clients" && pathname.startsWith("/clients/setup");
                       const employeeSetupAliasActive =
                         item.href === "/employees" && pathname.startsWith("/employees/setup");
-                      const costTrackingChildActive =
-                        item.href === "/cost-tracking" &&
-                        pathname.startsWith("/cost-tracking/budget-vs-actual");
                       const isActive =
                         purchaseRequestsAliasActive ||
                         pathname === item.href ||
                         (item.href !== "/" &&
                           pathname.startsWith(`${item.href}/`) &&
-                          !costTrackingChildActive &&
                           !rigSetupAliasActive &&
                           !projectSetupAliasActive &&
                           !clientSetupAliasActive &&
@@ -317,8 +310,6 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                               "flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-all duration-200 ease-out",
                               isActive
                                 ? "bg-brand-100 text-brand-900 shadow-sm"
-                                : costTrackingChildActive
-                                  ? "border border-brand-100 bg-brand-50/60 text-brand-800"
                                 : "text-ink-700 hover:translate-x-[1px] hover:bg-slate-100",
                               isDashboardEntry &&
                                 !isActive &&
@@ -426,8 +417,11 @@ function resolveActiveInventoryChildHref({
 }) {
   if (pathname === "/inventory/items") return "/inventory/items";
   if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
-  if (pathname === "/inventory/expenses") return "/inventory/expenses";
   if (pathname === "/inventory/issues") return "/inventory/issues";
+  if (pathname === "/inventory/expenses") {
+    const overview = children.find((child) => child.href === "/inventory");
+    return overview ? overview.href : "";
+  }
   if (pathname !== "/inventory") return "";
 
   const overview = children.find((child) => child.href === "/inventory");

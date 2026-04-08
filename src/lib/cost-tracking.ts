@@ -11,6 +11,7 @@ export type CostSpendCategoryKey =
 export type CostTrendGranularity = "week" | "month";
 
 export interface CostTrackingFilters {
+  projectId?: string | null;
   clientId: string | null;
   rigId: string | null;
   from: string | null;

@@ -45,6 +45,7 @@ type InventoryMovementLike = {
   item?: { name?: string | null; sku?: string | null } | null;
   rig?: { rigCode?: string | null } | null;
   project?: { id?: string | null; name?: string | null } | null;
+  drillReport?: { id?: string | null; holeNumber?: string | null } | null;
   maintenanceRequest?:
     | {
         id?: string | null;
@@ -59,6 +60,7 @@ type InventoryMovementLike = {
     | {
         id?: string;
         reasonType?: string | null;
+        drillReportId?: string | null;
         breakdownReportId?: string | null;
         maintenanceRequestId?: string | null;
         maintenanceRequest?: {
@@ -67,6 +69,7 @@ type InventoryMovementLike = {
           breakdownReportId?: string | null;
         } | null;
         breakdownReport?: { id?: string | null; title?: string | null } | null;
+        drillReport?: { id?: string | null; holeNumber?: string | null } | null;
       }
     | null;
 };
@@ -192,10 +195,21 @@ export function buildIssueOperationalContext(
 }
 
 export function deriveMovementPurpose(movement: InventoryMovementLike): {
-  label: "Stock Replenishment" | "Maintenance Usage" | "Breakdown Usage" | "Operating / Project Usage" | "Adjustment / Unlinked";
+  label:
+    | "Stock Replenishment"
+    | "Maintenance Usage"
+    | "Breakdown Usage"
+    | "Drilling Report Usage"
+    | "Operating / Project Usage"
+    | "Adjustment / Unlinked";
   detail: string;
 } {
   const usageReasonType = (movement.linkedUsageRequest?.reasonType || "").toUpperCase();
+  const hasDrillingReportLink =
+    usageReasonType === "DRILLING_REPORT" ||
+    Boolean(movement.drillReport?.id) ||
+    Boolean(movement.linkedUsageRequest?.drillReport?.id) ||
+    Boolean(movement.linkedUsageRequest?.drillReportId);
   const hasBreakdownLink =
     usageReasonType === "BREAKDOWN" ||
     Boolean(movement.breakdownReport?.id) ||
@@ -219,6 +233,12 @@ export function deriveMovementPurpose(movement: InventoryMovementLike): {
     return {
       label: "Maintenance Usage",
       detail: "This movement is linked to a maintenance case and supports repair/maintenance activity."
+    };
+  }
+  if (hasDrillingReportLink) {
+    return {
+      label: "Drilling Report Usage",
+      detail: "This movement is linked to a drilling report and tracks consumables used for daily drilling activity."
     };
   }
   if (movement.movementType === "IN") {
@@ -289,14 +309,18 @@ export function deriveMovementRecognitionSubLine(
 export function movementLinkedToDisplay(movement: InventoryMovementLike): ReactNode {
   const linkedMaintenance =
     movement.linkedUsageRequest?.maintenanceRequest || movement.maintenanceRequest || null;
+  const linkedDrillReport =
+    movement.linkedUsageRequest?.drillReport || movement.drillReport || null;
+  const drillReportLabel = linkedDrillReport?.holeNumber ? `Report ${linkedDrillReport.holeNumber}` : null;
   const linkedBreakdown =
     movement.breakdownReport ||
     movement.linkedUsageRequest?.breakdownReport ||
     movement.linkedBreakdown ||
     null;
-  const primaryCase = linkedMaintenance?.requestCode || linkedBreakdown?.title || null;
+  const primaryCase = drillReportLabel || linkedMaintenance?.requestCode || linkedBreakdown?.title || null;
   const secondaryContext = movement.project?.name || movement.rig?.rigCode || null;
   const allContextValues = [
+    drillReportLabel,
     linkedMaintenance?.requestCode || null,
     linkedBreakdown?.title || null,
     movement.project?.name || null,

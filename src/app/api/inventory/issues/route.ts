@@ -14,13 +14,17 @@ export async function GET(request: NextRequest) {
 
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const scopedDateFilter = buildDateFilter(fromDate, toDate);
+  const lockedProjectScope = Boolean(projectId);
 
   const movementWhere: Prisma.InventoryMovementWhereInput = {
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(buildDateFilter(fromDate, toDate) ? { date: buildDateFilter(fromDate, toDate) } : {})
+    ...(projectId ? { projectId } : {}),
+    ...(!lockedProjectScope && clientId ? { clientId } : {}),
+    ...(!lockedProjectScope && rigId ? { rigId } : {}),
+    ...(scopedDateFilter ? { date: scopedDateFilter } : {})
   };
 
   const scopedMovements = await prisma.inventoryMovement.findMany({
@@ -35,7 +39,7 @@ export async function GET(request: NextRequest) {
     }
   });
 
-  const hasScopeFilters = Boolean(clientId || rigId || fromDate || toDate);
+  const hasScopeFilters = Boolean(projectId || clientId || rigId || fromDate || toDate);
   const scopedItemIds = Array.from(new Set(scopedMovements.map((movement) => movement.itemId)));
 
   const [items, suppliers, learningLogs, maintenanceRequests] = await Promise.all([
@@ -81,9 +85,10 @@ export async function GET(request: NextRequest) {
     }),
     prisma.maintenanceRequest.findMany({
       where: {
-        ...(clientId ? { clientId } : {}),
-        ...(rigId ? { rigId } : {}),
-        ...(buildDateFilter(fromDate, toDate) ? { requestDate: buildDateFilter(fromDate, toDate) } : {}),
+        ...(projectId ? { projectId } : {}),
+        ...(!lockedProjectScope && clientId ? { clientId } : {}),
+        ...(!lockedProjectScope && rigId ? { rigId } : {}),
+        ...(scopedDateFilter ? { requestDate: scopedDateFilter } : {}),
         status: { in: ["IN_REPAIR", "COMPLETED"] }
       },
       select: {
@@ -172,6 +177,7 @@ export async function GET(request: NextRequest) {
     filters: {
       from: request.nextUrl.searchParams.get("from"),
       to: request.nextUrl.searchParams.get("to"),
+      projectId: projectId || "all",
       clientId: clientId || "all",
       rigId: rigId || "all"
     },

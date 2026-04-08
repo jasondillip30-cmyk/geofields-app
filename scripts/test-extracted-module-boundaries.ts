@@ -19,6 +19,7 @@ import {
 } from "@/lib/ai/contextual-copilot-response";
 import type { CopilotFocusItem, CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { suggestInventoryMatch } from "@/lib/inventory-receipt-intake-match";
+import { calculateProjectRevenueFromBillableLines } from "@/lib/project-revenue-calculator";
 
 function run(name: string, testFn: () => void) {
   try {
@@ -226,6 +227,68 @@ run("receipt match still links when signal is specific", () => {
   ]);
   assert.equal(result.itemId, "a");
   assert.notEqual(result.confidence, "NONE");
+});
+
+run("project revenue calculator handles single mapped line", () => {
+  const result = calculateProjectRevenueFromBillableLines({
+    activeRateItems: [{ itemCode: "METER_DRILLED", label: "Meters drilled", unit: "m", unitRate: 50 }],
+    approvedReports: [{ billableLines: [{ itemCode: "METER_DRILLED", quantity: 100, unit: "m" }] }]
+  });
+  assert.equal(result.lineItems.length, 1);
+  assert.equal(result.totalRevenue, 5000);
+  assert.equal(result.lineItems[0]?.revenue, 5000);
+});
+
+run("project revenue calculator aggregates multiple items", () => {
+  const result = calculateProjectRevenueFromBillableLines({
+    activeRateItems: [
+      { itemCode: "METER_DRILLED", label: "Meters drilled", unit: "m", unitRate: 40 },
+      { itemCode: "RIG_MOVE", label: "Rig move", unit: "move", unitRate: 300 }
+    ],
+    approvedReports: [
+      {
+        billableLines: [
+          { itemCode: "METER_DRILLED", quantity: 50, unit: "m" },
+          { itemCode: "RIG_MOVE", quantity: 2, unit: "move" }
+        ]
+      },
+      {
+        billableLines: [
+          { itemCode: "METER_DRILLED", quantity: 25, unit: "m" },
+          { itemCode: "RIG_MOVE", quantity: 1, unit: "move" }
+        ]
+      }
+    ]
+  });
+  assert.equal(result.lineItems.length, 2);
+  assert.equal(result.totalRevenue, 3900);
+});
+
+run("project revenue calculator skips orphan item codes", () => {
+  const result = calculateProjectRevenueFromBillableLines({
+    activeRateItems: [{ itemCode: "METER_DRILLED", label: "Meters drilled", unit: "m", unitRate: 20 }],
+    approvedReports: [{ billableLines: [{ itemCode: "RIG_MOVE", quantity: 3, unit: "move" }] }]
+  });
+  assert.equal(result.lineItems.length, 0);
+  assert.equal(result.totalRevenue, 0);
+});
+
+run("project revenue calculator skips unit mismatches", () => {
+  const result = calculateProjectRevenueFromBillableLines({
+    activeRateItems: [{ itemCode: "METER_DRILLED", label: "Meters drilled", unit: "m", unitRate: 20 }],
+    approvedReports: [{ billableLines: [{ itemCode: "METER_DRILLED", quantity: 10, unit: "meter" }] }]
+  });
+  assert.equal(result.lineItems.length, 0);
+  assert.equal(result.totalRevenue, 0);
+});
+
+run("project revenue calculator ignores invalid numeric values", () => {
+  const result = calculateProjectRevenueFromBillableLines({
+    activeRateItems: [{ itemCode: "METER_DRILLED", label: "Meters drilled", unit: "m", unitRate: Number.NaN }],
+    approvedReports: [{ billableLines: [{ itemCode: "METER_DRILLED", quantity: Number.NaN, unit: "m" }] }]
+  });
+  assert.equal(result.lineItems.length, 0);
+  assert.equal(result.totalRevenue, 0);
 });
 
 console.log("All extracted module boundary checks passed.");

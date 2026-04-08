@@ -28,6 +28,7 @@ export interface BudgetVsActualRow {
 
 export interface BudgetVsActualSummaryResponse {
   filters: {
+    projectId?: string;
     clientId: string;
     rigId: string;
     from: string | null;

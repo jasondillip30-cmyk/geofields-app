@@ -3,14 +3,16 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Eye, X } from "lucide-react";
+import { Eye } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { SystemFlowBar } from "@/components/inventory/system-flow-bar";
 import { InventoryIssuesWorkspace } from "@/components/inventory/inventory-issues-workspace";
 import { InventoryMovementsWorkspace } from "@/components/inventory/inventory-movements-workspace";
 import { InventoryManualMovementModal } from "@/components/inventory/inventory-manual-movement-modal";
 import { InventoryIssueWorkflowModal } from "@/components/inventory/inventory-issue-workflow-modal";
+import { ItemDetailModal } from "@/components/inventory/modals/item-detail-modal";
+import { MovementDetailModal } from "@/components/inventory/modals/movement-detail-modal";
+import { RequestUseModal } from "@/components/inventory/modals/request-use-modal";
 import {
   buildIssueOperationalContext,
   deriveMovementRecognitionStatus,
@@ -25,7 +27,6 @@ import {
   FilterSelect,
   InputField,
   IssueSeverityBadge,
-  SummaryBadge,
   StockSeverityBadge,
   UsageRequestStatusBadge,
   isOperationalMaintenanceOpen,
@@ -34,6 +35,7 @@ import {
 } from "@/components/inventory/inventory-page-shared";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { useRole } from "@/components/layout/role-provider";
@@ -70,6 +72,13 @@ export interface InventoryItemRow {
   outOfStock: boolean;
   latestMovementDate: string | null;
   latestMovementType: string | null;
+  approvedProjectContext?: {
+    approvedQuantity: number;
+    availableApprovedQuantity: number;
+    availableApprovedValue: number;
+    usedQuantity: number;
+    usedValue: number;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -97,7 +106,7 @@ export interface InventoryLocation {
   itemCount: number;
 }
 
-interface InventoryMovementRow {
+export interface InventoryMovementRow {
   id: string;
   itemId: string;
   movementType: "IN" | "OUT" | "ADJUSTMENT" | "TRANSFER";
@@ -120,6 +129,7 @@ interface InventoryMovementRow {
   } | null;
   rig: { id: string; rigCode: string } | null;
   project: { id: string; name: string } | null;
+  drillReport?: { id: string; holeNumber: string; date: string } | null;
   client: { id: string; name: string } | null;
   maintenanceRequest: {
     id: string;
@@ -151,7 +161,8 @@ interface InventoryMovementRow {
     id: string;
     status: string;
     reason: string;
-    reasonType?: "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+    reasonType?: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "OTHER";
+    drillReportId?: string | null;
     breakdownReportId?: string | null;
     maintenanceRequestId?: string | null;
     requestedForDate?: string | null;
@@ -171,6 +182,11 @@ interface InventoryMovementRow {
       status: string;
       severity: string;
     } | null;
+    drillReport?: {
+      id: string;
+      holeNumber: string;
+      date: string;
+    } | null;
   } | null;
   linkedBreakdown?: {
     id: string;
@@ -182,6 +198,24 @@ interface InventoryMovementRow {
 }
 
 interface InventoryOverviewResponse {
+  projectLinked: {
+    approvedItems: number;
+    approvedQuantity: number;
+    availableApprovedQuantity: number;
+    availableApprovedValue: number;
+    usedQuantity: number;
+    usedValue: number;
+    projectLinkedIn: number;
+    projectLinkedOut: number;
+    recognizedInventoryCost: number;
+    requestContext: {
+      total: number;
+      submitted: number;
+      pending: number;
+      approved: number;
+      rejected: number;
+    };
+  } | null;
   overview: {
     totalItems: number;
     totalUnitsInStock: number;
@@ -206,7 +240,7 @@ interface InventoryOverviewResponse {
   };
 }
 
-interface InventoryItemDetailsResponse {
+export interface InventoryItemDetailsResponse {
   data: InventoryItemRow;
   movements: InventoryMovementRow[];
   usageHistory: InventoryMovementRow[];
@@ -331,13 +365,14 @@ interface LocationFormState {
   description: string;
 }
 
-interface UseRequestFormState {
+export interface UseRequestFormState {
   quantity: string;
-  reasonType: "MAINTENANCE" | "BREAKDOWN" | "";
+  reasonType: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "";
   reasonDetails: string;
   maintenanceRigId: string;
   projectId: string;
   rigId: string;
+  drillReportId: string;
   maintenanceRequestId: string;
   breakdownReportId: string;
   locationId: string;
@@ -352,7 +387,7 @@ export interface MaintenanceContextOption {
   project: { id: string; name: string } | null;
 }
 
-interface BreakdownContextOption {
+export interface BreakdownContextOption {
   id: string;
   title: string;
   status: string;
@@ -366,7 +401,8 @@ interface InventoryUsageRequestRow {
   id: string;
   quantity: number;
   reason: string;
-  reasonType?: "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+  reasonType?: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "OTHER";
+  drillReportId?: string | null;
   breakdownReportId?: string | null;
   status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
   decisionNote: string | null;
@@ -385,11 +421,19 @@ interface InventoryUsageRequestRow {
     status: string;
     severity: string;
   } | null;
+  drillReport: {
+    id: string;
+    holeNumber: string;
+    date: string;
+    project: { id: string; name: string } | null;
+    rig: { id: string; rigCode: string } | null;
+  } | null;
   requestedBy: { id: string; fullName: string; role: string } | null;
   decidedBy: { id: string; fullName: string; role: string } | null;
 }
 
 const defaultOverview: InventoryOverviewResponse = {
+  projectLinked: null,
   overview: {
     totalItems: 0,
     totalUnitsInStock: 0,
@@ -479,11 +523,21 @@ function InventoryPageContent() {
   const preselectedBreakdownId = searchParams.get("breakdownId")?.trim() || "";
   const preselectedMaintenanceRequestId =
     searchParams.get("maintenanceRequestId")?.trim() || "";
+  const preselectedProjectId = searchParams.get("projectId")?.trim() || "";
+  const preselectedRigId = searchParams.get("rigId")?.trim() || "";
   const canManage = Boolean(user?.role && canAccess(user.role, "inventory:manage"));
   const canApproveMovement = Boolean(user?.role && canManageExpenseApprovalActions(user.role));
 
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
-  const [projects, setProjects] = useState<Array<{ id: string; name: string; clientId: string }>>([]);
+  const [projects, setProjects] = useState<
+    Array<{
+      id: string;
+      name: string;
+      clientId: string;
+      assignedRigId: string | null;
+      backupRigId: string | null;
+    }>
+  >([]);
   const [rigs, setRigs] = useState<Array<{ id: string; rigCode: string }>>([]);
   const [maintenanceRequests, setMaintenanceRequests] = useState<MaintenanceContextOption[]>([]);
   const [breakdownReports, setBreakdownReports] = useState<BreakdownContextOption[]>([]);
@@ -559,6 +613,7 @@ function InventoryPageContent() {
     maintenanceRigId: "",
     projectId: "",
     rigId: "",
+    drillReportId: "",
     maintenanceRequestId: "",
     breakdownReportId: "",
     locationId: "",
@@ -610,6 +665,11 @@ function InventoryPageContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
+  const isSingleProjectScope = filters.projectId !== "all";
+  const scopedProject = useMemo(
+    () => (isSingleProjectScope ? projects.find((project) => project.id === filters.projectId) || null : null),
+    [filters.projectId, isSingleProjectScope, projects]
+  );
 
   const selectedClientLabel = useMemo(() => {
     if (filters.clientId === "all") {
@@ -694,6 +754,9 @@ function InventoryPageContent() {
   const filteredMovements = useMemo(() => {
     const query = movementQuery.trim().toLowerCase();
     return movements.filter((movement) => {
+      if (isSingleProjectScope && movement.movementType !== "IN" && movement.movementType !== "OUT") {
+        return false;
+      }
       if (movementTypeFilter !== "all" && movement.movementType !== movementTypeFilter) {
         return false;
       }
@@ -713,8 +776,45 @@ function InventoryPageContent() {
         .toLowerCase();
       return haystack.includes(query);
     });
-  }, [movementQuery, movementTypeFilter, movements]);
+  }, [isSingleProjectScope, movementQuery, movementTypeFilter, movements]);
   const visibleMovements = useMemo(() => filteredMovements.slice(0, 80), [filteredMovements]);
+  const recognizedProjectCostRows = useMemo(
+    () =>
+      movements
+        .filter(
+          (movement) =>
+            movement.movementType === "OUT" &&
+            String(movement.expense?.approvalStatus || "").toUpperCase() === "APPROVED"
+        )
+        .slice(0, 8),
+    [movements]
+  );
+  const projectUsageSummary = useMemo(() => {
+    if (!isSingleProjectScope) {
+      return null;
+    }
+    return items.reduce(
+      (summary, item) => {
+        const context = item.approvedProjectContext;
+        if (!context) {
+          return summary;
+        }
+        summary.approvedItems += 1;
+        summary.availableQuantity += context.availableApprovedQuantity || 0;
+        summary.availableValue += context.availableApprovedValue || 0;
+        summary.usedQuantity += context.usedQuantity || 0;
+        summary.usedValue += context.usedValue || 0;
+        return summary;
+      },
+      {
+        approvedItems: 0,
+        availableQuantity: 0,
+        availableValue: 0,
+        usedQuantity: 0,
+        usedValue: 0
+      }
+    );
+  }, [isSingleProjectScope, items]);
   const movementLedgerSummary = useMemo(() => {
     const summary = {
       total: filteredMovements.length,
@@ -909,11 +1009,23 @@ function InventoryPageContent() {
 
     setClients((clientsPayload.data || []).map((client: { id: string; name: string }) => ({ id: client.id, name: client.name })));
     setProjects(
-      (projectsPayload.data || []).map((project: { id: string; name: string; clientId: string }) => ({
-        id: project.id,
-        name: project.name,
-        clientId: project.clientId
-      }))
+      (
+        projectsPayload.data || []
+      ).map(
+        (project: {
+          id: string;
+          name: string;
+          clientId: string;
+          assignedRigId?: string | null;
+          backupRigId?: string | null;
+        }) => ({
+          id: project.id,
+          name: project.name,
+          clientId: project.clientId,
+          assignedRigId: project.assignedRigId || null,
+          backupRigId: project.backupRigId || null
+        })
+      )
     );
     setRigs((rigsPayload.data || []).map((rig: { id: string; rigCode: string }) => ({ id: rig.id, rigCode: rig.rigCode })));
     setMaintenanceRequests(
@@ -980,28 +1092,40 @@ function InventoryPageContent() {
       const query = new URLSearchParams();
       if (itemSearch.trim()) query.set("search", itemSearch.trim());
       if (itemCategoryFilter !== "all") query.set("category", itemCategoryFilter);
-      if (supplierFilter !== "all") query.set("supplierId", supplierFilter);
-      if (locationFilter !== "all") query.set("locationId", locationFilter);
+      if (!isSingleProjectScope && supplierFilter !== "all") query.set("supplierId", supplierFilter);
+      if (!isSingleProjectScope && locationFilter !== "all") query.set("locationId", locationFilter);
       if (stockFilter !== "all") query.set("stock", stockFilter);
+      if (isSingleProjectScope) query.set("projectId", filters.projectId);
 
       const movementQuery = new URLSearchParams();
       if (filters.from) movementQuery.set("from", filters.from);
       if (filters.to) movementQuery.set("to", filters.to);
-      if (filters.clientId !== "all") movementQuery.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") movementQuery.set("rigId", filters.rigId);
+      if (isSingleProjectScope) {
+        movementQuery.set("projectId", filters.projectId);
+        movementQuery.set("projectView", "locked");
+      } else {
+        if (filters.clientId !== "all") movementQuery.set("clientId", filters.clientId);
+        if (filters.rigId !== "all") movementQuery.set("rigId", filters.rigId);
+      }
 
       const [itemsRes, movementsRes, overviewRes, issuesRes] = await Promise.all([
         fetch(`/api/inventory/items?${query.toString()}`, { cache: "no-store" }),
         fetch(`/api/inventory/movements?${movementQuery.toString()}`, { cache: "no-store" }),
         fetch(`/api/inventory/overview?${movementQuery.toString()}`, { cache: "no-store" }),
-        fetch(`/api/inventory/issues?${movementQuery.toString()}`, { cache: "no-store" })
+        isSingleProjectScope
+          ? Promise.resolve(null)
+          : fetch(`/api/inventory/issues?${movementQuery.toString()}`, { cache: "no-store" })
       ]);
 
       const [itemsPayload, movementsPayload, overviewPayload, issuesPayload] = await Promise.all([
         itemsRes.ok ? itemsRes.json() : Promise.resolve({ data: [] }),
         movementsRes.ok ? movementsRes.json() : Promise.resolve({ data: [] }),
         overviewRes.ok ? overviewRes.json() : Promise.resolve(defaultOverview),
-        issuesRes.ok ? issuesRes.json() : Promise.resolve(defaultIssues)
+        isSingleProjectScope
+          ? Promise.resolve(defaultIssues)
+          : issuesRes && issuesRes.ok
+            ? issuesRes.json()
+            : Promise.resolve(defaultIssues)
       ]);
 
       setItems(itemsPayload.data || []);
@@ -1021,7 +1145,20 @@ function InventoryPageContent() {
       setLoading(false);
       setIssuesLoading(false);
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to, itemCategoryFilter, itemSearch, locationFilter, selectedItemId, stockFilter, supplierFilter]);
+  }, [
+    filters.clientId,
+    filters.from,
+    filters.projectId,
+    filters.rigId,
+    filters.to,
+    isSingleProjectScope,
+    itemCategoryFilter,
+    itemSearch,
+    locationFilter,
+    selectedItemId,
+    stockFilter,
+    supplierFilter
+  ]);
 
   const loadMyUsageRequests = useCallback(
     async (statusOverride?: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => {
@@ -1204,14 +1341,14 @@ function InventoryPageContent() {
   }, [canManage, pathname, searchParams]);
 
   useEffect(() => {
-    if (pathname !== "/inventory/items") {
+    if (pathname !== "/inventory/items" || isSingleProjectScope) {
       setShowCreateItemForm(false);
       return;
     }
     if (searchParams.get("create") === "1") {
       setShowCreateItemForm(true);
     }
-  }, [pathname, searchParams]);
+  }, [isSingleProjectScope, pathname, searchParams]);
 
   async function submitItemForm(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1643,6 +1780,36 @@ function InventoryPageContent() {
     if (!selectedItemDetails?.data?.id) {
       return;
     }
+    const hasLockedProjectContext = isSingleProjectScope && Boolean(scopedProject?.id);
+    if (hasLockedProjectContext && scopedProject) {
+      const lockedProjectRigIds = [scopedProject.assignedRigId, scopedProject.backupRigId].filter(
+        (value): value is string => Boolean(value && value.trim())
+      );
+      const defaultLockedRigId =
+        lockedProjectRigIds.length === 1
+          ? lockedProjectRigIds[0]
+          : selectedItemDetails.data.compatibleRigId &&
+              lockedProjectRigIds.includes(selectedItemDetails.data.compatibleRigId)
+            ? selectedItemDetails.data.compatibleRigId
+            : "";
+
+      setUseRequestError(null);
+      setUseRequestForm({
+        quantity: "1",
+        reasonType: "DRILLING_REPORT",
+        reasonDetails: "",
+        maintenanceRigId: "",
+        projectId: scopedProject.id,
+        rigId: defaultLockedRigId,
+        drillReportId: "",
+        maintenanceRequestId: "",
+        breakdownReportId: "",
+        locationId: selectedItemDetails.data.locationId || "",
+      });
+      setRequestUseModalOpen(true);
+      return;
+    }
+
     const preselectedBreakdown =
       preselectedBreakdownId.length > 0
         ? openBreakdownReports.find((entry) => entry.id === preselectedBreakdownId) || null
@@ -1653,8 +1820,12 @@ function InventoryPageContent() {
             (entry) => entry.id === preselectedMaintenanceRequestId
           ) || null
         : null;
+    const hasPreselectedDrillingContext =
+      preselectedUsageReason === "DRILLING_REPORT" || hasLockedProjectContext;
     const reasonType: UseRequestFormState["reasonType"] =
-      preselectedBreakdown
+      hasPreselectedDrillingContext
+        ? "DRILLING_REPORT"
+        : preselectedBreakdown
         ? "BREAKDOWN"
         : preselectedMaintenance || preselectedUsageReason === "MAINTENANCE"
           ? "MAINTENANCE"
@@ -1683,8 +1854,19 @@ function InventoryPageContent() {
       reasonType,
       reasonDetails: "",
       maintenanceRigId: defaultMaintenanceRigId,
-      projectId: preselectedMaintenance?.project?.id || "",
-      rigId: preselectedMaintenance?.rig?.id || selectedItemDetails.data.compatibleRigId || "",
+      projectId:
+        preselectedMaintenance?.project?.id ||
+        (hasLockedProjectContext ? scopedProject?.id : "") ||
+        (hasPreselectedDrillingContext ? preselectedProjectId : "") ||
+        "",
+      rigId:
+        preselectedMaintenance?.rig?.id ||
+        (hasLockedProjectContext
+          ? scopedProject?.assignedRigId || scopedProject?.backupRigId || ""
+          : "") ||
+        (hasPreselectedDrillingContext ? preselectedRigId : "") ||
+        "",
+      drillReportId: "",
       maintenanceRequestId: defaultMaintenanceRequestId,
       breakdownReportId: preselectedBreakdown?.id || "",
       locationId: selectedItemDetails.data.locationId || "",
@@ -1715,14 +1897,32 @@ function InventoryPageContent() {
       if (quantity > selectedItemDetails.data.quantityInStock) {
         throw new Error("Requested quantity is above stock on hand. Create a purchase request to replenish first.");
       }
+      const isLockedProjectUseFlow = isSingleProjectScope && Boolean(scopedProject?.id);
+      const effectiveReasonType: UseRequestFormState["reasonType"] = isLockedProjectUseFlow
+        ? "DRILLING_REPORT"
+        : useRequestForm.reasonType;
+      const effectiveProjectId =
+        effectiveReasonType === "DRILLING_REPORT"
+          ? (
+              isLockedProjectUseFlow
+                ? scopedProject?.id || ""
+                : useRequestForm.projectId
+            ).trim()
+          : "";
+      const effectiveRigId =
+        effectiveReasonType === "DRILLING_REPORT"
+          ? (useRequestForm.rigId || "").trim()
+          : "";
+
       if (
-        useRequestForm.reasonType !== "MAINTENANCE" &&
-        useRequestForm.reasonType !== "BREAKDOWN"
+        effectiveReasonType !== "MAINTENANCE" &&
+        effectiveReasonType !== "BREAKDOWN" &&
+        effectiveReasonType !== "DRILLING_REPORT"
       ) {
-        throw new Error("Select Maintenance or Breakdown before submitting.");
+        throw new Error("Select Maintenance, Breakdown, or Drilling report before submitting.");
       }
 
-      if (useRequestForm.reasonType === "MAINTENANCE") {
+      if (effectiveReasonType === "MAINTENANCE") {
         if (!useRequestForm.maintenanceRigId) {
           throw new Error("Select a rig under maintenance.");
         }
@@ -1734,7 +1934,7 @@ function InventoryPageContent() {
       }
 
       let resolvedMaintenanceRequestId = useRequestForm.maintenanceRequestId.trim();
-      if (useRequestForm.reasonType === "MAINTENANCE") {
+      if (effectiveReasonType === "MAINTENANCE") {
         if (openMaintenanceRequestsForSelectedRig.length === 1) {
           resolvedMaintenanceRequestId = openMaintenanceRequestsForSelectedRig[0].id;
         } else {
@@ -1749,8 +1949,14 @@ function InventoryPageContent() {
           }
         }
       }
-      if (useRequestForm.reasonType === "BREAKDOWN" && !useRequestForm.breakdownReportId) {
+      if (effectiveReasonType === "BREAKDOWN" && !useRequestForm.breakdownReportId) {
         throw new Error("Select an open breakdown record.");
+      }
+      if (effectiveReasonType === "DRILLING_REPORT" && !effectiveProjectId) {
+        throw new Error("Select a project for drilling usage.");
+      }
+      if (effectiveReasonType === "DRILLING_REPORT" && !effectiveRigId) {
+        throw new Error("Select a project rig for drilling usage.");
       }
 
       const response = await fetch("/api/inventory/usage-requests", {
@@ -1759,19 +1965,26 @@ function InventoryPageContent() {
         body: JSON.stringify({
           itemId: selectedItemDetails.data.id,
           quantity,
-          reasonType: useRequestForm.reasonType,
-          usageReason: useRequestForm.reasonType,
+          reasonType: effectiveReasonType,
+          usageReason: effectiveReasonType,
           reasonDetails: useRequestForm.reasonDetails.trim(),
-          projectId: null,
-          rigId:
-            useRequestForm.reasonType === "MAINTENANCE"
-              ? useRequestForm.maintenanceRigId || null
+          projectId:
+            effectiveReasonType === "DRILLING_REPORT"
+              ? effectiveProjectId || null
               : null,
+          rigId:
+            effectiveReasonType === "MAINTENANCE"
+              ? useRequestForm.maintenanceRigId || null
+              : effectiveReasonType === "DRILLING_REPORT"
+                ? effectiveRigId || null
+              : null,
+          drillReportId: null,
           maintenanceRequestId:
-            useRequestForm.reasonType === "MAINTENANCE"
+            effectiveReasonType === "MAINTENANCE"
               ? resolvedMaintenanceRequestId || null
               : null,
-          breakdownReportId: useRequestForm.breakdownReportId || null,
+          breakdownReportId:
+            effectiveReasonType === "BREAKDOWN" ? useRequestForm.breakdownReportId || null : null,
           locationId: useRequestForm.locationId || null,
           sourceLocationId: useRequestForm.locationId || null,
         })
@@ -1784,7 +1997,7 @@ function InventoryPageContent() {
       setNotice("Inventory usage request submitted for approval.");
       setUsageRequestToast({
         tone: "success",
-        message: "Usage request submitted. It is now pending approval."
+        message: "Usage request submitted."
       });
       setUsageRequestStatusFilter("ALL");
       setUseRequestError(null);
@@ -1796,6 +2009,7 @@ function InventoryPageContent() {
         maintenanceRigId: "",
         projectId: "",
         rigId: "",
+        drillReportId: "",
         maintenanceRequestId: "",
         breakdownReportId: "",
         locationId: "",
@@ -1820,16 +2034,29 @@ function InventoryPageContent() {
   }
 
   function continueToPurchaseRequest() {
+    const isLockedProjectUseFlow = isSingleProjectScope && Boolean(scopedProject?.id);
+    const effectiveReasonType: UseRequestFormState["reasonType"] = isLockedProjectUseFlow
+      ? "DRILLING_REPORT"
+      : useRequestForm.reasonType;
     const query = new URLSearchParams();
 
-    if (useRequestForm.reasonType === "BREAKDOWN") {
+    if (effectiveReasonType === "BREAKDOWN") {
       if (useRequestForm.breakdownReportId) {
         query.set("breakdownId", useRequestForm.breakdownReportId);
       }
       if (selectedBreakdownContext?.project?.id) {
         query.set("projectId", selectedBreakdownContext.project.id);
       }
-    } else if (useRequestForm.reasonType === "MAINTENANCE") {
+    } else if (effectiveReasonType === "DRILLING_REPORT") {
+      if (isLockedProjectUseFlow && scopedProject?.id) {
+        query.set("projectId", scopedProject.id);
+      } else if (useRequestForm.projectId) {
+        query.set("projectId", useRequestForm.projectId);
+      }
+      if (useRequestForm.rigId) {
+        query.set("rigId", useRequestForm.rigId);
+      }
+    } else if (effectiveReasonType === "MAINTENANCE") {
       if (!useRequestForm.maintenanceRigId) {
         setUseRequestError("Select a rig under maintenance first.");
         return;
@@ -1868,13 +2095,29 @@ function InventoryPageContent() {
     router.push(destination);
   }
 
-  const inventorySection = resolveInventorySection(pathname, searchParams.get("section"));
+  const requestedInventorySection = resolveInventorySection(pathname, searchParams.get("section"));
+  const lockedProjectAllowedSections: InventorySection[] = [
+    "overview",
+    "items",
+    "stock-movements"
+  ];
+  const inventorySection =
+    isSingleProjectScope && !lockedProjectAllowedSections.includes(requestedInventorySection)
+      ? "overview"
+      : requestedInventorySection;
+  const lockedProjectSectionRedirected =
+    isSingleProjectScope && requestedInventorySection !== inventorySection;
   const showOverview = inventorySection === "overview";
   const showItems = inventorySection === "items";
   const showMovements = inventorySection === "stock-movements";
   const showIssues = inventorySection === "issues";
+  const showIssuesWorkspace = showIssues && !isSingleProjectScope;
+  const showIssuesLockedNotice = showIssues && isSingleProjectScope;
   const showSuppliers = inventorySection === "suppliers";
   const showLocations = inventorySection === "locations";
+  const createFromDeepLinkBlocked =
+    showItems && isSingleProjectScope && searchParams.get("create") === "1";
+  const isProjectScopedInventoryView = showOverview || showMovements || showIssues || showItems;
   const pageTitle = showOverview
     ? "Inventory Overview"
     : showItems
@@ -1887,16 +2130,24 @@ function InventoryPageContent() {
             ? "Inventory Suppliers"
             : "Inventory Locations";
   const pageSubtitle = showOverview
-    ? "Dashboard summary and quick navigation for inventory operations."
+    ? isSingleProjectScope
+      ? "Project working view: approved, available, used, and project-linked inventory activity."
+      : "Dashboard summary and quick navigation for inventory operations."
     : showItems
-      ? "Manage items, stock levels, suppliers, and linked history from one workspace."
+      ? isSingleProjectScope
+        ? "Approved items for the locked project. Warehouse stock remains global."
+        : "Manage items, stock levels, suppliers, and linked history from one workspace."
       : showMovements
-        ? "Track inventory movement history, operational linkage, and cost recognition."
+        ? isSingleProjectScope
+          ? "Track project restock-in and usage-out activity."
+          : "Track inventory movement history, operational linkage, and cost recognition."
         : showIssues
-          ? "Resolve gaps in inventory, usage, and cost flow."
-      : showSuppliers
-        ? "Manage supplier records and purchasing context."
-        : "Manage warehouse and site stock locations.";
+          ? isSingleProjectScope
+            ? "Inventory issues are available in All projects mode."
+            : "Resolve gaps in inventory, usage, and cost flow."
+          : showSuppliers
+            ? "Manage supplier records and purchasing context."
+            : "Manage warehouse and site stock locations.";
 
   const copilotPageKey: CopilotPageContext["pageKey"] = showOverview
     ? "inventory-overview"
@@ -1915,19 +2166,52 @@ function InventoryPageContent() {
     [filters]
   );
 
+  useEffect(() => {
+    if (!lockedProjectSectionRedirected) {
+      return;
+    }
+    const nextQuery = new URLSearchParams(searchParams.toString());
+    nextQuery.set("section", "overview");
+    const query = nextQuery.toString();
+    router.replace(query ? `/inventory?${query}` : "/inventory");
+  }, [lockedProjectSectionRedirected, router, searchParams]);
+
   const copilotContext = useMemo<CopilotPageContext>(() => {
-    const summaryMetrics: CopilotPageContext["summaryMetrics"] = [
-      { key: "totalItems", label: "Total Items", value: overview.overview.totalItems },
-      { key: "unitsInStock", label: "Units In Stock", value: overview.overview.totalUnitsInStock },
-      { key: "inventoryValue", label: "Inventory Value", value: overview.overview.totalInventoryValue },
-      { key: "lowStock", label: "Low Stock", value: overview.overview.lowStockCount },
-      { key: "outOfStock", label: "Out of Stock", value: overview.overview.outOfStockCount },
-      { key: "inventoryIssues", label: "Inventory Issues", value: issuesResponse.summary.total },
-      { key: "movements", label: "Recent Movements", value: movements.length }
-    ];
+    const summaryMetrics: CopilotPageContext["summaryMetrics"] = isSingleProjectScope
+      ? [
+          { key: "approvedItems", label: "Approved Items", value: overview.projectLinked?.approvedItems || 0 },
+          {
+            key: "availableApprovedQty",
+            label: "Available Approved Quantity",
+            value: overview.projectLinked?.availableApprovedQuantity || 0
+          },
+          {
+            key: "availableApprovedValue",
+            label: "Available Approved Value",
+            value: overview.projectLinked?.availableApprovedValue || 0
+          },
+          { key: "usedQty", label: "Used Quantity", value: overview.projectLinked?.usedQuantity || 0 },
+          { key: "usedValue", label: "Used Value", value: overview.projectLinked?.usedValue || 0 },
+          { key: "projectIn", label: "Project-linked IN", value: overview.projectLinked?.projectLinkedIn || 0 },
+          { key: "projectOut", label: "Project-linked OUT", value: overview.projectLinked?.projectLinkedOut || 0 },
+          {
+            key: "recognizedProjectCost",
+            label: "Recognized Inventory Cost",
+            value: overview.projectLinked?.recognizedInventoryCost || 0
+          }
+        ]
+      : [
+          { key: "totalItems", label: "Total Items", value: overview.overview.totalItems },
+          { key: "unitsInStock", label: "Units In Stock", value: overview.overview.totalUnitsInStock },
+          { key: "inventoryValue", label: "Inventory Value", value: overview.overview.totalInventoryValue },
+          { key: "lowStock", label: "Low Stock", value: overview.overview.lowStockCount },
+          { key: "outOfStock", label: "Out of Stock", value: overview.overview.outOfStockCount },
+          { key: "inventoryIssues", label: "Inventory Issues", value: issuesResponse.summary.total },
+          { key: "movements", label: "Recent Movements", value: movements.length }
+        ];
 
     const tablePreviews: CopilotPageContext["tablePreviews"] = [];
-    if (showOverview) {
+    if (showOverview && !isSingleProjectScope) {
       tablePreviews.push({
         key: "inventory-low-stock",
         title: "Low Stock Alerts",
@@ -1987,7 +2271,7 @@ function InventoryPageContent() {
         }))
       });
     }
-    if (showIssues) {
+    if (showIssuesWorkspace) {
       tablePreviews.push({
         key: "inventory-issues",
         title: "Inventory Issues",
@@ -2042,7 +2326,8 @@ function InventoryPageContent() {
     }
 
     const priorityItems: CopilotPageContext["priorityItems"] = [
-      ...stockAlertRows.slice(0, 3).map((item) => ({
+      ...(!isSingleProjectScope
+        ? stockAlertRows.slice(0, 3).map((item) => ({
         id: item.id,
         label: `${item.name} (${item.sku})`,
         reason:
@@ -2055,8 +2340,10 @@ function InventoryPageContent() {
         issueType: item.severity === "CRITICAL" ? "OUT_OF_STOCK" : "LOW_STOCK",
         sectionId: "inventory-low-stock-section",
         targetPageKey: "inventory-overview"
-      })),
-      ...filteredIssues
+      }))
+        : []),
+      ...(!isSingleProjectScope
+        ? filteredIssues
         .filter((issue) => issue.severity === "HIGH" || issue.severity === "MEDIUM")
         .slice(0, 3)
         .map((issue) => ({
@@ -2070,7 +2357,8 @@ function InventoryPageContent() {
           sectionId: "inventory-issues-section",
           targetPageKey: "inventory-issues",
           confidence: issue.confidence && issue.confidence !== "NONE" ? issue.confidence : null
-        })),
+        }))
+        : []),
       ...filteredMovements
         .filter((movement) => movement.movementType === "OUT" && (movement.totalCost || 0) > 0)
         .sort((a, b) => (b.totalCost || 0) - (a.totalCost || 0))
@@ -2131,19 +2419,23 @@ function InventoryPageContent() {
           pageKey: "inventory-stock-movements",
           sectionId: "inventory-movements-section"
         },
-        {
-          label: "Open Purchase Follow-up",
-          href: buildHref("/purchasing/receipt-follow-up"),
-          reason: "Process receipts and link evidence.",
-          pageKey: "inventory-receipt-intake"
-        },
-        {
-          label: "Open Inventory Issues",
-          href: buildHref("/inventory/issues"),
-          reason: "Resolve inventory data-quality risks.",
-          pageKey: "inventory-issues",
-          sectionId: "inventory-issues-section"
-        }
+        ...(!isSingleProjectScope
+          ? [
+              {
+                label: "Open Purchase Follow-up",
+                href: buildHref("/purchasing/receipt-follow-up"),
+                reason: "Process receipts and link evidence.",
+                pageKey: "inventory-receipt-intake"
+              },
+              {
+                label: "Open Inventory Issues",
+                href: buildHref("/inventory/issues"),
+                reason: "Resolve inventory data-quality risks.",
+                pageKey: "inventory-issues",
+                sectionId: "inventory-issues-section"
+              }
+            ]
+          : [])
       ],
       notes: [
         `Current inventory workspace section: ${pageTitle}.`,
@@ -2159,10 +2451,19 @@ function InventoryPageContent() {
     filters.to,
     filteredIssues,
     filteredMovements,
+    isSingleProjectScope,
     items,
     issuesResponse.summary.total,
     locations,
     movements.length,
+    overview.projectLinked?.approvedItems,
+    overview.projectLinked?.availableApprovedQuantity,
+    overview.projectLinked?.availableApprovedValue,
+    overview.projectLinked?.projectLinkedIn,
+    overview.projectLinked?.projectLinkedOut,
+    overview.projectLinked?.recognizedInventoryCost,
+    overview.projectLinked?.usedQuantity,
+    overview.projectLinked?.usedValue,
     overview.overview.lowStockCount,
     overview.overview.outOfStockCount,
     overview.overview.totalInventoryValue,
@@ -2171,7 +2472,7 @@ function InventoryPageContent() {
     pageTitle,
     selectedItemDetails?.data?.name,
     selectedItemId,
-    showIssues,
+    showIssuesWorkspace,
     showLocations,
     showMovements,
     showItems,
@@ -2245,7 +2546,14 @@ function InventoryPageContent() {
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
         )}
 
-        <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
+        {isSingleProjectScope && isProjectScopedInventoryView ? (
+          <ProjectLockedBanner
+            projectId={filters.projectId}
+            projectName={scopedProject?.name || null}
+          />
+        ) : (
+          <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
+        )}
 
         <section className="gf-page-header">
           <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2266,7 +2574,7 @@ function InventoryPageContent() {
             <div className={cn("flex flex-wrap gap-2", showMovements ? "ml-auto justify-end" : "")}>
               {showOverview ? (
                 <>
-                  {canManage ? (
+                  {canManage && !isSingleProjectScope ? (
                     <>
                       <Link href="/inventory/items?create=1" className="gf-btn-primary px-3 py-1.5 text-xs">
                         New Item
@@ -2276,13 +2584,15 @@ function InventoryPageContent() {
                       </Link>
                     </>
                   ) : null}
-                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Complete Purchase
-                  </Link>
+                  {!isSingleProjectScope ? (
+                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                      Complete Purchase
+                    </Link>
+                  ) : null}
                 </>
               ) : showMovements ? (
                 <>
-                  {canManage ? (
+                  {canManage && !isSingleProjectScope ? (
                     <button
                       type="button"
                       onClick={() => setManualMovementModalOpen(true)}
@@ -2291,9 +2601,11 @@ function InventoryPageContent() {
                       New Manual Adjustment
                     </button>
                   ) : null}
-                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Open Purchase Follow-up
-                  </Link>
+                  {!isSingleProjectScope ? (
+                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                      Open Purchase Follow-up
+                    </Link>
+                  ) : null}
                   <Link href="/inventory?section=overview" className="gf-btn-secondary px-3 py-1.5 text-xs">
                     Back to Overview
                   </Link>
@@ -2303,32 +2615,144 @@ function InventoryPageContent() {
                   <Link href="/inventory" className="gf-btn-secondary px-3 py-1.5 text-xs">
                     Back to Overview
                   </Link>
-                  <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Open Purchase Follow-up
-                  </Link>
+                  {!isSingleProjectScope ? (
+                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                      Open Purchase Follow-up
+                    </Link>
+                  ) : null}
                 </>
               )}
             </div>
           </div>
           <div className="mt-4 border-t border-slate-200/80" />
+          {isSingleProjectScope && showOverview ? (
+            <div className="mt-3 gf-guided-strip">
+              <p className="gf-guided-strip-title">Today in this project</p>
+              <div className="gf-guided-step-list">
+                <p className="gf-guided-step">1. Check what is available for this project.</p>
+                <p className="gf-guided-step">2. Record usage through normal project workflows.</p>
+                <p className="gf-guided-step">3. Review used quantity and recognized cost.</p>
+              </div>
+            </div>
+          ) : null}
         </section>
 
         {showOverview && (
-        <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <MetricCard label="Total Items" value={String(overview.overview.totalItems)} />
-          <MetricCard label="Units In Stock" value={formatNumber(overview.overview.totalUnitsInStock)} />
-          <MetricCard label="Inventory Value" value={formatCurrency(overview.overview.totalInventoryValue)} tone="good" />
-          <MetricCard label="Low Stock" value={String(overview.overview.lowStockCount)} tone={overview.overview.lowStockCount > 0 ? "warn" : "neutral"} />
-          <MetricCard
-            label="Out of Stock"
-            value={String(overview.overview.outOfStockCount)}
-            tone={overview.overview.outOfStockCount > 0 ? "danger" : "neutral"}
-          />
-          <MetricCard label="Recent Movements" value={String(movements.length)} />
-        </section>
+          <section className="grid gap-3 lg:grid-cols-2">
+            {isSingleProjectScope ? (
+              <>
+                <div className="rounded-xl border border-brand-200 bg-brand-50/75 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-800">
+                    Project-linked activity
+                  </p>
+                  <p className="mt-1 text-sm text-brand-900">
+                    This view focuses on approved, available, and used inventory for the locked project.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                    Global warehouse stock
+                  </p>
+                  <p className="text-xs text-slate-700">
+                    Supporting context only. Warehouse stock remains global and is not owned by this project.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    Global warehouse stock
+                  </p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    Stock levels and inventory value below are global across warehouse locations.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-800">Activity scope</p>
+                  <p className="mt-1 text-sm text-brand-900">
+                    Movement and issue activity follows your current filters.
+                  </p>
+                </div>
+              </>
+            )}
+          </section>
         )}
 
-        {showOverview && (
+        {showOverview && isSingleProjectScope && (
+          <>
+            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Approved Items" value={String(overview.projectLinked?.approvedItems || 0)} />
+              <MetricCard
+                label="Available Approved Quantity"
+                value={formatNumber(overview.projectLinked?.availableApprovedQuantity || 0)}
+                tone="good"
+              />
+              <MetricCard
+                label="Available Approved Value"
+                value={formatCurrency(overview.projectLinked?.availableApprovedValue || 0)}
+                tone="good"
+              />
+              <MetricCard label="Used Quantity" value={formatNumber(overview.projectLinked?.usedQuantity || 0)} />
+              <MetricCard
+                label="Used Value"
+                value={formatCurrency(overview.projectLinked?.usedValue || 0)}
+              />
+              <MetricCard
+                label="Project-linked IN"
+                value={formatNumber(overview.projectLinked?.projectLinkedIn || 0)}
+              />
+              <MetricCard
+                label="Project-linked OUT"
+                value={formatNumber(overview.projectLinked?.projectLinkedOut || 0)}
+              />
+              <MetricCard
+                label="Recognized Inventory Cost (Project)"
+                value={formatCurrency(overview.projectLinked?.recognizedInventoryCost || 0)}
+                tone="warn"
+              />
+            </section>
+            <section className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-800">Project usage status</p>
+              <p className="mt-1 text-sm text-brand-900">
+                Usage requests recorded for this project:{" "}
+                {formatNumber(overview.projectLinked?.requestContext.total || 0)}. Requests set what can be used. Used quantity and used value above show actual project use.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className="gf-context-chip">
+                  Approved: {formatNumber(overview.projectLinked?.requestContext.approved || 0)}
+                </span>
+                <span className="gf-context-chip">
+                  Submitted: {formatNumber(overview.projectLinked?.requestContext.submitted || 0)}
+                </span>
+                <span className="gf-context-chip">
+                  Rejected: {formatNumber(overview.projectLinked?.requestContext.rejected || 0)}
+                </span>
+              </div>
+            </section>
+          </>
+        )}
+
+        {showOverview && !isSingleProjectScope && (
+          <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <MetricCard label="Total Items" value={String(overview.overview.totalItems)} />
+            <MetricCard label="Units In Stock" value={formatNumber(overview.overview.totalUnitsInStock)} />
+            <MetricCard label="Inventory Value" value={formatCurrency(overview.overview.totalInventoryValue)} tone="good" />
+            <MetricCard
+              label="Low Stock"
+              value={String(overview.overview.lowStockCount)}
+              tone={overview.overview.lowStockCount > 0 ? "warn" : "neutral"}
+            />
+            <MetricCard
+              label="Out of Stock"
+              value={String(overview.overview.outOfStockCount)}
+              tone={overview.overview.outOfStockCount > 0 ? "danger" : "neutral"}
+            />
+            <MetricCard label="Recent Movements" value={String(movements.length)} />
+          </section>
+        )}
+
+        {showOverview && !isSingleProjectScope && (
         <section
           id="inventory-low-stock-section"
           className={cn(
@@ -2336,11 +2760,11 @@ function InventoryPageContent() {
               "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
           )}
         >
-          <Card className="min-w-0" title="Low Stock Alerts" subtitle="Critical items requiring replenishment and immediate action">
+          <Card className="min-w-0" title="Low Stock Alerts" subtitle="Global warehouse stock items requiring replenishment.">
             <div className="space-y-3">
               {stockAlertRows.length === 0 ? (
                 <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                  Stock health is good in current scope.
+                  Global warehouse stock health is good.
                 </p>
               ) : (
                 <div className="overflow-hidden rounded-lg border border-slate-200">
@@ -2374,7 +2798,9 @@ function InventoryPageContent() {
               )}
 
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                {overview.analytics.recommendations.length === 0 ? "No recommendations in current scope." : overview.analytics.recommendations.join(" ")}
+                {overview.analytics.recommendations.length === 0
+                  ? "No global stock recommendations right now."
+                  : overview.analytics.recommendations.join(" ")}
               </div>
             </div>
           </Card>
@@ -2383,10 +2809,20 @@ function InventoryPageContent() {
 
         {showOverview && (
           <section className="grid min-w-0 items-start gap-4 xl:grid-cols-2">
-            <Card className="min-w-0" title="Recent Stock Movements" subtitle="Latest movement entries in current filter scope">
+            <Card
+              className="min-w-0"
+              title="Recent Stock Movements"
+              subtitle={
+                isSingleProjectScope
+                  ? "Project-linked movement activity for the locked project."
+                  : "Latest movement entries in current filter scope."
+              }
+            >
               {movements.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-ink-600">
-                  No stock movements in current scope.
+                  {isSingleProjectScope
+                    ? "No project-linked stock movements found for this project."
+                    : "No stock movements in current scope."}
                 </p>
               ) : (
                 <DataTable
@@ -2402,30 +2838,61 @@ function InventoryPageContent() {
                 />
               )}
             </Card>
-            <Card className="min-w-0" title="Recent Inventory Issues" subtitle="Top-priority data quality issues to resolve">
-              {issuesResponse.issues.length === 0 ? (
-                <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                  No major inventory inconsistencies detected in current scope.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {issuesResponse.issues.slice(0, 6).map((issue) => (
-                    <div key={`overview-issue-${issue.id}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <IssueSeverityBadge severity={issue.severity} />
-                        <p className="text-sm font-semibold text-ink-900">{issue.title}</p>
+            {isSingleProjectScope ? (
+              <Card
+                className="min-w-0"
+                title="Recent Recognized Costs"
+                subtitle="Recognized inventory costs linked to project usage."
+              >
+                {recognizedProjectCostRows.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-ink-600">
+                    No recognized project-linked inventory costs found in this scope.
+                  </p>
+                ) : (
+                  <DataTable
+                    className="border-slate-200/70"
+                    columns={["Date", "Item", "Qty", "Cost"]}
+                    rows={recognizedProjectCostRows.map((movement) => [
+                      toIsoDate(movement.date),
+                      movementItemLabel(movement),
+                      formatNumber(movement.quantity),
+                      formatCurrency(movement.totalCost || 0)
+                    ])}
+                  />
+                )}
+              </Card>
+            ) : (
+              <Card
+                className="min-w-0"
+                title="Recent Inventory Issues"
+                subtitle="Top-priority data quality issues to resolve."
+              >
+                {issuesResponse.issues.length === 0 ? (
+                  <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
+                    No major inventory inconsistencies detected in current scope.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {issuesResponse.issues.slice(0, 6).map((issue) => (
+                      <div key={`overview-issue-${issue.id}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <IssueSeverityBadge severity={issue.severity} />
+                          <p className="text-sm font-semibold text-ink-900">{issue.title}</p>
+                        </div>
+                        <p className="mt-1 text-xs text-slate-700">{issue.message}</p>
                       </div>
-                      <p className="mt-1 text-xs text-slate-700">{issue.message}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Card>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            )}
           </section>
         )}
 
-        {showIssues && (
+        {showIssuesWorkspace && (
           <InventoryIssuesWorkspace
+            isProjectLocked={isSingleProjectScope}
+            projectName={scopedProject?.name || null}
             focusedSectionId={focusedSectionId}
             issuesLoading={issuesLoading}
             issuesResponse={issuesResponse}
@@ -2459,6 +2926,15 @@ function InventoryPageContent() {
           />
         )}
 
+        {showIssuesLockedNotice && (
+          <section className="rounded-xl border border-slate-200 bg-white px-4 py-4">
+            <p className="text-sm font-semibold text-ink-900">Inventory issues are hidden in locked project mode.</p>
+            <p className="mt-1 text-sm text-slate-700">
+              Switch to All projects mode to manage warehouse issues.
+            </p>
+          </section>
+        )}
+
         {showItems && (
         <section
           id="inventory-items-section"
@@ -2468,12 +2944,33 @@ function InventoryPageContent() {
         >
           <Card className="min-w-0">
             <div className="space-y-4">
+              {isSingleProjectScope ? (
+                <div className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3 text-sm text-brand-900">
+                  Showing project-approved items for this locked project. Stock on hand remains global warehouse stock.
+                </div>
+              ) : null}
+              {createFromDeepLinkBlocked ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Switch to All projects mode to create a new catalog item.
+                </div>
+              ) : null}
               <div className="rounded-xl border border-slate-200/85 bg-slate-50/75 p-3.5">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Filters</p>
-                  <p className="text-xs text-slate-500">Refine items by category, supplier, location, and stock status</p>
+                  <p className="text-xs text-slate-500">
+                    {isSingleProjectScope
+                      ? "Refine approved items by search and category"
+                      : "Refine items by category, supplier, location, and stock status"}
+                  </p>
                 </div>
-                <div className="grid items-end gap-2 md:grid-cols-2 xl:grid-cols-[2fr_repeat(4,minmax(0,1fr))_auto]">
+                <div
+                  className={cn(
+                    "grid items-end gap-2 md:grid-cols-2",
+                    isSingleProjectScope
+                      ? "xl:grid-cols-[2fr_minmax(0,1fr)]"
+                      : "xl:grid-cols-[2fr_repeat(4,minmax(0,1fr))_auto]"
+                  )}
+                >
                   <label className="text-xs text-ink-700 xl:col-span-1">
                     <span className="mb-1 block uppercase tracking-wide text-slate-500">Search</span>
                     <input
@@ -2493,36 +2990,42 @@ function InventoryPageContent() {
                       ...inventoryCategoryOptions.map((entry) => ({ value: entry.value, label: entry.label }))
                     ]}
                   />
-                  <FilterSelect
-                    label="Supplier"
-                    value={supplierFilter}
-                    onChange={setSupplierFilter}
-                    options={[
-                      { value: "all", label: "All suppliers" },
-                      ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))
-                    ]}
-                  />
-                  <FilterSelect
-                    label="Location"
-                    value={locationFilter}
-                    onChange={setLocationFilter}
-                    options={[
-                      { value: "all", label: "All locations" },
-                      ...locations.map((location) => ({ value: location.id, label: location.name }))
-                    ]}
-                  />
-                  <FilterSelect
-                    label="Stock"
-                    value={stockFilter}
-                    onChange={setStockFilter}
-                    options={[
-                      { value: "all", label: "All stock" },
-                      { value: "low", label: "Low stock" },
-                      { value: "out", label: "Out of stock" },
-                      { value: "healthy", label: "Healthy stock" }
-                    ]}
-                  />
-                  {canManage && (
+                  {!isSingleProjectScope ? (
+                    <FilterSelect
+                      label="Supplier"
+                      value={supplierFilter}
+                      onChange={setSupplierFilter}
+                      options={[
+                        { value: "all", label: "All suppliers" },
+                        ...suppliers.map((supplier) => ({ value: supplier.id, label: supplier.name }))
+                      ]}
+                    />
+                  ) : null}
+                  {!isSingleProjectScope ? (
+                    <FilterSelect
+                      label="Location"
+                      value={locationFilter}
+                      onChange={setLocationFilter}
+                      options={[
+                        { value: "all", label: "All locations" },
+                        ...locations.map((location) => ({ value: location.id, label: location.name }))
+                      ]}
+                    />
+                  ) : null}
+                  {!isSingleProjectScope ? (
+                    <FilterSelect
+                      label="Stock"
+                      value={stockFilter}
+                      onChange={setStockFilter}
+                      options={[
+                        { value: "all", label: "All stock" },
+                        { value: "low", label: "Low stock" },
+                        { value: "out", label: "Out of stock" },
+                        { value: "healthy", label: "Healthy stock" }
+                      ]}
+                    />
+                  ) : null}
+                  {canManage && !isSingleProjectScope && (
                     <div className="flex justify-start xl:justify-end">
                       <button
                         type="button"
@@ -2540,52 +3043,84 @@ function InventoryPageContent() {
                 <p className="text-sm text-ink-600">Loading inventory items...</p>
               ) : items.length === 0 ? (
                 <p className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-ink-600">
-                  No inventory items found for current filters.
+                  {isSingleProjectScope
+                    ? "No project-approved items found for this project in current filters."
+                    : "No inventory items found for current filters."}
                 </p>
               ) : (
                 <div className="space-y-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Item List</p>
                   <DataTable
                     className="border-slate-200/70"
-                    columns={[
-                      "Item",
-                      "SKU",
-                      "Category",
-                      "Stock",
-                      "Min",
-                      "Unit Cost",
-                      "Value",
-                      "Supplier",
-                      "Location",
-                      "Status",
-                      "Action"
-                    ]}
-                    rows={items.slice(0, 50).map((item) => [
-                      item.name,
-                      item.sku,
-                      formatInventoryCategory(item.category),
-                      `${formatNumber(item.quantityInStock)}${item.outOfStock ? " (Out)" : item.lowStock ? " (Low)" : ""}`,
-                      formatNumber(item.minimumStockLevel),
-                      formatCurrency(item.unitCost),
-                      formatCurrency(item.inventoryValue),
-                      item.supplier?.name || "-",
-                      item.location?.name || "-",
-                      item.status,
-                      <button
-                        key={`${item.id}-view`}
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openItemDetail(item.id);
-                        }}
-                        className="gf-btn-subtle"
-                      >
-                        <span className="inline-flex items-center gap-1">
-                          <Eye size={13} />
-                          View
-                        </span>
-                      </button>
-                    ])}
+                    columns={
+                      isSingleProjectScope
+                        ? [
+                            "Item",
+                            "SKU",
+                            "Category",
+                            "Warehouse Stock (Global)",
+                            "Available for Project",
+                            "Used on Project",
+                            "Unit Cost",
+                            "Action"
+                          ]
+                        : [
+                            "Item",
+                            "SKU",
+                            "Category",
+                            "Stock",
+                            "Min",
+                            "Unit Cost",
+                            "Value",
+                            "Supplier",
+                            "Location",
+                            "Status",
+                            "Action"
+                          ]
+                    }
+                    rows={items.slice(0, 50).map((item) => {
+                      const actionCell = (
+                        <button
+                          key={`${item.id}-view`}
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            openItemDetail(item.id);
+                          }}
+                          className="gf-btn-subtle"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            <Eye size={13} />
+                            View
+                          </span>
+                        </button>
+                      );
+                      if (isSingleProjectScope) {
+                        return [
+                          item.name,
+                          item.sku,
+                          formatInventoryCategory(item.category),
+                          `${formatNumber(item.quantityInStock)} (global)`,
+                          formatNumber(item.approvedProjectContext?.availableApprovedQuantity || 0),
+                          formatNumber(item.approvedProjectContext?.usedQuantity || 0),
+                          formatCurrency(item.unitCost),
+                          actionCell
+                        ];
+                      }
+                      return [
+                        item.name,
+                        item.sku,
+                        formatInventoryCategory(item.category),
+                        `${formatNumber(item.quantityInStock)}${item.outOfStock ? " (Out)" : item.lowStock ? " (Low)" : ""}`,
+                        formatNumber(item.minimumStockLevel),
+                        formatCurrency(item.unitCost),
+                        formatCurrency(item.inventoryValue),
+                        item.supplier?.name || "-",
+                        item.location?.name || "-",
+                        item.status,
+                        actionCell
+                      ];
+                    })}
                     rowIds={items.slice(0, 50).map((item) => `ai-focus-${item.id}`)}
                     rowClassNames={items.slice(0, 50).map((item) =>
                       focusedRowId === item.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""
@@ -2593,85 +3128,98 @@ function InventoryPageContent() {
                     onRowClick={(rowIndex) => openItemDetail(items.slice(0, 50)[rowIndex]?.id || "")}
                   />
 
-                  <div className="mt-3 rounded-xl border border-slate-200/85 bg-slate-50/65 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">My Usage Requests</p>
-                        <p className="text-xs text-slate-600">
-                          Scoped to your account. Approved requests create stock-out history; rejected requests do not mutate stock.
-                        </p>
+                  {isSingleProjectScope ? (
+                    <div className="mt-3 rounded-xl border border-brand-200 bg-brand-50/65 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-800">Project usage summary</p>
+                      <p className="mt-1 text-sm text-brand-900">
+                        Approved items: {formatNumber(projectUsageSummary?.approvedItems || 0)} | Available quantity:{" "}
+                        {formatNumber(projectUsageSummary?.availableQuantity || 0)} | Available value:{" "}
+                        {formatCurrency(projectUsageSummary?.availableValue || 0)} | Used quantity:{" "}
+                        {formatNumber(projectUsageSummary?.usedQuantity || 0)} | Used value:{" "}
+                        {formatCurrency(projectUsageSummary?.usedValue || 0)}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-xl border border-slate-200/85 bg-slate-50/65 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">My Usage Requests</p>
+                          <p className="text-xs text-slate-600">
+                            Scoped to your account. Approved requests create stock-out history; rejected requests do not mutate stock.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {(["ALL", "SUBMITTED", "PENDING", "APPROVED", "REJECTED"] as const).map((statusOption) => (
+                            <button
+                              key={`usage-status-${statusOption}`}
+                              type="button"
+                              onClick={() => setUsageRequestStatusFilter(statusOption)}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                                usageRequestStatusFilter === statusOption
+                                  ? "border-brand-300 bg-brand-50 text-brand-800"
+                                  : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-800"
+                              )}
+                            >
+                              {statusOption === "ALL" ? "All" : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
+                            </button>
+                          ))}
+                        </div>
                       </div>
-                      <div className="flex flex-wrap items-center gap-1">
-                        {(["ALL", "SUBMITTED", "PENDING", "APPROVED", "REJECTED"] as const).map((statusOption) => (
-                          <button
-                            key={`usage-status-${statusOption}`}
-                            type="button"
-                            onClick={() => setUsageRequestStatusFilter(statusOption)}
-                            className={cn(
-                              "rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                              usageRequestStatusFilter === statusOption
-                                ? "border-brand-300 bg-brand-50 text-brand-800"
-                                : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-800"
-                            )}
-                          >
-                            {statusOption === "ALL" ? "All" : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
-                          </button>
-                        ))}
+                      <div className="mt-2">
+                        {usageRequestsLoading ? (
+                          <p className="text-sm text-slate-600">Loading your usage requests...</p>
+                        ) : myUsageRequests.length === 0 ? (
+                          <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
+                            No usage requests found for your account in this status.
+                          </p>
+                        ) : (
+                          <DataTable
+                            className="border-slate-200/70"
+                            columns={["Requested", "Item", "Qty", "Status", "Project / Rig", "Decision", "Action"]}
+                            rows={myUsageRequests.slice(0, 20).map((requestRow) => [
+                              toIsoDate(requestRow.createdAt),
+                              requestRow.item ? `${requestRow.item.name} (${requestRow.item.sku})` : "-",
+                              formatNumber(requestRow.quantity),
+                              <UsageRequestStatusBadge key={`${requestRow.id}-status`} status={requestRow.status} />,
+                              `${requestRow.project?.name || "-"} / ${requestRow.rig?.rigCode || requestRow.location?.name || "-"}`,
+                              <span key={`${requestRow.id}-decision`} className="text-xs text-slate-700">
+                                {formatUsageRequestDecision(requestRow)}
+                              </span>,
+                              <div key={`${requestRow.id}-actions`} className="flex flex-wrap gap-1">
+                                {requestRow.item?.id ? (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      openItemDetail(requestRow.item?.id || "");
+                                    }}
+                                    className="gf-btn-subtle"
+                                  >
+                                    Open item
+                                  </button>
+                                ) : null}
+                                {requestRow.approvedMovementId ? (
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      openMovementDetail(requestRow.approvedMovementId || "");
+                                    }}
+                                    className="gf-btn-subtle"
+                                  >
+                                    Open movement
+                                  </button>
+                                ) : null}
+                                {!requestRow.item?.id && !requestRow.approvedMovementId ? "-" : null}
+                              </div>
+                            ])}
+                            onRowClick={(rowIndex) => openItemDetail(myUsageRequests.slice(0, 20)[rowIndex]?.item?.id || "")}
+                          />
+                        )}
                       </div>
                     </div>
-                    <div className="mt-2">
-                      {usageRequestsLoading ? (
-                        <p className="text-sm text-slate-600">Loading your usage requests...</p>
-                      ) : myUsageRequests.length === 0 ? (
-                        <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
-                          No usage requests found for your account in this status.
-                        </p>
-                      ) : (
-                        <DataTable
-                          className="border-slate-200/70"
-                          columns={["Requested", "Item", "Qty", "Status", "Project / Rig", "Decision", "Action"]}
-                          rows={myUsageRequests.slice(0, 20).map((requestRow) => [
-                            toIsoDate(requestRow.createdAt),
-                            requestRow.item ? `${requestRow.item.name} (${requestRow.item.sku})` : "-",
-                            formatNumber(requestRow.quantity),
-                            <UsageRequestStatusBadge key={`${requestRow.id}-status`} status={requestRow.status} />,
-                            `${requestRow.project?.name || "-"} / ${requestRow.rig?.rigCode || requestRow.location?.name || "-"}`,
-                            <span key={`${requestRow.id}-decision`} className="text-xs text-slate-700">
-                              {formatUsageRequestDecision(requestRow)}
-                            </span>,
-                            <div key={`${requestRow.id}-actions`} className="flex flex-wrap gap-1">
-                              {requestRow.item?.id ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    openItemDetail(requestRow.item?.id || "");
-                                  }}
-                                  className="gf-btn-subtle"
-                                >
-                                  Open item
-                                </button>
-                              ) : null}
-                              {requestRow.approvedMovementId ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    openMovementDetail(requestRow.approvedMovementId || "");
-                                  }}
-                                  className="gf-btn-subtle"
-                                >
-                                  Open movement
-                                </button>
-                              ) : null}
-                              {!requestRow.item?.id && !requestRow.approvedMovementId ? "-" : null}
-                            </div>
-                          ])}
-                          onRowClick={(rowIndex) => openItemDetail(myUsageRequests.slice(0, 20)[rowIndex]?.item?.id || "")}
-                        />
-                      )}
-                    </div>
-                  </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2679,9 +3227,9 @@ function InventoryPageContent() {
         </section>
         )}
 
-        {showItems && showCreateItemForm && (
+        {showItems && showCreateItemForm && !isSingleProjectScope && (
         <section id="inventory-actions-section" className="grid min-w-0 items-start gap-4 xl:grid-cols-[1.2fr_1fr]">
-          {canManage && showItems && showCreateItemForm && (
+          {canManage && showItems && showCreateItemForm && !isSingleProjectScope && (
             <Card
               className="min-w-0"
               title="Inventory Manual Entry"
@@ -2831,6 +3379,8 @@ function InventoryPageContent() {
 
         {showMovements && (
           <InventoryMovementsWorkspace
+            isProjectLocked={isSingleProjectScope}
+            projectName={scopedProject?.name || null}
             focusedSectionId={focusedSectionId}
             movementLedgerSummary={movementLedgerSummary}
             movementTypeFilter={movementTypeFilter}
@@ -2976,6 +3526,7 @@ function InventoryPageContent() {
           itemDetails={selectedItemDetails}
           issues={selectedItemIssues}
           canManage={canManage}
+          isProjectLocked={isSingleProjectScope}
           onRequestUse={openRequestUseModal}
           onToggleStatus={async (nextStatus) => {
             if (!selectedItemDetails?.data?.id) {
@@ -3019,6 +3570,7 @@ function InventoryPageContent() {
           open={movementDetailDrawerOpen}
           onClose={() => setMovementDetailDrawerOpen(false)}
           movement={selectedMovementDetails}
+          isProjectLocked={isSingleProjectScope}
           canApproveMovement={canApproveMovement}
           onRefresh={async () => {
             await loadInventoryData();
@@ -3033,6 +3585,9 @@ function InventoryPageContent() {
           onContinueToPurchaseRequest={continueToPurchaseRequest}
           form={useRequestForm}
           onFormChange={setUseRequestForm}
+          projects={projects}
+          rigs={rigs}
+          lockedProject={isSingleProjectScope ? scopedProject : null}
           maintenanceRequests={openMaintenanceRequests}
           breakdownReports={openBreakdownReports}
           locations={locations}
@@ -3052,1065 +3607,5 @@ function InventoryPageFallback() {
         <p className="text-sm text-ink-600">Loading inventory workspace...</p>
       </div>
     </AccessGate>
-  );
-}
-
-function MovementDetailModal({
-  open,
-  onClose,
-  movement,
-  canApproveMovement,
-  onRefresh,
-  onFlagIssue
-}: {
-  open: boolean;
-  onClose: () => void;
-  movement: InventoryMovementRow | null;
-  canApproveMovement: boolean;
-  onRefresh: () => Promise<void>;
-  onFlagIssue: (movementId: string) => void;
-}) {
-  const [isMounted, setIsMounted] = useState(open);
-  const [isVisible, setIsVisible] = useState(open);
-  const [workflowStep, setWorkflowStep] = useState<1 | 2 | 3>(1);
-  const [submittingDecision, setSubmittingDecision] = useState(false);
-  const [decisionFeedback, setDecisionFeedback] = useState<{
-    tone: "success" | "error" | "info";
-    message: string;
-  } | null>(null);
-
-  useEffect(() => {
-    let timeoutId: number | undefined;
-    if (open) {
-      setIsMounted(true);
-      timeoutId = window.setTimeout(() => setIsVisible(true), 12);
-    } else if (isMounted) {
-      setIsVisible(false);
-      timeoutId = window.setTimeout(() => setIsMounted(false), 180);
-    }
-
-    return () => {
-      if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, [isMounted, open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    setWorkflowStep(1);
-    setDecisionFeedback(null);
-    setSubmittingDecision(false);
-  }, [movement?.id, open]);
-
-  if (!isMounted) {
-    return null;
-  }
-
-  const stepSummary = [
-    { id: 1 as const, title: "Understand", subtitle: "Confirm item movement details." },
-    { id: 2 as const, title: "Validate", subtitle: "Check operational context before approval." },
-    { id: 3 as const, title: "Confirm", subtitle: "Approve this movement or flag an issue." }
-  ];
-  const linkedMaintenance =
-    movement?.linkedUsageRequest?.maintenanceRequest || movement?.maintenanceRequest || null;
-  const expenseStatus = String(movement?.expense?.approvalStatus || "").toUpperCase();
-  const expenseStatusLabel = movement?.expense?.approvalStatus
-    ? `${movement.expense.approvalStatus.charAt(0)}${movement.expense.approvalStatus
-        .slice(1)
-        .toLowerCase()}`
-    : "Not linked";
-  const modalTitle = movement
-    ? movement.item?.name?.trim()
-      ? `${movement.item.name.trim()} movement`
-      : `${formatMovementType(movement.movementType)} movement`
-    : "Loading movement";
-
-  async function approveMovement() {
-    if (!movement) {
-      return;
-    }
-    if (!movement.expense?.id) {
-      setDecisionFeedback({
-        tone: "error",
-        message: "No linked expense found. Flag this movement so traceability can be restored."
-      });
-      return;
-    }
-    if (!canApproveMovement) {
-      setDecisionFeedback({
-        tone: "error",
-        message: "Only Admin or Manager can approve this movement confirmation."
-      });
-      return;
-    }
-    if (expenseStatus === "APPROVED") {
-      setDecisionFeedback({
-        tone: "success",
-        message: "Movement already confirmed. Linked expense is approved."
-      });
-      return;
-    }
-    if (expenseStatus !== "SUBMITTED") {
-      setDecisionFeedback({
-        tone: "error",
-        message: `Linked expense is ${expenseStatus ? expenseStatus.toLowerCase() : "not submitted"}. Submit it before approval.`
-      });
-      return;
-    }
-
-    setSubmittingDecision(true);
-    setDecisionFeedback(null);
-    try {
-      const response = await fetch(`/api/expenses/${encodeURIComponent(movement.expense.id)}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "approve" })
-      });
-      if (!response.ok) {
-        throw new Error(await readApiError(response, "Failed to approve movement."));
-      }
-      await onRefresh();
-      setDecisionFeedback({
-        tone: "success",
-        message: "Movement approved. Linked expense is now recognized."
-      });
-    } catch (error) {
-      setDecisionFeedback({
-        tone: "error",
-        message: error instanceof Error ? error.message : "Failed to approve movement."
-      });
-    } finally {
-      setSubmittingDecision(false);
-    }
-  }
-
-  return (
-    <div
-      className={`fixed inset-0 z-[84] flex items-center justify-center p-3 transition-opacity duration-200 ease-out sm:p-6 ${
-        isVisible ? "opacity-100" : "pointer-events-none opacity-0"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        className={`absolute inset-0 bg-slate-900/35 backdrop-blur-[2px] transition-opacity duration-200 ${
-          isVisible ? "opacity-100" : "opacity-0"
-        }`}
-        aria-label="Close movement detail modal"
-      />
-      <section
-        className={`relative z-10 flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,0.24)] transition-all duration-200 ease-out ${
-          isVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.985] opacity-0"
-        }`}
-      >
-        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 shadow-[0_1px_0_rgba(15,23,42,0.06)] backdrop-blur">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Movement Approval</p>
-              <p className="text-xl font-semibold text-ink-900">{modalTitle}</p>
-              <p className="mt-0.5 text-xs font-medium text-slate-600">Step {workflowStep} of 3</p>
-              <SystemFlowBar current="movement" className="mt-2" />
-              <div className="mt-2 flex items-center gap-1.5">
-                {stepSummary.map((step) => (
-                  <span
-                    key={step.id}
-                    className={cn(
-                      "h-1.5 w-6 rounded-full",
-                      workflowStep === step.id
-                        ? "bg-ink-900"
-                        : workflowStep > step.id
-                          ? "bg-emerald-400"
-                          : "bg-slate-200"
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-1">
-              <button
-                type="button"
-                onClick={onClose}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                aria-label="Close movement detail"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {!movement ? (
-          <div className="p-4 text-sm text-ink-600">Loading movement details...</div>
-        ) : (
-          <>
-            <div className="flex-1 overflow-y-auto bg-slate-50/40 p-4 sm:p-5">
-              <section className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {stepSummary[workflowStep - 1]?.title}
-                </p>
-                <p className="text-xs text-slate-600">{stepSummary[workflowStep - 1]?.subtitle}</p>
-              </section>
-
-              {workflowStep === 1 ? (
-                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    <SummaryBadge label="Item" value={movementItemLabel(movement)} />
-                    <SummaryBadge label="Type" value={formatMovementType(movement.movementType)} />
-                    <SummaryBadge label="Quantity" value={formatNumber(movement.quantity)} />
-                    <SummaryBadge label="Location From" value={movement.locationFrom?.name || "-"} />
-                    <SummaryBadge label="Location To" value={movement.locationTo?.name || "-"} />
-                    <SummaryBadge label="Date" value={toIsoDate(movement.date)} />
-                  </div>
-                </section>
-              ) : null}
-
-              {workflowStep === 2 ? (
-                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                    <SummaryBadge label="Project" value={movement.project?.name || "-"} />
-                    <SummaryBadge label="Rig" value={movement.rig?.rigCode || "-"} />
-                    <SummaryBadge
-                      label="User"
-                      value={
-                        movement.performedBy?.fullName ||
-                        movement.linkedUsageRequest?.requestedBy?.fullName ||
-                        "-"
-                      }
-                    />
-                    <SummaryBadge label="Maintenance" value={linkedMaintenance?.requestCode || "-"} />
-                  </div>
-                </section>
-              ) : null}
-
-              {workflowStep === 3 ? (
-                <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
-                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                    <SummaryBadge label="Linked Expense" value={movement.expense?.id ? movement.expense.id.slice(-8) : "Not linked"} />
-                    <SummaryBadge label="Expense Status" value={expenseStatusLabel} />
-                    <SummaryBadge
-                      label="Recognition"
-                      value={expenseStatus === "APPROVED" ? "Cost recognized" : "Pending recognition"}
-                    />
-                  </div>
-                  {decisionFeedback ? (
-                    <div
-                      className={cn(
-                        "mt-2 rounded-lg border px-3 py-2 text-xs",
-                        decisionFeedback.tone === "success"
-                          ? "border-emerald-300 bg-emerald-50 text-emerald-900"
-                          : decisionFeedback.tone === "error"
-                            ? "border-red-300 bg-red-50 text-red-900"
-                            : "border-slate-200 bg-slate-50 text-slate-700"
-                      )}
-                    >
-                      {decisionFeedback.message}
-                    </div>
-                  ) : null}
-                </section>
-              ) : null}
-            </div>
-
-            <div className="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
-              <div>
-                {workflowStep > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setWorkflowStep((step) => (step > 1 ? ((step - 1) as 1 | 2 | 3) : step))}
-                    className="gf-btn-secondary px-3 py-1.5 text-xs"
-                  >
-                    Back
-                  </button>
-                ) : null}
-              </div>
-              <div>
-                {workflowStep < 3 ? (
-                  <button
-                    type="button"
-                    onClick={() => setWorkflowStep((step) => (step < 3 ? ((step + 1) as 1 | 2 | 3) : step))}
-                    className="gf-btn-primary px-3 py-1.5 text-xs"
-                  >
-                    Continue
-                  </button>
-                ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (movement?.id) {
-                          onFlagIssue(movement.id);
-                        }
-                      }}
-                      className="gf-btn-secondary px-3 py-1.5 text-xs"
-                    >
-                      Flag issue
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void approveMovement()}
-                      disabled={submittingDecision}
-                      className="gf-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {submittingDecision ? "Approving..." : "Approve movement"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function ItemDetailModal({
-  open,
-  onClose,
-  itemDetails,
-  issues,
-  canManage,
-  onRequestUse,
-  onToggleStatus
-}: {
-  open: boolean;
-  onClose: () => void;
-  itemDetails: InventoryItemDetailsResponse | null;
-  issues: InventoryIssueRow[];
-  canManage: boolean;
-  onRequestUse: () => void;
-  onToggleStatus: (nextStatus: "ACTIVE" | "INACTIVE") => Promise<void>;
-}) {
-  const [isMounted, setIsMounted] = useState(open);
-  const [isVisible, setIsVisible] = useState(open);
-
-  useEffect(() => {
-    let timeoutId: number | undefined;
-    if (open) {
-      setIsMounted(true);
-      timeoutId = window.setTimeout(() => setIsVisible(true), 12);
-    } else if (isMounted) {
-      setIsVisible(false);
-      timeoutId = window.setTimeout(() => setIsMounted(false), 180);
-    }
-
-    return () => {
-      if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, [isMounted, open]);
-
-  if (!isMounted) {
-    return null;
-  }
-
-  const receiptRows = (itemDetails?.movements || [])
-    .filter((movement) => movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber)
-    .map((movement) => [
-      toIsoDate(movement.date),
-      movement.supplier?.name || movement.expense?.category || "-",
-      movement.traReceiptNumber || "-",
-      movement.supplierInvoiceNumber || "-",
-      movement.expense?.id || "-",
-      movement.receiptUrl ? (
-        <a key={`${movement.id}-drawer-receipt`} href={movement.receiptUrl} target="_blank" rel="noreferrer" className="text-brand-700 underline">
-          Open Receipt
-        </a>
-      ) : (
-        "-"
-      )
-    ]);
-
-  return (
-    <div
-      className={`fixed inset-0 z-[80] flex items-center justify-center p-3 transition-opacity duration-200 ease-out sm:p-6 ${
-        isVisible ? "opacity-100" : "pointer-events-none opacity-0"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        className={`absolute inset-0 bg-slate-900/40 backdrop-blur-[2px] transition-opacity duration-200 ${
-          isVisible ? "opacity-100" : "opacity-0"
-        }`}
-        aria-label="Close item detail modal"
-      />
-      <section
-        className={`relative z-10 flex h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-[0_24px_64px_rgba(15,23,42,0.24)] transition-all duration-200 ease-out ${
-          isVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.985] opacity-0"
-        }`}
-      >
-        <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 shadow-[0_1px_0_rgba(15,23,42,0.06)] backdrop-blur">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Inventory Item Workspace</p>
-              <p className="text-xl font-semibold text-ink-900">
-                {itemDetails?.data ? itemDetails.data.name : "Inventory Item"}
-              </p>
-              <p className="mt-0.5 text-xs font-medium text-slate-600">
-                {itemDetails?.data ? itemDetails.data.sku : "Loading details"} • Full item workspace
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-1">
-              {itemDetails?.data && (
-                <>
-                  {canManage ? (
-                    <>
-                      <a
-                        href={`/inventory/items?itemId=${itemDetails.data.id}`}
-                        className="gf-btn-primary px-3 py-1.5 text-xs"
-                      >
-                        Edit Item
-                      </a>
-                      <a
-                        href={`/inventory/stock-movements?movementItemId=${itemDetails.data.id}&movementType=ADJUSTMENT`}
-                        className="gf-btn-secondary px-3 py-1.5 text-xs"
-                      >
-                        Adjust Stock
-                      </a>
-                    </>
-                  ) : null}
-                  <button type="button" onClick={onRequestUse} className="gf-btn-primary px-3 py-1.5 text-xs">
-                    Request Use
-                  </button>
-                  {canManage && (
-                    <button
-                      type="button"
-                      onClick={() => void onToggleStatus(itemDetails.data.status === "ACTIVE" ? "INACTIVE" : "ACTIVE")}
-                      className="gf-btn-secondary px-3 py-1.5 text-xs"
-                    >
-                      {itemDetails.data.status === "ACTIVE" ? "Archive" : "Restore"}
-                    </button>
-                  )}
-                </>
-              )}
-              <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
-                Back
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {!itemDetails?.data ? (
-          <div className="p-4 text-sm text-ink-600">Loading selected item details...</div>
-        ) : (
-          <div className="space-y-5 overflow-y-auto bg-slate-50/40 p-4 sm:p-5">
-            {issues.length > 0 && (
-              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
-                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-amber-800">Active Item Warnings</p>
-                <p className="text-sm text-amber-900">
-                  {issues.slice(0, 2).map((issue) => issue.title).join(" • ")}
-                </p>
-              </div>
-            )}
-
-            <section className="gf-section-shell p-4">
-              <div className="gf-section-heading">
-                <div className="gf-section-heading-block">
-                  <h4 className="gf-section-title">Details</h4>
-                </div>
-                <span
-                  className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${
-                    itemDetails.data.status === "ACTIVE"
-                      ? "border-emerald-300 bg-emerald-100 text-emerald-800"
-                      : "border-slate-300 bg-slate-100 text-slate-700"
-                  }`}
-                >
-                  {itemDetails.data.status}
-                </span>
-              </div>
-              <div className="mt-3 grid gap-3 md:grid-cols-2">
-                <div
-                  className={`rounded-xl border px-4 py-3 ${
-                    itemDetails.data.quantityInStock <= itemDetails.data.minimumStockLevel
-                      ? "border-amber-300 bg-amber-50"
-                      : "border-emerald-300 bg-emerald-50"
-                  }`}
-                >
-                  <p className="text-xs uppercase tracking-wide text-slate-600">Stock On Hand</p>
-                  <p className="mt-1 text-2xl font-semibold text-ink-900">
-                    {formatNumber(itemDetails.data.quantityInStock)}
-                  </p>
-                  <p className="text-xs text-slate-600">Minimum: {formatNumber(itemDetails.data.minimumStockLevel)}</p>
-                </div>
-                <div className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-600">Inventory Value</p>
-                  <p className="mt-1 text-2xl font-semibold text-brand-900">
-                    {formatCurrency(itemDetails.data.inventoryValue)}
-                  </p>
-                  <p className="text-xs text-slate-600">Unit Cost: {formatCurrency(itemDetails.data.unitCost)}</p>
-                </div>
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                <SummaryBadge label="Category" value={formatInventoryCategory(itemDetails.data.category)} />
-                <SummaryBadge label="Supplier" value={itemDetails.data.supplier?.name || "-"} />
-                <SummaryBadge label="Location" value={itemDetails.data.location?.name || "-"} />
-                <SummaryBadge label="Part Number" value={itemDetails.data.partNumber || "-"} />
-                <SummaryBadge
-                  label="Compatible Rig"
-                  value={itemDetails.data.compatibleRig?.rigCode || itemDetails.data.compatibleRigType || "-"}
-                />
-              </div>
-            </section>
-
-            <section className="gf-section-shell p-4">
-              <div className="gf-section-heading">
-                <div className="gf-section-heading-block">
-                  <h4 className="gf-section-title">Stock History</h4>
-                </div>
-              </div>
-              <div className="mt-3">
-                <DataTable
-                  className="border-slate-200/70"
-                  columns={["Movement Date", "Type", "Qty", "Project", "Rig", "Maintenance", "Expense", "Receipt"]}
-                  rows={(itemDetails.movements || []).slice(0, 20).map((movement) => [
-                    toIsoDate(movement.date),
-                    formatMovementType(movement.movementType),
-                    formatNumber(movement.quantity),
-                    movement.project?.name || "-",
-                    movement.rig?.rigCode || "-",
-                    movement.maintenanceRequest?.requestCode || "-",
-                    movement.expense?.id || "-",
-                    movement.receiptUrl ? (
-                      <a key={`${movement.id}-movement-receipt`} href={movement.receiptUrl} target="_blank" rel="noreferrer" className="text-brand-700 underline">
-                        Receipt
-                      </a>
-                    ) : (
-                      "-"
-                    )
-                  ])}
-                />
-              </div>
-            </section>
-
-            <section className="gf-section-shell p-4">
-              <div className="gf-section-heading">
-                <div className="gf-section-heading-block">
-                  <h4 className="gf-section-title">Receipts</h4>
-                  <p className="gf-section-subtitle">Track which receipts created or updated stock.</p>
-                </div>
-              </div>
-              <div className="mt-3">
-                {receiptRows.length === 0 ? (
-                  <p className="text-sm text-ink-600">No linked receipts for this item in current scope.</p>
-                ) : (
-                  <DataTable
-                    className="border-slate-200/70"
-                    columns={["Date", "Supplier/Source", "TRA Receipt", "Invoice Ref", "Linked Expense", "File"]}
-                    rows={receiptRows}
-                  />
-                )}
-              </div>
-            </section>
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function RequestUseModal({
-  open,
-  onClose,
-  onSubmit,
-  onContinueToPurchaseRequest,
-  form,
-  onFormChange,
-  maintenanceRequests,
-  breakdownReports,
-  locations,
-  item,
-  submitting,
-  errorMessage
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
-  onContinueToPurchaseRequest: () => void;
-  form: UseRequestFormState;
-  onFormChange: React.Dispatch<React.SetStateAction<UseRequestFormState>>;
-  maintenanceRequests: MaintenanceContextOption[];
-  breakdownReports: BreakdownContextOption[];
-  locations: InventoryLocation[];
-  item: InventoryItemRow | null;
-  submitting: boolean;
-  errorMessage: string | null;
-}) {
-  const [isMounted, setIsMounted] = useState(open);
-  const [isVisible, setIsVisible] = useState(open);
-
-  useEffect(() => {
-    let timeoutId: number | undefined;
-    if (open) {
-      setIsMounted(true);
-      timeoutId = window.setTimeout(() => setIsVisible(true), 12);
-    } else if (isMounted) {
-      setIsVisible(false);
-      timeoutId = window.setTimeout(() => setIsMounted(false), 180);
-    }
-
-    return () => {
-      if (timeoutId !== undefined) {
-        window.clearTimeout(timeoutId);
-      }
-    };
-  }, [isMounted, open]);
-
-  const maintenanceRigOptions = useMemo(() => {
-    const byId = new Map<string, { id: string; rigCode: string }>();
-    for (const requestRow of maintenanceRequests) {
-      if (requestRow.rig?.id && requestRow.rig?.rigCode) {
-        byId.set(requestRow.rig.id, {
-          id: requestRow.rig.id,
-          rigCode: requestRow.rig.rigCode
-        });
-      }
-    }
-    return Array.from(byId.values()).sort((a, b) => a.rigCode.localeCompare(b.rigCode));
-  }, [maintenanceRequests]);
-  const maintenanceRequestsForSelectedRig = useMemo(() => {
-    if (!form.maintenanceRigId) {
-      return [];
-    }
-    return maintenanceRequests.filter(
-      (requestRow) => requestRow.rig?.id === form.maintenanceRigId
-    );
-  }, [form.maintenanceRigId, maintenanceRequests]);
-
-  useEffect(() => {
-    if (form.reasonType !== "MAINTENANCE") {
-      return;
-    }
-    if (!form.maintenanceRigId) {
-      if (form.maintenanceRequestId) {
-        onFormChange((current) =>
-          current.reasonType === "MAINTENANCE" && !current.maintenanceRigId
-            ? { ...current, maintenanceRequestId: "" }
-            : current
-        );
-      }
-      return;
-    }
-
-    if (maintenanceRequestsForSelectedRig.length === 1) {
-      const autoLinkedId = maintenanceRequestsForSelectedRig[0].id;
-      if (form.maintenanceRequestId !== autoLinkedId) {
-        onFormChange((current) =>
-          current.reasonType === "MAINTENANCE" &&
-          current.maintenanceRigId === form.maintenanceRigId
-            ? { ...current, maintenanceRequestId: autoLinkedId, rigId: current.maintenanceRigId }
-            : current
-        );
-      }
-      return;
-    }
-
-    if (
-      form.maintenanceRequestId &&
-      !maintenanceRequestsForSelectedRig.some(
-        (requestRow) => requestRow.id === form.maintenanceRequestId
-      )
-    ) {
-      onFormChange((current) =>
-        current.reasonType === "MAINTENANCE" &&
-        current.maintenanceRigId === form.maintenanceRigId
-          ? { ...current, maintenanceRequestId: "" }
-          : current
-      );
-    }
-  }, [
-    form.maintenanceRequestId,
-    form.maintenanceRigId,
-    form.reasonType,
-    maintenanceRequestsForSelectedRig,
-    onFormChange
-  ]);
-
-  if (!isMounted) {
-    return null;
-  }
-
-  const projectedStock = Number(form.quantity || 0) > 0 ? item ? item.quantityInStock - Number(form.quantity || 0) : null : null;
-  const selectedMaintenanceContext =
-    maintenanceRequests.find((requestRow) => requestRow.id === form.maintenanceRequestId) || null;
-  const resolvedMaintenanceContext =
-    selectedMaintenanceContext ||
-    (maintenanceRequestsForSelectedRig.length === 1
-      ? maintenanceRequestsForSelectedRig[0]
-      : null);
-  const selectedBreakdownContext =
-    breakdownReports.find((entry) => entry.id === form.breakdownReportId) || null;
-  const workflowStep = form.reasonType ? 2 : 1;
-  const hasStockShortage =
-    projectedStock !== null && Number.isFinite(projectedStock) && projectedStock < 0;
-  const hasRequiredContextSelection =
-    form.reasonType === "MAINTENANCE"
-      ? form.maintenanceRigId
-        ? maintenanceRequestsForSelectedRig.length === 1
-          ? true
-          : maintenanceRequestsForSelectedRig.length > 1
-            ? Boolean(form.maintenanceRequestId)
-            : false
-        : false
-      : form.reasonType === "BREAKDOWN"
-        ? Boolean(form.breakdownReportId)
-        : false;
-  const projectedStockWarning =
-    hasStockShortage
-      ? "Requested quantity exceeds stock on hand. Approval will be blocked unless stock is replenished."
-      : null;
-
-  return (
-    <div
-      className={`fixed inset-0 z-[82] flex items-center justify-center p-3 transition-opacity duration-200 ease-out sm:p-6 ${
-        isVisible ? "opacity-100" : "pointer-events-none opacity-0"
-      }`}
-    >
-      <button
-        type="button"
-        onClick={onClose}
-        className={`absolute inset-0 bg-slate-900/35 backdrop-blur-[2px] transition-opacity duration-200 ${
-          isVisible ? "opacity-100" : "opacity-0"
-        }`}
-        aria-label="Close request use modal"
-      />
-      <section
-        className={`relative z-10 w-full max-w-xl rounded-2xl border border-slate-200 bg-white shadow-[0_20px_50px_rgba(15,23,42,0.24)] transition-all duration-200 ease-out ${
-          isVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.985] opacity-0"
-        }`}
-      >
-        <div className="space-y-2 border-b border-slate-200 px-4 py-3">
-          <p className="text-sm font-semibold text-ink-900">Request Item Use</p>
-          <p className="text-xs text-slate-600">
-            {item ? `${item.name} (${item.sku})` : "Submit usage request for approval"}
-          </p>
-          {item && <p className="mt-1 text-xs text-slate-500">Stock on hand: {formatNumber(item.quantityInStock)}</p>}
-          <div className="flex flex-wrap gap-1.5">
-            <span
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                workflowStep === 1
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-200 bg-slate-50 text-slate-500"
-              )}
-            >
-              1. Reason
-            </span>
-            <span
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                workflowStep === 2
-                  ? "border-brand-300 bg-brand-50 text-brand-800"
-                  : "border-slate-200 bg-slate-50 text-slate-500"
-              )}
-            >
-              2. Operational context
-            </span>
-          </div>
-        </div>
-        {item?.status !== "ACTIVE" && (
-          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-            This item is inactive. Reactivate it before submitting a usage request.
-          </div>
-        )}
-        {projectedStockWarning && (
-          <div className="space-y-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-            <p>{projectedStockWarning}</p>
-            <button
-              type="button"
-              onClick={onContinueToPurchaseRequest}
-              className="rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-200"
-            >
-              Create purchase request
-            </button>
-          </div>
-        )}
-        {errorMessage && (
-          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800">{errorMessage}</div>
-        )}
-        <form onSubmit={(event) => void onSubmit(event)} className="space-y-3 px-4 py-4">
-          <section className="space-y-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Step 1 — Reason for request
-            </p>
-            <div className="grid gap-2 md:grid-cols-2">
-              {([
-                { value: "MAINTENANCE", label: "Maintenance" },
-                { value: "BREAKDOWN", label: "Breakdown" }
-              ] as const).map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() =>
-                    onFormChange((current) => ({
-                      ...current,
-                      reasonType: option.value,
-                      maintenanceRigId:
-                        option.value === "MAINTENANCE"
-                          ? current.maintenanceRigId
-                          : "",
-                      maintenanceRequestId:
-                        option.value === "MAINTENANCE" ? current.maintenanceRequestId : "",
-                      breakdownReportId:
-                        option.value === "BREAKDOWN" ? current.breakdownReportId : ""
-                    }))
-                  }
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-left text-sm font-medium transition-colors",
-                    form.reasonType === option.value
-                      ? "border-brand-300 bg-brand-50 text-brand-900"
-                      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="space-y-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              Step 2 — Operational context
-            </p>
-            {!form.reasonType ? (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                Select a reason to continue.
-              </p>
-            ) : (
-              <div className="grid gap-3 md:grid-cols-2">
-                <InputField
-                  label="Quantity"
-                  type="number"
-                  value={form.quantity}
-                  onChange={(value) =>
-                    onFormChange((current) => ({ ...current, quantity: value }))
-                  }
-                  required
-                />
-                <FilterSelect
-                  label="From Location"
-                  value={form.locationId}
-                  onChange={(value) =>
-                    onFormChange((current) => ({ ...current, locationId: value }))
-                  }
-                  options={[
-                    { value: "", label: "Select location" },
-                    ...locations.map((location) => ({ value: location.id, label: location.name }))
-                  ]}
-                />
-
-                {form.reasonType === "MAINTENANCE" && (
-                  <>
-                    <FilterSelect
-                      label="Rig Under Maintenance"
-                      value={form.maintenanceRigId}
-                      onChange={(value) =>
-                        onFormChange((current) => ({
-                          ...current,
-                          maintenanceRigId: value,
-                          maintenanceRequestId: ""
-                        }))
-                      }
-                      options={[
-                        {
-                          value: "",
-                          label:
-                            maintenanceRigOptions.length > 0
-                              ? "Select rig"
-                              : "No rigs currently under maintenance"
-                        },
-                        ...maintenanceRigOptions.map((entry) => ({
-                          value: entry.id,
-                          label: entry.rigCode
-                        }))
-                      ]}
-                    />
-                    {form.maintenanceRigId && maintenanceRequestsForSelectedRig.length === 1 ? (
-                      <label className="text-xs text-ink-700">
-                        <span className="mb-1 block uppercase tracking-wide text-slate-500">
-                          Open Maintenance
-                        </span>
-                        <input
-                          value={`${maintenanceRequestsForSelectedRig[0].requestCode} (auto-linked)`}
-                          readOnly
-                          className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                        />
-                      </label>
-                    ) : (
-                      <FilterSelect
-                        label="Open Maintenance"
-                        value={form.maintenanceRequestId}
-                        onChange={(value) =>
-                          onFormChange((current) => ({
-                            ...current,
-                            maintenanceRequestId: value
-                          }))
-                        }
-                        options={[
-                          {
-                            value: "",
-                            label:
-                              form.maintenanceRigId
-                                ? maintenanceRequestsForSelectedRig.length > 1
-                                  ? "Select maintenance record"
-                                  : "No open records for selected rig"
-                                : "Select rig first"
-                          },
-                          ...maintenanceRequestsForSelectedRig.map((requestRow) => ({
-                            value: requestRow.id,
-                            label: `${requestRow.requestCode} • ${
-                              requestRow.rig?.rigCode || "No rig"
-                            }`
-                          }))
-                        ]}
-                      />
-                    )}
-                    <label className="text-xs text-ink-700">
-                      <span className="mb-1 block uppercase tracking-wide text-slate-500">
-                        Note (optional)
-                      </span>
-                      <input
-                        value={form.reasonDetails}
-                        onChange={(event) =>
-                          onFormChange((current) => ({
-                            ...current,
-                            reasonDetails: event.target.value
-                          }))
-                        }
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                        placeholder="Short usage note"
-                      />
-                    </label>
-                    {form.maintenanceRigId &&
-                      maintenanceRequestsForSelectedRig.length === 0 && (
-                        <p className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                          No open maintenance case found for this rig. Report maintenance first,
-                          then request item usage.
-                        </p>
-                      )}
-                    {form.maintenanceRigId &&
-                      maintenanceRequestsForSelectedRig.length > 1 &&
-                      !form.maintenanceRequestId && (
-                        <p className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                          Multiple open maintenance cases found for this rig. Select the case this
-                          request belongs to.
-                        </p>
-                      )}
-                    {resolvedMaintenanceContext && (
-                      <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                        <p>
-                          <span className="font-semibold">Rig:</span>{" "}
-                          {resolvedMaintenanceContext.rig?.rigCode || "-"}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Project:</span>{" "}
-                          {resolvedMaintenanceContext.project?.name || "No active project"}
-                        </p>
-                        {resolvedMaintenanceContext.issueDescription ? (
-                          <p>
-                            <span className="font-semibold">Work:</span>{" "}
-                            {resolvedMaintenanceContext.issueDescription}
-                          </p>
-                        ) : null}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {form.reasonType === "BREAKDOWN" && (
-                  <>
-                    <FilterSelect
-                      label="Open Breakdown"
-                      value={form.breakdownReportId}
-                      onChange={(value) =>
-                        onFormChange((current) => ({
-                          ...current,
-                          breakdownReportId: value
-                        }))
-                      }
-                      options={[
-                        {
-                          value: "",
-                          label:
-                            breakdownReports.length > 0
-                              ? "Select breakdown record"
-                              : "No open breakdown records"
-                        },
-                        ...breakdownReports.map((entry) => ({
-                          value: entry.id,
-                          label: `${entry.title} • ${entry.rig?.rigCode || "No rig"}`
-                        }))
-                      ]}
-                    />
-                    <label className="text-xs text-ink-700">
-                      <span className="mb-1 block uppercase tracking-wide text-slate-500">
-                        Note (optional)
-                      </span>
-                      <input
-                        value={form.reasonDetails}
-                        onChange={(event) =>
-                          onFormChange((current) => ({
-                            ...current,
-                            reasonDetails: event.target.value
-                          }))
-                        }
-                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                        placeholder="Short usage note"
-                      />
-                    </label>
-                    {selectedBreakdownContext && (
-                      <div className="md:col-span-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                        <p>
-                          <span className="font-semibold">Rig:</span>{" "}
-                          {selectedBreakdownContext.rig?.rigCode || "-"}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Project:</span>{" "}
-                          {selectedBreakdownContext.project?.name || "-"}
-                        </p>
-                        <p>
-                          <span className="font-semibold">Severity:</span>{" "}
-                          {selectedBreakdownContext.severity}
-                        </p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-
-          <div className="flex flex-wrap justify-end gap-2 md:col-span-2">
-            <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
-              Cancel
-            </button>
-            {hasStockShortage && (
-              <button
-                type="button"
-                onClick={onContinueToPurchaseRequest}
-                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
-              >
-                Create purchase request
-              </button>
-            )}
-            <button
-              type="submit"
-              disabled={
-                submitting ||
-                item?.status !== "ACTIVE" ||
-                hasStockShortage ||
-                !hasRequiredContextSelection
-              }
-              className="gf-btn-primary px-3 py-1.5 text-xs"
-            >
-              {submitting ? "Submitting..." : "Submit Request"}
-            </button>
-          </div>
-        </form>
-      </section>
-    </div>
   );
 }
