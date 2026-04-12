@@ -69,6 +69,14 @@ npm run db:refresh:demo
 npm run dev
 ```
 
+If local dev ever shows chunk-load errors, endless loading placeholders, or missing-module errors from `.next`, run a clean reset:
+
+```bash
+npm run dev:reset
+```
+
+Dev artifacts are now isolated per port (`.next-dev-3000`, `.next-dev-3001`, etc.), but you should still avoid running overlapping dev/build commands in the same shell session.
+
 Open [http://localhost:3000](http://localhost:3000).
 
 Seed login accounts:

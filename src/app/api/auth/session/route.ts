@@ -21,5 +21,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  return NextResponse.json({ user: session });
+  return NextResponse.json({
+    user: {
+      id: session.userId,
+      userId: session.userId,
+      email: session.email,
+      name: session.name,
+      role: session.role
+    }
+  });
 }

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { requireApiPermission } from "@/lib/auth/api-guard";
+import { requireAnyApiPermission } from "@/lib/auth/api-guard";
+import { canAccess } from "@/lib/auth/permissions";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
 import {
@@ -10,10 +11,11 @@ import {
 } from "@/lib/spending-stage-progress";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireApiPermission(request, "finance:view");
+  const auth = await requireAnyApiPermission(request, ["finance:view", "drilling:view"]);
   if (!auth.ok) {
     return auth.response;
   }
+  const canViewFinance = canAccess(auth.session.role, "finance:view");
 
   const fromParam = request.nextUrl.searchParams.get("from");
   const toParam = request.nextUrl.searchParams.get("to");
@@ -68,12 +70,14 @@ export async function GET(request: NextRequest) {
         toMeter: true
       }
     }),
-    prisma.inventoryMovement.findMany({
-      where: movementWhere,
-      select: {
-        totalCost: true
-      }
-    }),
+    canViewFinance
+      ? prisma.inventoryMovement.findMany({
+          where: movementWhere,
+          select: {
+            totalCost: true
+          }
+        })
+      : Promise.resolve([] as Array<{ totalCost: number }>),
     projectId
       ? prisma.project.findUnique({
           where: {
@@ -101,7 +105,9 @@ export async function GET(request: NextRequest) {
   const totalMeters = reports.reduce((sum, report) => sum + safeNumber(report.totalMetersDrilled), 0);
   const totalWorkHours = reports.reduce((sum, report) => sum + safeNumber(report.workHours), 0);
   const totalReports = reports.length;
-  const totalExpenses = usageMovements.reduce((sum, movement) => sum + safeNumber(movement.totalCost), 0);
+  const totalExpenses = canViewFinance
+    ? usageMovements.reduce((sum, movement) => sum + safeNumber(movement.totalCost), 0)
+    : 0;
 
   const rawStageBands = extractProjectStageBands(projectRateCard?.billingRateItems || []);
   const stageBands = normalizeSpendingStageBands(rawStageBands);
@@ -147,8 +153,8 @@ export async function GET(request: NextRequest) {
       totalMeters: roundMetric(totalMeters),
       totalReports,
       totalWorkHours: roundMetric(totalWorkHours),
-      totalExpenses: roundCurrency(totalExpenses),
-      totalCostPerMeter: totalMeters > 0 ? roundCurrency(totalExpenses / totalMeters) : null
+      totalExpenses: canViewFinance ? roundCurrency(totalExpenses) : 0,
+      totalCostPerMeter: canViewFinance && totalMeters > 0 ? roundCurrency(totalExpenses / totalMeters) : null
     },
     stageConfigured,
     metersByHole

@@ -5,9 +5,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { useRole } from "@/components/layout/role-provider";
 import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import { canAccess } from "@/lib/auth/permissions";
 import {
   buildDrillOperationalKpiSummary,
   buildDrillReportDirectCostSummary
@@ -70,9 +72,11 @@ interface SpendingDrillingReportsPayload {
 const emptyRows: SpendingDrillingReportRow[] = [];
 
 export default function SpendingDrillingReportsPage() {
+  const { role } = useRole();
   const { filters } = useAnalyticsFilters();
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
+  const canViewFinance = Boolean(role && canAccess(role, "finance:view"));
   const [rows, setRows] = useState<SpendingDrillingReportRow[]>(emptyRows);
   const [loadingRows, setLoadingRows] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
@@ -185,14 +189,14 @@ export default function SpendingDrillingReportsPage() {
   );
 
   const reportDirectCost = useMemo(() => {
-    if (!selectedReport) {
+    if (!canViewFinance || !selectedReport) {
       return null;
     }
     return buildDrillReportDirectCostSummary({
       billableAmount: selectedReport.billableAmount,
       inventoryMovements: selectedReport.inventoryMovements || []
     });
-  }, [selectedReport]);
+  }, [canViewFinance, selectedReport]);
 
   const reportOperationalKpi = useMemo(() => {
     if (!selectedReport) {
@@ -206,24 +210,28 @@ export default function SpendingDrillingReportsPage() {
   }, [selectedReport]);
 
   return (
-    <AccessGate permission="finance:view">
+    <AccessGate anyOf={["finance:view", "drilling:view"]}>
       <div className="gf-page-stack">
         {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
 
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
-              Drilling reports in Spending are project-first. Choose one project in the top bar.
+              Drilling reports in Project Operations are project-first. Choose one project in the top bar.
             </p>
           </Card>
         ) : (
           <section className="gf-section space-y-4">
             <Card
-              title="Spending / Drilling reports"
-              subtitle="Report list and details in the same project finance workspace."
+              title="Project Operations / Drilling reports"
+              subtitle={
+                canViewFinance
+                  ? "Report list and details in the same project operations workspace."
+                  : "Report list and details in the same project drilling workspace."
+              }
               action={
                 <Link href={spendingHref} className="gf-btn-subtle">
-                  Back to Spending
+                  Back to Project Operations
                 </Link>
               }
             >
@@ -289,7 +297,9 @@ export default function SpendingDrillingReportsPage() {
                         value={formatNumber(Math.max(0, Number(selectedReport.assistantCount || 0)))}
                       />
                       <DetailRow label="Crew" value={formatCrewSummary(selectedReport)} />
-                      <DetailRow label="Revenue" value={formatCurrency(selectedReport.billableAmount)} />
+                      {canViewFinance ? (
+                        <DetailRow label="Revenue" value={formatCurrency(selectedReport.billableAmount)} />
+                      ) : null}
                       <DetailRow label="Comments" value={selectedReport.comments || "-"} />
                       <DetailRow label="Recorded by" value={selectedReport.submittedBy?.fullName || "-"} />
                     </div>
@@ -326,18 +336,22 @@ export default function SpendingDrillingReportsPage() {
                                 : formatNumber(reportOperationalKpi.metersPerHour)
                             }
                           />
-                          <DetailRow
-                            label="Consumables cost used"
-                            value={formatCurrency(reportOperationalKpi.consumablesCostUsed)}
-                          />
-                          <DetailRow
-                            label="Consumables cost per meter"
-                            value={
-                              reportOperationalKpi.consumablesCostPerMeter === null
-                                ? "—"
-                                : formatCurrency(reportOperationalKpi.consumablesCostPerMeter)
-                            }
-                          />
+                          {canViewFinance ? (
+                            <>
+                              <DetailRow
+                                label="Consumables cost used"
+                                value={formatCurrency(reportOperationalKpi.consumablesCostUsed)}
+                              />
+                              <DetailRow
+                                label="Consumables cost per meter"
+                                value={
+                                  reportOperationalKpi.consumablesCostPerMeter === null
+                                    ? "—"
+                                    : formatCurrency(reportOperationalKpi.consumablesCostPerMeter)
+                                }
+                              />
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -356,7 +370,9 @@ export default function SpendingDrillingReportsPage() {
                               <p className="truncate">
                                 {formatNumber(movement.quantity)} x {movement.item?.name || "Item"}
                               </p>
-                              <p className="font-medium">{formatCurrency(movement.totalCost || 0)}</p>
+                              {canViewFinance ? (
+                                <p className="font-medium">{formatCurrency(movement.totalCost || 0)}</p>
+                              ) : null}
                             </div>
                           ))}
                         </div>

@@ -3,7 +3,8 @@ import type { Permission } from "@/lib/auth/permissions";
 export interface NavItem {
   href: string;
   label: string;
-  permission: Permission;
+  permission?: Permission;
+  anyOf?: Permission[];
 }
 
 export interface NavChildItem {
@@ -16,13 +17,12 @@ export const navItems: NavItem[] = [
   { href: "/", label: "Dashboard", permission: "dashboard:view" },
   { href: "/projects", label: "Projects", permission: "projects:view" },
   { href: "/rigs", label: "Rigs", permission: "rigs:view" },
-  { href: "/drilling-reports", label: "Drilling Reports", permission: "drilling:view" },
   { href: "/expenses", label: "Purchase Requests", permission: "expenses:manual" },
   { href: "/breakdowns", label: "Breakdowns", permission: "breakdowns:view" },
   { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
   { href: "/inventory", label: "Inventory", permission: "inventory:view" },
   { href: "/approvals", label: "Approvals", permission: "reports:view" },
-  { href: "/spending", label: "Spending", permission: "finance:view" },
+  { href: "/spending", label: "Project Operations", anyOf: ["finance:view", "drilling:view"] },
   { href: "/activity-log", label: "Activity Log", permission: "reports:view" },
   { href: "/clients", label: "Clients", permission: "clients:view" },
   { href: "/employees", label: "Employees", permission: "employees:view" },

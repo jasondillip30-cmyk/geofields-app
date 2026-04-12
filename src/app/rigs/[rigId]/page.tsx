@@ -41,7 +41,6 @@ export default async function RigProfilePage({
   }
 
   const [
-    currentProject,
     maintenanceHistory,
     breakdownHistory,
     inventoryUsageHistory,
@@ -51,16 +50,6 @@ export default async function RigProfilePage({
     expenseAgg,
     metersAgg
   ] = await Promise.all([
-    prisma.project.findFirst({
-      where: { assignedRigId: rigId, status: "ACTIVE" },
-      include: {
-        client: {
-          select: {
-            name: true
-          }
-        }
-      }
-    }),
     prisma.maintenanceRequest.findMany({
       where: { rigId },
       orderBy: { createdAt: "desc" },
@@ -263,14 +252,6 @@ export default async function RigProfilePage({
           <MetricCard label="Condition" value={rig.condition} />
           <MetricCard label="Condition Score" value={`${rig.conditionScore}/100`} />
           <MetricCard
-            label="Current Project"
-            value={currentProject?.name || "Unassigned"}
-          />
-          <MetricCard
-            label="Current Client"
-            value={currentProject?.client?.name || "Unassigned"}
-          />
-          <MetricCard
             label="Acquisition Date"
             value={rig.acquisitionDate ? rig.acquisitionDate.toISOString().slice(0, 10) : "-"}
           />
@@ -299,9 +280,6 @@ export default async function RigProfilePage({
               <p>Total hours worked: {formatNumber(rig.totalHoursWorked)}</p>
               <p>
                 Total meters drilled: {formatNumber(metersAgg._sum.totalMetersDrilled || 0)}
-              </p>
-              <p>
-                Current assignment: {currentProject?.name || "No active assignment"}
               </p>
               {rig.photoUrl && (
                 // eslint-disable-next-line @next/next/no-img-element

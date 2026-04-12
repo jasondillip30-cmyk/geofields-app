@@ -98,7 +98,7 @@ function deriveExecutiveFocusItems(tablePreviews: CopilotTablePreview[]) {
       label: entity,
       severity,
       amount: recognizedSpend,
-      href: readString(row, ["href"]) || "/cost-tracking/budget-vs-actual",
+      href: readString(row, ["href"]) || "/spending",
       targetId: readString(row, ["targetId", "id", "entityId"]) || undefined,
       sectionId: readString(row, ["sectionId"]) || undefined,
       targetPageKey: "budget-vs-actual",
@@ -297,7 +297,7 @@ function deriveBudgetFocusItems(tablePreviews: CopilotTablePreview[]) {
         label: entity,
         severity,
         amount,
-        href: readString(row, ["href"]) || "/cost-tracking/budget-vs-actual",
+        href: readString(row, ["href"]) || "/spending",
         targetId: readString(row, ["targetId", "id", "entityId"]) || undefined,
         sectionId: readString(row, ["sectionId"]) || inferBudgetSectionId(row),
         targetPageKey: "budget-vs-actual",
@@ -734,7 +734,7 @@ function deriveMetricFocusItems(context: CopilotPageContext) {
 
   const revenueAttributionGapAmount = findMetricValue(
     context.summaryMetrics,
-    [/missing revenue rig attribution amount/i, /revenue missing rig attribution amount/i]
+    [/missing revenue rig attribution amount/i, /spending missing rig attribution amount/i]
   );
   if (revenueAttributionGapAmount > 0) {
     items.push({

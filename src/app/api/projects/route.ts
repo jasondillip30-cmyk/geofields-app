@@ -87,6 +87,7 @@ export async function GET(request: NextRequest) {
 
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const hasDateFilter = Boolean(fromDate || toDate);
@@ -98,6 +99,11 @@ export async function GET(request: NextRequest) {
   });
 
   const mappedProjects = projects.map(mapProjectRecord);
+
+  if (projectId) {
+    const scopedProject = mappedProjects.filter((project) => project.id === projectId);
+    return NextResponse.json({ data: scopedProject });
+  }
 
   if (!hasScopeFilter) {
     return NextResponse.json({ data: mappedProjects });

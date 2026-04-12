@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { debugLog } from "@/lib/observability";
@@ -40,6 +41,15 @@ interface RigCostBreakdown {
   totalExpenses: number;
 }
 
+interface PurposeSummary {
+  totalRecognizedSpend: number;
+  breakdownCost: number;
+  maintenanceCost: number;
+  stockReplenishmentCost: number;
+  operatingCost: number;
+  otherUnlinkedCost: number;
+}
+
 const UNASSIGNED_CLIENT_ID = "__unassigned_client__";
 const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
 const UNASSIGNED_RIG_ID = "__unassigned_rig__";
@@ -52,6 +62,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/profit/summary");
 
   const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
@@ -160,6 +171,8 @@ export async function GET(request: NextRequest) {
     stats: spendContext.recognitionStats
   };
   const purposeTotals = spendContext.purposeTotals;
+  const usagePurposeSummary = buildUsagePurposeSummary(usageExpenses);
+  const recognizedPurposeSummary = normalizeRecognizedPurposeSummary(purposeTotals);
   const classificationAudit = spendContext.classificationAudit;
 
   const trendGranularity = resolveTrendGranularity({
@@ -323,14 +336,16 @@ export async function GET(request: NextRequest) {
       recognition: recognizedExpenseResult.stats,
       totalExpenses,
       approvedIntentAmount,
+      usagePurposeSummary,
       expenseStatusCounts,
-      purposeTotals,
+      purposeTotals: recognizedPurposeSummary,
       classificationAudit
     },
     { channel: "finance" }
   );
 
-  return NextResponse.json({
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json({
     filters: {
       projectId: projectId || "all",
       clientId: clientId || "all",
@@ -344,13 +359,10 @@ export async function GET(request: NextRequest) {
       recognizedSpend: roundCurrency(totalExpenses),
       totalProfit: roundCurrency(totalProfit)
     },
-    operationalPurposeSummary: {
-      totalRecognizedSpend: purposeTotals.recognizedSpendTotal,
-      breakdownCost: purposeTotals.breakdownCost,
-      maintenanceCost: purposeTotals.maintenanceCost,
-      stockReplenishmentCost: purposeTotals.stockReplenishmentCost,
-      operatingCost: purposeTotals.operatingCost,
-      otherUnlinkedCost: purposeTotals.otherUnlinkedCost
+    operationalPurposeSummary: usagePurposeSummary,
+    recognizedPurposeSummary,
+    meta: {
+      expenseBasis: "actual-use" as const
     },
     classificationAudit,
     kpis: {
@@ -378,7 +390,9 @@ export async function GET(request: NextRequest) {
       rigs: profitByRig,
       projects: profitByProject
     }
-  });
+    }),
+    "/api/profit/summary"
+  );
 }
 
 function nullableFilter(value: string | null) {
@@ -549,6 +563,82 @@ function calculatePercent(value: number, total: number) {
 function normalizeExpenseCategory(category: string | null | undefined) {
   const value = category?.trim();
   return value || "Uncategorized";
+}
+
+function buildUsagePurposeSummary(
+  expenses: Array<{
+    amount: number;
+    contextType: string | null;
+    clientId: string | null;
+    projectId: string | null;
+    rigId: string | null;
+  }>
+): PurposeSummary {
+  const totals: PurposeSummary = {
+    totalRecognizedSpend: 0,
+    breakdownCost: 0,
+    maintenanceCost: 0,
+    stockReplenishmentCost: 0,
+    operatingCost: 0,
+    otherUnlinkedCost: 0
+  };
+
+  for (const expense of expenses) {
+    const amount = safeNumber(expense.amount);
+    if (amount <= 0) {
+      continue;
+    }
+    totals.totalRecognizedSpend += amount;
+
+    if (expense.contextType === "BREAKDOWN") {
+      totals.breakdownCost += amount;
+      continue;
+    }
+
+    if (expense.contextType === "MAINTENANCE") {
+      totals.maintenanceCost += amount;
+      continue;
+    }
+
+    if (
+      expense.contextType === "OTHER" &&
+      !expense.clientId &&
+      !expense.projectId &&
+      !expense.rigId
+    ) {
+      totals.otherUnlinkedCost += amount;
+      continue;
+    }
+
+    totals.operatingCost += amount;
+  }
+
+  return {
+    totalRecognizedSpend: roundCurrency(totals.totalRecognizedSpend),
+    breakdownCost: roundCurrency(totals.breakdownCost),
+    maintenanceCost: roundCurrency(totals.maintenanceCost),
+    stockReplenishmentCost: roundCurrency(totals.stockReplenishmentCost),
+    operatingCost: roundCurrency(totals.operatingCost),
+    otherUnlinkedCost: roundCurrency(totals.otherUnlinkedCost)
+  };
+}
+
+function normalizeRecognizedPurposeSummary(source: {
+  recognizedSpendTotal: number;
+  breakdownCost: number;
+  maintenanceCost: number;
+  stockReplenishmentCost: number;
+  operatingCost: number;
+  otherUnlinkedCost: number;
+}): PurposeSummary {
+  return {
+    totalRecognizedSpend: roundCurrency(source.recognizedSpendTotal),
+    breakdownCost: roundCurrency(source.breakdownCost),
+    maintenanceCost: roundCurrency(source.maintenanceCost),
+    stockReplenishmentCost: roundCurrency(source.stockReplenishmentCost),
+    operatingCost: roundCurrency(source.operatingCost),
+    otherUnlinkedCost: roundCurrency(source.otherUnlinkedCost)
+  };
 }
 
 function classifyCostGroup(

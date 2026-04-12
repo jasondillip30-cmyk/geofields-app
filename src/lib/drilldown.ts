@@ -6,6 +6,9 @@ export function buildScopedHref(
   overrides?: Record<string, string | null | undefined>
 ) {
   const search = new URLSearchParams();
+  if (filters.workspaceMode && filters.workspaceMode !== "all-projects") {
+    search.set("workspace", filters.workspaceMode);
+  }
   if (filters.from) search.set("from", filters.from);
   if (filters.to) search.set("to", filters.to);
   if (filters.projectId !== "all") {

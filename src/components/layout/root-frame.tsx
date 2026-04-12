@@ -9,11 +9,20 @@ const plainRoutes = ["/login", "/unauthorized"];
 
 export function RootFrame({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const isPlainRoute = plainRoutes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  const normalizedPathname = normalizeAuthPathname(pathname);
+  const isPlainRoute = plainRoutes.some(
+    (route) => normalizedPathname === route || normalizedPathname.startsWith(`${route}/`)
+  );
 
   if (isPlainRoute) {
     return <>{children}</>;
   }
 
   return <AppShell>{children}</AppShell>;
+}
+
+function normalizeAuthPathname(pathname: string) {
+  return pathname.replace(/^\/(login|unauthorized)\.+(?=\/|$)/i, (_, segment: string) => {
+    return `/${segment.toLowerCase()}`;
+  });
 }

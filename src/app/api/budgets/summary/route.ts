@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import {
   buildBudgetDateOverlapWhere,
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/budgets/summary");
 
   const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
@@ -186,6 +188,9 @@ export async function GET(request: NextRequest) {
   const alerts = summarizeBudgetAlerts(byProject);
 
   const response: BudgetVsActualSummaryResponse = {
+    meta: {
+      expenseBasis: "recognized"
+    },
     filters: {
       projectId: projectId || "all",
       clientId: clientId || "all",
@@ -242,5 +247,8 @@ export async function GET(request: NextRequest) {
     { channel: "finance" }
   );
 
-  return NextResponse.json(response);
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json(response),
+    "/api/budgets/summary"
+  );
 }

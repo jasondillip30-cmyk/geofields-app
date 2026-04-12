@@ -13,7 +13,7 @@ import type {
   ReceiptFollowUpStage,
   ReceiptWorkflowChoice,
   ReviewState
-} from "@/components/inventory/receipt-intake-panel";
+} from "@/components/inventory/receipt-intake-panel-types";
 
 export function ReceiptIntakeScanStep({
   manualInputSelected,

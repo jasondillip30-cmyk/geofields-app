@@ -123,7 +123,7 @@ run("scoped href keeps only active filters", () => {
       to: null
     }
   });
-  assert.equal(href, "/cost-tracking?clientId=client-1&from=2026-02-01");
+  assert.equal(href, "/spending?clientId=client-1&from=2026-02-01");
 });
 
 run("navigation target dedupe keeps one per precise target and defaults precision", () => {

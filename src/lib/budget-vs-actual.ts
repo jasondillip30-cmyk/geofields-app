@@ -27,6 +27,9 @@ export interface BudgetVsActualRow {
 }
 
 export interface BudgetVsActualSummaryResponse {
+  meta?: {
+    expenseBasis: "recognized" | "actual-use";
+  };
   filters: {
     projectId?: string;
     clientId: string;

@@ -26,7 +26,7 @@ function LoginContent() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const nextPath = searchParams.get("next");
+  const nextPath = sanitizeNextPath(searchParams.get("next"));
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -152,4 +152,32 @@ function LoginFallback() {
       </section>
     </main>
   );
+}
+
+function sanitizeNextPath(rawNextPath: string | null) {
+  if (!rawNextPath || !rawNextPath.startsWith("/") || rawNextPath.startsWith("//")) {
+    return null;
+  }
+
+  const parsed = new URL(rawNextPath, "http://localhost");
+  const normalizedPathname = parsed.pathname.replace(
+    /^\/(login|unauthorized)\.+(?=\/|$)/i,
+    (_, segment: string) => `/${segment.toLowerCase()}`
+  );
+  const normalizedTarget = `${normalizedPathname}${parsed.search}`;
+
+  if (normalizedPathname.startsWith("/api/")) {
+    return null;
+  }
+
+  if (
+    normalizedPathname === "/login" ||
+    normalizedPathname.startsWith("/login/") ||
+    normalizedPathname === "/unauthorized" ||
+    normalizedPathname.startsWith("/unauthorized/")
+  ) {
+    return null;
+  }
+
+  return normalizedTarget;
 }

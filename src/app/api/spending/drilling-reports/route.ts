@@ -1,11 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { requireApiPermission } from "@/lib/auth/api-guard";
+import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireApiPermission(request, "finance:view");
+  const auth = await requireAnyApiPermission(request, ["finance:view", "drilling:view"]);
   if (!auth.ok) {
     return auth.response;
   }

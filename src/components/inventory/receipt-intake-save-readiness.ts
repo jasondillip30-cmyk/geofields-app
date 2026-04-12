@@ -1,4 +1,4 @@
-import type { ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage } from "@/components/inventory/receipt-intake-panel";
+import type { ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage } from "@/components/inventory/receipt-intake-panel-types";
 import {
   detectRawPayloadFormat,
   failureStageMessage,

@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
 import { AccessGate } from "@/components/layout/access-gate";
-import type { AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { Card } from "@/components/ui/card";
 
 interface ClientOption {
@@ -35,22 +35,22 @@ export default function ExpensesPage() {
 
 function ExpensesPageContent() {
   const searchParams = useSearchParams();
+  const { filters } = useAnalyticsFilters();
   const initialProjectId = searchParams.get("projectId")?.trim() || "";
   const initialBreakdownId = searchParams.get("breakdownId")?.trim() || "";
   const initialMaintenanceRequestId =
     searchParams.get("maintenanceRequestId")?.trim() || "";
-  const filters: AnalyticsFilters = {
-    projectId: "all",
-    clientId: "all",
-    rigId: "all",
-    from: "",
-    to: ""
-  };
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rigs, setRigs] = useState<RigOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isProjectLocked = filters.workspaceMode === "project" && filters.projectId !== "all";
+  const resolvedInitialProjectId = isProjectLocked
+    ? filters.projectId
+    : filters.workspaceMode === "project"
+      ? initialProjectId
+      : "";
 
   const loadReferenceData = useCallback(async (options?: { preserveUi?: boolean }) => {
     const preserveUi = options?.preserveUi === true;
@@ -59,10 +59,15 @@ function ExpensesPageContent() {
       setErrorMessage(null);
     }
     try {
+      const scopedQuery = new URLSearchParams();
+      if (isProjectLocked) {
+        scopedQuery.set("projectId", filters.projectId);
+      }
+      const scopedSuffix = scopedQuery.toString() ? `?${scopedQuery.toString()}` : "";
       const [clientsRes, projectsRes, rigsRes] = await Promise.all([
-        fetch("/api/clients", { cache: "no-store" }),
-        fetch("/api/projects", { cache: "no-store" }),
-        fetch("/api/rigs", { cache: "no-store" })
+        fetch(`/api/clients${scopedSuffix}`, { cache: "no-store" }),
+        fetch(`/api/projects${scopedSuffix}`, { cache: "no-store" }),
+        fetch(`/api/rigs${scopedSuffix}`, { cache: "no-store" })
       ]);
 
       const clientsPayload = clientsRes.ok ? await clientsRes.json() : { data: [] };
@@ -105,11 +110,25 @@ function ExpensesPageContent() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [filters.projectId, isProjectLocked]);
 
   useEffect(() => {
     void loadReferenceData();
   }, [loadReferenceData]);
+
+  if (filters.workspaceMode === "project" && filters.projectId === "all") {
+    return (
+      <AccessGate permission="expenses:manual">
+        <div className="gf-page-stack">
+          <Card title="Select one project">
+            <p className="text-sm text-ink-600">
+              Project mode purchase requests require a single locked project.
+            </p>
+          </Card>
+        </div>
+      </AccessGate>
+    );
+  }
 
   return (
     <AccessGate permission="expenses:manual">
@@ -144,7 +163,7 @@ function ExpensesPageContent() {
               projects={projects}
               rigs={rigs}
               initialContext={{
-                projectId: initialProjectId || undefined,
+                projectId: resolvedInitialProjectId || undefined,
                 breakdownId: initialBreakdownId || undefined,
                 maintenanceRequestId: initialMaintenanceRequestId || undefined
               }}

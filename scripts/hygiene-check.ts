@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 const repoRoot = process.cwd();
 const prismaDir = path.join(repoRoot, "prisma");
@@ -7,6 +8,7 @@ const schemaPath = path.join(prismaDir, "schema.prisma");
 const migrationsDir = path.join(prismaDir, "migrations");
 const expectedLockPath = path.join(migrationsDir, "migration_lock.toml");
 const legacyRootLockPath = path.join(prismaDir, "migration_lock.toml");
+const generatedArtifactPaths = [".next", ".next-build", ".next-dev", ".next-preflight", ".next-smoke", "tsconfig.tsbuildinfo"];
 
 function fail(message: string) {
   throw new Error(`[hygiene-check] ${message}`);
@@ -61,8 +63,32 @@ function verifyPrismaLockLayout() {
   }
 }
 
+function verifyGeneratedArtifactsNotTracked() {
+  let output = "";
+  try {
+    output = execFileSync("git", ["ls-files", "--", ...generatedArtifactPaths], {
+      cwd: repoRoot,
+      encoding: "utf8"
+    });
+  } catch {
+    return;
+  }
+
+  const trackedPaths = output
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (trackedPaths.length > 0) {
+    fail(
+      `Generated artifacts must not be tracked by git: ${trackedPaths.join(", ")}`
+    );
+  }
+}
+
 function main() {
   verifyPrismaLockLayout();
+  verifyGeneratedArtifactsNotTracked();
   console.info(
     JSON.stringify(
       {
@@ -70,7 +96,8 @@ function main() {
         checks: [
           "prisma lock file path",
           "provider alignment (schema vs migration lock)",
-          "timestamped migration directories present"
+          "timestamped migration directories present",
+          "generated artifacts are not tracked"
         ]
       },
       null,

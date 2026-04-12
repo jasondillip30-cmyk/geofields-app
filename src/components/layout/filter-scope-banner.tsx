@@ -14,6 +14,7 @@ interface FilterScopeBannerProps {
 
 export function hasActiveScopeFilters(filters: AnalyticsFilters) {
   return (
+    filters.workspaceMode !== "all-projects" ||
     filters.projectId !== "all" ||
     filters.clientId !== "all" ||
     filters.rigId !== "all" ||
@@ -37,6 +38,14 @@ export function buildFilterScopeSummary({
     !filters.from && !filters.to
       ? "Any date"
       : `Date ${formatScopeDate(filters.from) || "Any"} to ${formatScopeDate(filters.to) || "Any"}`;
+
+  if (filters.workspaceMode === "workshop") {
+    return `Workshop mode • Global workshop operations • ${dateScope}`;
+  }
+
+  if (filters.workspaceMode === "project" && filters.projectId === "all") {
+    return `Project mode • Select one project to lock scope • ${dateScope}`;
+  }
 
   if (filters.projectId !== "all") {
     return `Project locked: ${projectLabel || filters.projectId} • ${dateScope}`;

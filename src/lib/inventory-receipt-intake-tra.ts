@@ -9,6 +9,13 @@ import {
   normalizeWhitespace,
   parseNumberSafe
 } from "@/lib/inventory-receipt-intake-parse-utils";
+import {
+  extractTraSupplierFromHeadingBlock,
+  extractTraSupplierFromLegalReceiptHeader,
+  extractTraSupplierFromRawText,
+  extractTraSupplierName,
+  isLikelySupplierName
+} from "@/lib/inventory-receipt-intake-tra-supplier";
 import { debugLog } from "@/lib/observability";
 import type {
   ReceiptHeaderExtraction,
@@ -78,179 +85,6 @@ export function extractTraCriticalFields({
   };
 }
 
-function extractTraSupplierName(text: string) {
-  if (!text) {
-    return "";
-  }
-
-  const patterns = [
-    /\b(?:supplier|merchant|trader|business|company)\s*(?:name)?\s*[:\-]?\s*([^\n\r]{3,120})/i,
-    /\b(?:name\s+of\s+supplier|supplier\s+name|business\s+name|trader\s+name)\s*[:\-]?\s*([^\n\r]{3,120})/i,
-    /\b(?:supplier|merchant|business|trader)\s*(?:name)?\s*(?:\n|\r|\s{2,})([A-Z][A-Z0-9&().,'\-\/ ]{3,120})/i
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    const candidate = normalizeSupplierCandidate(match?.[1] || "");
-    if (isLikelySupplierName(candidate)) {
-      return candidate;
-    }
-  }
-
-  return "";
-}
-
-function extractTraSupplierFromLegalReceiptHeader(text: string) {
-  if (!text) {
-    return "";
-  }
-
-  const lines = text
-    .split(/\r?\n/g)
-    .map((line) => normalizeWhitespace(line))
-    .filter(Boolean);
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] || "";
-    if (!/start\s+of\s+legal\s+receipt/i.test(line)) {
-      continue;
-    }
-
-    const window = lines.slice(index + 1, index + 18);
-    const supplier = extractFirstLikelySupplierFromLines(window);
-    if (supplier) {
-      return supplier;
-    }
-  }
-
-  return "";
-}
-
-function extractTraSupplierFromHeadingBlock(html: string) {
-  if (!html) {
-    return "";
-  }
-
-  const headingMatches = Array.from(html.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi));
-  for (const match of headingMatches) {
-    const heading = normalizeSupplierCandidate(
-      normalizeWhitespace(decodeHtmlEntities((match[1] || "").replace(/<[^>]+>/g, " ")))
-    );
-    if (!heading) {
-      continue;
-    }
-    const lower = heading.toLowerCase();
-    if (containsAny(lower, ["taxpayer", "verification portal", "receipt verification", "submit", "tra"])) {
-      continue;
-    }
-    if (isLikelySupplierName(heading)) {
-      return heading;
-    }
-  }
-
-  return "";
-}
-
-function extractTraSupplierFromRawText(text: string) {
-  if (!text) {
-    return "";
-  }
-
-  const boundedMatch = text.match(
-    /start\s+of\s+legal\s+receipt[\s\S]{0,1200}?(?:\n|\r| )([^\n\r]{3,180}?)(?=(?:\n|\r| )?(?:p\.?\s*o\.?\s*box|mobile|tin|vrn)\b)/i
-  );
-  const boundedCandidate = normalizeSupplierCandidate(boundedMatch?.[1] || "");
-  if (isLikelySupplierName(boundedCandidate)) {
-    return boundedCandidate;
-  }
-
-  const blockMatch = text.match(
-    /start\s+of\s+legal\s+receipt([\s\S]{0,1400}?)(?=\b(?:p\.?\s*o\.?\s*box|mobile|tin|vrn)\b)/i
-  );
-  if (blockMatch?.[1]) {
-    const lines = blockMatch[1]
-      .split(/\r?\n/g)
-      .map((line) => normalizeWhitespace(line))
-      .filter(Boolean);
-    const supplier = extractFirstLikelySupplierFromLines(lines);
-    if (supplier) {
-      return supplier;
-    }
-  }
-
-  const collapsed = normalizeWhitespace(text);
-  const collapsedMatch = collapsed.match(
-    /start\s+of\s+legal\s+receipt\s*[*:-]*\s*([a-z0-9&().,'\-\/ ]{3,180}?)(?=\s+(?:p\.?\s*o\.?\s*box|mobile|tin|vrn)\b)/i
-  );
-  const collapsedCandidate = normalizeSupplierCandidate(collapsedMatch?.[1] || "");
-  if (isLikelySupplierName(collapsedCandidate)) {
-    return collapsedCandidate;
-  }
-
-  return "";
-}
-
-function extractFirstLikelySupplierFromLines(lines: string[]) {
-  for (const line of lines) {
-    const normalizedLine = normalizeWhitespace(line || "");
-    if (!normalizedLine) {
-      continue;
-    }
-    const lower = normalizedLine.toLowerCase();
-    if (
-      containsAny(lower, [
-        "start of legal receipt",
-        "end of legal receipt",
-        "efd receipt verification",
-        "taxpayer receipt verification",
-        "submit"
-      ])
-    ) {
-      continue;
-    }
-    if (looksLikeSupplierStopLine(lower)) {
-      break;
-    }
-    const candidate = normalizeSupplierCandidate(normalizedLine);
-    if (isLikelySupplierName(candidate)) {
-      return candidate;
-    }
-  }
-  return "";
-}
-
-function looksLikeSupplierStopLine(lowerLine: string) {
-  return containsAny(lowerLine, [
-    "p.o box",
-    "po box",
-    "mobile",
-    "tin",
-    "vrn",
-    "serial",
-    "receipt no",
-    "receipt number",
-    "verification code",
-    "z number",
-    "tax office",
-    "purchased items",
-    "customer",
-    "subtotal",
-    "total",
-    "vat",
-    "tax"
-  ]);
-}
-
-function normalizeSupplierCandidate(value: string) {
-  if (!value) {
-    return "";
-  }
-  return normalizeWhitespace(value)
-    .replace(/\b(?:tin|vrn|serial(?:\s*no)?|receipt(?:\s*no)?|verification(?:\s*code)?|z\s*number|tax\s*office)\b.*$/i, "")
-    .replace(/^[^a-z0-9]+/i, "")
-    .trim();
-}
-
 function extractReadableTraTextWithLineBreaks(value: string, options?: { keepScripts?: boolean }) {
   if (!value) {
     return "";
@@ -266,25 +100,6 @@ function extractReadableTraTextWithLineBreaks(value: string, options?: { keepScr
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-}
-
-function isLikelySupplierName(value: string) {
-  if (!value) {
-    return false;
-  }
-  const normalized = normalizeWhitespace(value);
-  if (normalized.length < 3 || normalized.length > 120) {
-    return false;
-  }
-  const lower = normalized.toLowerCase();
-  if (containsAny(lower, ["portal", "submit", "verification", "receipt no", "receipt number"])) {
-    return false;
-  }
-  const tokens = normalized.split(" ").filter(Boolean);
-  if (tokens.length < 2 && !/\b(ltd|limited|company|co)\b/i.test(normalized)) {
-    return false;
-  }
-  return /[a-z]/i.test(normalized);
 }
 
 function extractTraVerificationCode(text: string) {

@@ -3,7 +3,7 @@ import type {
   ReceiptSnapshotLine,
   RequisitionComparisonResult,
   ReviewState
-} from "@/components/inventory/receipt-intake-panel";
+} from "@/components/inventory/receipt-intake-panel-types";
 import { formatCurrency } from "@/lib/utils";
 import { applyReceiptClassificationLineDefaults } from "@/components/inventory/receipt-intake-workflow-utils";
 import {

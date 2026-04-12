@@ -1,10 +1,13 @@
 import type { BudgetScopeType } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { normalizePlanName, parseDateOrNull, parseNumeric } from "@/lib/budget-vs-actual";
 import { prisma } from "@/lib/prisma";
+
+const LEGACY_ROUTE = "/api/budgets/plans/[planId]";
 
 export async function GET(
   request: NextRequest,
@@ -14,10 +17,11 @@ export async function GET(
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage(LEGACY_ROUTE);
 
   const { planId } = await context.params;
   if (!planId) {
-    return NextResponse.json({ message: "planId is required." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "planId is required." }, { status: 400 });
   }
 
   const plan = await prisma.budgetPlan.findUnique({
@@ -32,10 +36,10 @@ export async function GET(
   });
 
   if (!plan) {
-    return NextResponse.json({ message: "Budget plan not found." }, { status: 404 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "Budget plan not found." }, { status: 404 });
   }
 
-  return NextResponse.json({
+  return deprecatedJson("/api/budgets/plans/[planId]", {
     data: {
       ...plan,
       rig: plan.rig ? { id: plan.rig.id, name: plan.rig.rigCode } : null,
@@ -55,10 +59,11 @@ export async function PATCH(
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage(LEGACY_ROUTE);
 
   const { planId } = await context.params;
   if (!planId) {
-    return NextResponse.json({ message: "planId is required." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "planId is required." }, { status: 400 });
   }
 
   const existing = await prisma.budgetPlan.findUnique({
@@ -79,7 +84,7 @@ export async function PATCH(
     }
   });
   if (!existing) {
-    return NextResponse.json({ message: "Budget plan not found." }, { status: 404 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "Budget plan not found." }, { status: 404 });
   }
 
   const body = (await request.json().catch(() => null)) as
@@ -99,7 +104,7 @@ export async function PATCH(
     | null;
 
   if (body?.scopeType || body?.rigId || body?.projectId || body?.clientId) {
-    return NextResponse.json(
+    return deprecatedJson("/api/budgets/plans/[planId]", 
       {
         message:
           "scopeType, rigId, projectId, and clientId are immutable for now. Create a new plan if scope changes."
@@ -124,16 +129,16 @@ export async function PATCH(
   const nextIsActive = typeof body?.isActive === "boolean" ? body.isActive : existing.isActive;
 
   if (!nextName) {
-    return NextResponse.json({ message: "name is required." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "name is required." }, { status: 400 });
   }
   if (nextAmount === null || nextAmount <= 0) {
-    return NextResponse.json({ message: "amount must be a number greater than 0." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "amount must be a number greater than 0." }, { status: 400 });
   }
   if (!nextPeriodStart || !nextPeriodEnd) {
-    return NextResponse.json({ message: "periodStart and periodEnd must be valid dates." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "periodStart and periodEnd must be valid dates." }, { status: 400 });
   }
   if (nextPeriodStart.getTime() > nextPeriodEnd.getTime()) {
-    return NextResponse.json({ message: "periodStart must be on or before periodEnd." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "periodStart must be on or before periodEnd." }, { status: 400 });
   }
 
   if (nextIsActive) {
@@ -146,7 +151,7 @@ export async function PATCH(
       excludeId: existing.id
     });
     if (overlapping) {
-      return NextResponse.json(
+      return deprecatedJson("/api/budgets/plans/[planId]", 
         {
           message:
             "An active budget plan already exists for this scope entity in an overlapping period."
@@ -193,7 +198,7 @@ export async function PATCH(
     return row;
   });
 
-  return NextResponse.json({ data: updated });
+  return deprecatedJson("/api/budgets/plans/[planId]", { data: updated });
 }
 
 export async function DELETE(
@@ -204,10 +209,11 @@ export async function DELETE(
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage(LEGACY_ROUTE);
 
   const { planId } = await context.params;
   if (!planId) {
-    return NextResponse.json({ message: "planId is required." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "planId is required." }, { status: 400 });
   }
 
   const existing = await prisma.budgetPlan.findUnique({
@@ -215,7 +221,7 @@ export async function DELETE(
     select: { id: true, name: true, isActive: true }
   });
   if (!existing) {
-    return NextResponse.json({ message: "Budget plan not found." }, { status: 404 });
+    return deprecatedJson("/api/budgets/plans/[planId]", { message: "Budget plan not found." }, { status: 404 });
   }
 
   const archived = await prisma.$transaction(async (tx) => {
@@ -242,7 +248,7 @@ export async function DELETE(
     return row;
   });
 
-  return NextResponse.json({
+  return deprecatedJson("/api/budgets/plans/[planId]", {
     success: true,
     data: {
       id: archived.id,
@@ -279,3 +285,9 @@ async function findOverlappingActivePlan({
   });
 }
 
+function deprecatedJson(route: string, body: unknown, init?: ResponseInit) {
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json(body, init),
+    route
+  );
+}

@@ -44,10 +44,45 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+
+  if (projectId) {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        assignedRigId: true,
+        backupRigId: true
+      }
+    });
+
+    if (!project) {
+      return NextResponse.json({ data: [] });
+    }
+
+    const orderedRigIds = [project.assignedRigId, project.backupRigId].filter(
+      (value): value is string => Boolean(value)
+    );
+    const uniqueRigIds = Array.from(new Set(orderedRigIds));
+
+    if (uniqueRigIds.length === 0) {
+      return NextResponse.json({ data: [] });
+    }
+
+    const rigs = await prisma.rig.findMany({
+      where: { id: { in: uniqueRigIds } }
+    });
+    const rigById = new Map(rigs.map((entry) => [entry.id, entry]));
+    const orderedRigs = uniqueRigIds
+      .map((id) => rigById.get(id))
+      .filter((entry): entry is (typeof rigs)[number] => Boolean(entry));
+
+    return NextResponse.json({ data: orderedRigs });
+  }
+
   const hasDateFilter = Boolean(fromDate || toDate);
   const hasScopeFilter = Boolean(clientId || rigId || hasDateFilter);
 

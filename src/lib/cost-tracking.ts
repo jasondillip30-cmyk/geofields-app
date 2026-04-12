@@ -82,6 +82,9 @@ export interface CostTrendRow {
 }
 
 export interface CostTrackingSummaryPayload {
+  meta?: {
+    expenseBasis: "recognized" | "actual-use";
+  };
   filters: CostTrackingFilters;
   overview: CostOverviewSummary;
   trendGranularity: CostTrendGranularity;

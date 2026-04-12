@@ -15,7 +15,7 @@ const stages: Array<{ key: SystemFlowStage; label: string; href: string }> = [
   { key: "movement", label: "Movement", href: "/inventory/stock-movements" },
   { key: "issue", label: "Issue", href: "/inventory/issues" },
   { key: "expense", label: "Expense", href: "/inventory/expenses" },
-  { key: "profit", label: "Profit", href: "/profit" }
+  { key: "profit", label: "Profit", href: "/spending/profit" }
 ];
 
 export function SystemFlowBar({ current, className }: SystemFlowBarProps) {

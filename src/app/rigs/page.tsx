@@ -52,7 +52,13 @@ export default function RigsPage() {
   const [expensesByRig, setExpensesByRig] = useState<ExpenseRigBucket[]>([]);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
+  const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
+  const isSingleProjectScope = scopeProjectId.length > 0;
+
   const visibleRigs = useMemo(() => {
+    if (isSingleProjectScope) {
+      return rigs;
+    }
     if (statusFilter === "ALL") {
       return rigs;
     }
@@ -66,7 +72,7 @@ export default function RigsPage() {
       );
     }
     return rigs.filter((rig) => rig.status === statusFilter);
-  }, [rigs, statusFilter]);
+  }, [isSingleProjectScope, rigs, statusFilter]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -84,8 +90,12 @@ export default function RigsPage() {
       const search = new URLSearchParams();
       if (filters.from) search.set("from", filters.from);
       if (filters.to) search.set("to", filters.to);
-      if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-      if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+      if (filters.projectId !== "all") {
+        search.set("projectId", filters.projectId);
+      } else {
+        if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+        if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+      }
 
       const query = search.toString();
       const response = await fetch(`/api/rigs${query ? `?${query}` : ""}`, { cache: "no-store" });
@@ -94,14 +104,18 @@ export default function RigsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+  }, [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to]);
 
   const loadFinancialSignals = useCallback(async () => {
     const search = new URLSearchParams();
     if (filters.from) search.set("from", filters.from);
     if (filters.to) search.set("to", filters.to);
-    if (filters.clientId !== "all") search.set("clientId", filters.clientId);
-    if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+    if (filters.projectId !== "all") {
+      search.set("projectId", filters.projectId);
+    } else {
+      if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+      if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+    }
     const query = search.toString();
     const suffix = query ? `?${query}` : "";
 
@@ -136,7 +150,7 @@ export default function RigsPage() {
       setRevenueByRig([]);
       setExpensesByRig([]);
     }
-  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+  }, [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to]);
 
   useEffect(() => {
     void loadRigs();
@@ -158,6 +172,22 @@ export default function RigsPage() {
       buildScopedHref(filters, path, overrides),
     [filters]
   );
+  const spendingHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (scopeProjectId) params.set("projectId", scopeProjectId);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    const query = params.toString();
+    return query ? `/spending?${query}` : "/spending";
+  }, [filters.from, filters.to, scopeProjectId]);
+  const drillingReportsHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (scopeProjectId) params.set("projectId", scopeProjectId);
+    if (filters.from) params.set("from", filters.from);
+    if (filters.to) params.set("to", filters.to);
+    params.set("view", "drilling-reports");
+    return `/spending?${params.toString()}`;
+  }, [filters.from, filters.to, scopeProjectId]);
 
   const rigRevenueMap = useMemo(
     () => new Map(revenueByRig.map((entry) => [entry.id, entry.revenue])),
@@ -349,7 +379,7 @@ export default function RigsPage() {
         },
         {
           label: "Open Cost Tracking",
-          href: buildHref("/cost-tracking"),
+          href: buildHref("/spending"),
           reason: "Review rig cost concentration.",
           pageKey: "cost-tracking"
         },
@@ -446,109 +476,200 @@ export default function RigsPage() {
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} rigLabel={selectedRigLabel} />
 
-        <section className="grid gap-3 md:grid-cols-5">
-          <MetricCard
-            label={
-              statusFilter === "ALL"
-                ? isScoped
-                  ? "Rigs in Scope"
-                  : "Total Rigs"
-                : statusFilter === "NEEDS_ATTENTION"
-                  ? "Rigs Needing Attention"
-                : `Rigs (${statusFilter})`
-            }
-            value={String(visibleRigs.length)}
-          />
-          <MetricCard label="Active" value={String(visibleRigs.filter((rig) => rig.status === "ACTIVE").length)} tone="good" />
-          <MetricCard label="Idle" value={String(visibleRigs.filter((rig) => rig.status === "IDLE").length)} />
-          <MetricCard
-            label="Maintenance"
-            value={String(visibleRigs.filter((rig) => rig.status === "MAINTENANCE").length)}
-            tone="warn"
-          />
-          <MetricCard
-            label="Breakdown"
-            value={String(visibleRigs.filter((rig) => rig.status === "BREAKDOWN").length)}
-            tone="danger"
-          />
-        </section>
-
-        <section className="flex flex-wrap items-center gap-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rig focus</label>
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-ink-700"
-          >
-            <option value="ALL">All rigs</option>
-            <option value="ACTIVE">Active</option>
-            <option value="IDLE">Idle</option>
-            <option value="MAINTENANCE">Maintenance</option>
-            <option value="BREAKDOWN">Breakdown</option>
-            <option value="NEEDS_ATTENTION">Needs attention</option>
-          </select>
-        </section>
-
-        <AccessGate permission="rigs:manage">
-          <section className="flex justify-end">
-            <Link
-              href="/rigs/setup"
-              className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100"
-            >
-              Create rig
-            </Link>
-          </section>
-        </AccessGate>
-
-        <section
-          id="rig-registry-section"
-          className={cn(
-            focusedSectionId === "rig-registry-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <Card title="Rig Registry" subtitle={statusFilter === "ALL" ? undefined : `Filtered by status: ${statusFilter}`}>
+        {isSingleProjectScope ? (
+          <Card title="Rig profiles">
             {loading ? (
-              <p className="text-sm text-ink-600">Loading rigs...</p>
+              <p className="text-sm text-ink-600">Loading project rigs...</p>
+            ) : visibleRigs.length === 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-ink-700">
+                  No assigned or backup rig is linked to this project yet. Add rigs in project setup to continue.
+                </p>
+                <AccessGate permission="projects:manage">
+                  <Link
+                    href={`/projects/setup?projectId=${scopeProjectId}`}
+                    className="inline-flex rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
+                  >
+                    Edit project setup
+                  </Link>
+                </AccessGate>
+              </div>
             ) : (
-              <DataTable
-                columns={["Rig", "Model", "Status", "Condition", "Score", "Hours", "Meters", "Actions"]}
-                rows={visibleRigs.map((rig) => [
-                  <Link key={rig.id} href={`/rigs/${rig.id}`} className="text-brand-700 underline-offset-2 hover:underline">
-                    {rig.rigCode}
-                  </Link>,
-                  rig.model,
-                  rig.status,
-                  rig.condition,
-                  String(rig.conditionScore),
-                  String(rig.totalHoursWorked),
-                  String(rig.totalMetersDrilled),
-                  <div key={`actions-${rig.id}`} className="flex gap-2">
-                    <AccessGate permission="rigs:manage">
-                      <Link
-                        href={`/rigs/setup?rigId=${rig.id}`}
-                        className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
-                      >
-                        Edit
-                      </Link>
-                    </AccessGate>
-                    <button
-                      type="button"
-                      className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
-                      onClick={() => void markRigOutOfService(rig)}
+              <div className="grid gap-4 lg:grid-cols-2">
+                {visibleRigs.map((rig) => {
+                  const revenue = rigRevenueMap.get(rig.id) || 0;
+                  const expenses = rigExpenseMap.get(rig.id) || 0;
+                  const profitability = revenue - expenses;
+                  return (
+                    <Card
+                      key={rig.id}
+                      title={rig.rigCode}
+                      subtitle={`${rig.model} • Serial ${rig.serialNumber}`}
                     >
-                      Mark Out of Service
-                    </button>
-                  </div>
-                ])}
-                rowIds={visibleRigs.map((rig) => `ai-focus-${rig.id}`)}
-                rowClassNames={visibleRigs.map((rig) =>
-                  focusedRowId === rig.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""
-                )}
-              />
+                      <DataTable
+                        compact
+                        columns={["Detail", "Value"]}
+                        rows={[
+                          ["Status", rig.status],
+                          ["Condition", rig.condition],
+                          ["Condition score", String(rig.conditionScore)],
+                          [
+                            "Acquisition date",
+                            rig.acquisitionDate ? rig.acquisitionDate.slice(0, 10) : "-"
+                          ],
+                          ["Total hours", String(rig.totalHoursWorked)],
+                          ["Lifetime days", String(rig.totalLifetimeDays)],
+                          ["Total meters", String(rig.totalMetersDrilled)],
+                          ["Revenue", formatCurrency(revenue)],
+                          ["Expenses", formatCurrency(expenses)],
+                          ["Profitability", formatCurrency(profitability)]
+                        ]}
+                      />
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <AccessGate permission="rigs:manage">
+                          <Link
+                            href={`/rigs/setup?rigId=${rig.id}`}
+                            className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 hover:bg-brand-100"
+                          >
+                            Edit rig setup
+                          </Link>
+                        </AccessGate>
+                        <Link
+                          href={spendingHref}
+                          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                        >
+                          Open spending
+                        </Link>
+                        <Link
+                          href={drillingReportsHref}
+                          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                        >
+                          Open drilling reports
+                        </Link>
+                        <Link
+                          href={`/rigs/${rig.id}`}
+                          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                        >
+                          Open rig details
+                        </Link>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
             )}
           </Card>
-        </section>
+        ) : (
+          <>
+            <section className="grid gap-3 md:grid-cols-5">
+              <MetricCard
+                label={
+                  statusFilter === "ALL"
+                    ? isScoped
+                      ? "Rigs in Scope"
+                      : "Total Rigs"
+                    : statusFilter === "NEEDS_ATTENTION"
+                      ? "Rigs Needing Attention"
+                    : `Rigs (${statusFilter})`
+                }
+                value={String(visibleRigs.length)}
+              />
+              <MetricCard
+                label="Active"
+                value={String(visibleRigs.filter((rig) => rig.status === "ACTIVE").length)}
+                tone="good"
+              />
+              <MetricCard label="Idle" value={String(visibleRigs.filter((rig) => rig.status === "IDLE").length)} />
+              <MetricCard
+                label="Maintenance"
+                value={String(visibleRigs.filter((rig) => rig.status === "MAINTENANCE").length)}
+                tone="warn"
+              />
+              <MetricCard
+                label="Breakdown"
+                value={String(visibleRigs.filter((rig) => rig.status === "BREAKDOWN").length)}
+                tone="danger"
+              />
+            </section>
+
+            <section className="flex flex-wrap items-center gap-2">
+              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rig focus</label>
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-ink-700"
+              >
+                <option value="ALL">All rigs</option>
+                <option value="ACTIVE">Active</option>
+                <option value="IDLE">Idle</option>
+                <option value="MAINTENANCE">Maintenance</option>
+                <option value="BREAKDOWN">Breakdown</option>
+                <option value="NEEDS_ATTENTION">Needs attention</option>
+              </select>
+            </section>
+
+            <AccessGate permission="rigs:manage">
+              <section className="flex justify-end">
+                <Link
+                  href="/rigs/setup"
+                  className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100"
+                >
+                  Create rig
+                </Link>
+              </section>
+            </AccessGate>
+
+            <section
+              id="rig-registry-section"
+              className={cn(
+                focusedSectionId === "rig-registry-section" &&
+                  "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
+              )}
+            >
+              <Card title="Rig Registry" subtitle={statusFilter === "ALL" ? undefined : `Filtered by status: ${statusFilter}`}>
+                {loading ? (
+                  <p className="text-sm text-ink-600">Loading rigs...</p>
+                ) : (
+                  <DataTable
+                    columns={["Rig", "Model", "Status", "Condition", "Score", "Hours", "Meters", "Actions"]}
+                    rows={visibleRigs.map((rig) => [
+                      <Link key={rig.id} href={`/rigs/${rig.id}`} className="text-brand-700 underline-offset-2 hover:underline">
+                        {rig.rigCode}
+                      </Link>,
+                      rig.model,
+                      rig.status,
+                      rig.condition,
+                      String(rig.conditionScore),
+                      String(rig.totalHoursWorked),
+                      String(rig.totalMetersDrilled),
+                      <div key={`actions-${rig.id}`} className="flex gap-2">
+                        <AccessGate permission="rigs:manage">
+                          <Link
+                            href={`/rigs/setup?rigId=${rig.id}`}
+                            className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
+                          >
+                            Edit
+                          </Link>
+                        </AccessGate>
+                        <button
+                          type="button"
+                          className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
+                          onClick={() => void markRigOutOfService(rig)}
+                        >
+                          Mark Out of Service
+                        </button>
+                      </div>
+                    ])}
+                    rowIds={visibleRigs.map((rig) => `ai-focus-${rig.id}`)}
+                    rowClassNames={visibleRigs.map((rig) =>
+                      focusedRowId === rig.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200" : ""
+                    )}
+                  />
+                )}
+              </Card>
+            </section>
+          </>
+        )}
       </div>
     </AccessGate>
   );

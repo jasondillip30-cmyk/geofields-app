@@ -8,14 +8,16 @@ import { useRole } from "@/components/layout/role-provider";
 
 export function AccessGate({
   permission,
+  anyOf,
   children,
   fallback
 }: {
-  permission: Permission;
+  permission?: Permission;
+  anyOf?: Permission[];
   children: ReactNode;
   fallback?: ReactNode;
 }) {
-  const { role, loading } = useRole();
+  const { role, loading, bootstrapError, refreshSession } = useRole();
 
   if (loading) {
     return (
@@ -29,7 +31,33 @@ export function AccessGate({
     );
   }
 
-  if (!role || !canAccess(role, permission)) {
+  if (bootstrapError) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
+        <h2 className="font-display text-lg">Access profile unavailable</h2>
+        <p className="mt-2 text-sm">{bootstrapError}</p>
+        <button
+          type="button"
+          onClick={() => {
+            void refreshSession();
+          }}
+          className="mt-4 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-900 hover:bg-amber-100"
+        >
+          Retry session
+        </button>
+      </div>
+    );
+  }
+
+  const allowedBySingle = permission && role ? canAccess(role, permission) : false;
+  const allowedByAnyOf =
+    Array.isArray(anyOf) && anyOf.length > 0 && role
+      ? anyOf.some((entry) => canAccess(role, entry))
+      : false;
+  const hasExplicitRule = Boolean(permission || (Array.isArray(anyOf) && anyOf.length > 0));
+  const isAllowed = hasExplicitRule ? allowedBySingle || allowedByAnyOf : Boolean(role);
+
+  if (!isAllowed) {
     return (
       fallback || (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">

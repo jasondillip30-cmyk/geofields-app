@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
 
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
   const hasDateFilter = Boolean(fromDate || toDate);
@@ -30,6 +31,26 @@ export async function GET(request: NextRequest) {
       }
     }
   });
+
+  if (projectId) {
+    const scopedProject = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { clientId: true }
+    });
+
+    if (!scopedProject) {
+      return NextResponse.json({ data: [] });
+    }
+
+    return NextResponse.json({
+      data: clients
+        .filter((client) => client.id === scopedProject.clientId)
+        .map((client) => ({
+          ...client,
+          activeProjects: client.projects.filter((project) => project.status === "ACTIVE").length
+        }))
+    });
+  }
 
   if (!hasScopeFilter) {
     return NextResponse.json({

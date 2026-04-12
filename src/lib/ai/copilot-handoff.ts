@@ -33,8 +33,10 @@ export function inferCopilotPageKeyFromHref(href: string | undefined) {
   const path = href.split("?")[0] || "";
   if (path.startsWith("/alerts-center")) return "alerts-center";
   if (path.startsWith("/data-quality/linkage-center")) return "data-quality-linkage-center";
-  if (path.startsWith("/cost-tracking/budget-vs-actual")) return "budget-vs-actual";
-  if (path.startsWith("/cost-tracking")) return "cost-tracking";
+  if (path.startsWith("/spending/drilling-reports")) return "drilling-reports";
+  if (path.startsWith("/spending/expenses")) return "expenses";
+  if (path.startsWith("/spending/profit")) return "profit";
+  if (path.startsWith("/spending")) return "cost-tracking";
   if (path.startsWith("/approvals")) return "approvals";
   if (path.startsWith("/maintenance")) return "maintenance";
   if (path.startsWith("/rigs")) return "rigs";

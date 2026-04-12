@@ -1,7 +1,7 @@
 "use client";
 
 import { InputField } from "@/components/inventory/receipt-intake-panel-fields";
-import type { ReviewState } from "@/components/inventory/receipt-intake-panel";
+import type { ReviewState } from "@/components/inventory/receipt-intake-panel-types";
 
 export function ReceiptIntakeFinalizeStep({
   review,

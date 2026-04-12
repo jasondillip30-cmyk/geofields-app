@@ -3,24 +3,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { AccessGate } from "@/components/layout/access-gate";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import {
   scrollToFocusElement,
   useCopilotFocusTarget
 } from "@/components/layout/copilot-focus-target";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
-import { Card } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/table";
 import {
-  BreakdownStatusChip,
   breakdownRowSortValue,
-  formatMaintenanceLifecycleStatus,
-  formatBreakdownCurrentState,
-  getProjectRigIds,
-  toDate,
-  toDateTime
+  getProjectRigIds
 } from "@/app/breakdowns/breakdowns-page-utils";
 import {
   INITIAL_FORM_STATE,
@@ -36,10 +27,10 @@ import {
   type RigBreakdownHistoryRow,
   type RigOption
 } from "@/app/breakdowns/breakdowns-page-types";
+import { BreakdownsPageView } from "@/app/breakdowns/breakdowns-page-view";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { isBreakdownOpenStatus, normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { buildScopedHref } from "@/lib/drilldown";
-import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
 export default function BreakdownsPage() {
   const router = useRouter();
@@ -759,692 +750,59 @@ export default function BreakdownsPage() {
     : false;
 
   return (
-    <AccessGate permission="breakdowns:view">
-      <div className="gf-page-stack">
-        {notice && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-            {notice}
-          </div>
-        )}
-        {errorMessage && (
-          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            {errorMessage}
-          </div>
-        )}
-        {isSingleProjectScope ? (
-          <ProjectLockedBanner
-            projectId={scopeProjectId}
-            projectName={scopedProject?.name || null}
-          />
-        ) : null}
-
-        <AccessGate permission="breakdowns:submit">
-          <Card
-            title="Report breakdown"
-            subtitle="Capture the issue quickly, then continue with repair actions."
-          >
-            <form onSubmit={submitBreakdown} className="space-y-3">
-              <div className="gf-guided-strip">
-                <p className="gf-guided-strip-title">Guided workflow</p>
-                <div className="gf-guided-step-list">
-                  <p className="gf-guided-step">1. Confirm project rig context.</p>
-                  <p className="gf-guided-step">2. Enter issue summary and severity.</p>
-                  <p className="gf-guided-step">3. Save and continue with repair actions.</p>
-                </div>
-              </div>
-              {isSingleProjectScope ? (
-                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                  <p>
-                    <span className="font-semibold">Project locked:</span>{" "}
-                    {scopedProject?.name || "Selected project"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Client:</span>{" "}
-                    {scopedProject?.client?.name || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Allowed rigs:</span>{" "}
-                    {effectiveProjectRigOptions.length > 0
-                      ? effectiveProjectRigOptions.map((entry) => entry.rigCode).join(", ")
-                      : "None"}
-                  </p>
-                </div>
-              ) : null}
-              {effectiveProject && effectiveProjectRigOptions.length === 0 ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  This project has no assigned rig. Assign a rig to the project first.
-                </div>
-              ) : null}
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                {isSingleProjectScope ? (
-                  <label className="text-sm text-ink-700">
-                    Project
-                    <input
-                      value={scopedProject?.name || "Selected project"}
-                      disabled
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                    />
-                  </label>
-                ) : (
-                  <label className="text-sm text-ink-700">
-                    Project
-                    <select
-                      value={form.projectId}
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          projectId: event.target.value,
-                          rigId: ""
-                        }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      required
-                    >
-                      <option value="">Select active project</option>
-                      {activeProjects.map((project) => (
-                        <option key={project.id} value={project.id}>
-                          {project.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {effectiveProjectRigOptions.length > 1 ? (
-                  <label className="text-sm text-ink-700">
-                    Project rig
-                    <select
-                      value={form.rigId}
-                      onChange={(event) =>
-                        setForm((current) => ({ ...current, rigId: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      required
-                    >
-                      <option value="">Select project rig</option>
-                      {effectiveProjectRigOptions.map((rig) => (
-                        <option key={rig.id} value={rig.id}>
-                          {rig.rigCode}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="text-sm text-ink-700">
-                    Project rig
-                    <input
-                      value={
-                        selectedRigCode ||
-                        (effectiveProject ? "No assigned project rig" : "Select project first")
-                      }
-                      disabled
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                    />
-                  </label>
-                )}
-                <label className="text-sm text-ink-700">
-                  Severity / priority
-                  <select
-                    value={form.severity}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        severity: event.target.value as BreakdownFormState["severity"]
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  >
-                    <option value="LOW">LOW</option>
-                    <option value="MEDIUM">MEDIUM</option>
-                    <option value="HIGH">HIGH</option>
-                    <option value="CRITICAL">CRITICAL</option>
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700 lg:col-span-2">
-                  Issue summary
-                  <input
-                    value={form.title}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, title: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    placeholder="e.g. Hydraulic pressure loss while drilling"
-                    required
-                  />
-                </label>
-                <label className="text-sm text-ink-700">
-                  Estimated downtime (hrs)
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={form.downtimeHours}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        downtimeHours: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    placeholder="Optional"
-                  />
-                </label>
-                <label className="text-sm text-ink-700 lg:col-span-4">
-                  Problem description (optional)
-                  <textarea
-                    value={form.description}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, description: event.target.value }))
-                    }
-                    className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    placeholder="Quick details for maintenance handoff"
-                  />
-                </label>
-              </div>
-              {effectiveProject && effectiveProjectRigOptions.length === 1 ? (
-                <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                  Project rig is fixed to {effectiveProjectRigOptions[0].rigCode}. Continue with issue details.
-                </p>
-              ) : null}
-
-              <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-                <button
-                  type="submit"
-                  disabled={submitting || Boolean(formError)}
-                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-                >
-                  {submitting ? "Reporting..." : "Report breakdown"}
-                </button>
-                {formError && <p className="text-xs text-amber-800">{formError}</p>}
-              </div>
-            </form>
-          </Card>
-        </AccessGate>
-
-        <section
-          id="breakdown-log-section"
-          className={cn(
-            focusedSectionId === "breakdown-log-section" &&
-              "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-          )}
-        >
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Breakdown Log</h2>
-              <p className="text-xs text-slate-600">
-                Open {openRecords.length} • Critical {criticalCount} • Blocked projects{" "}
-                {blockedProjectCount} • Downtime {totalDowntime.toFixed(1)} hrs
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setLogOpen((current) => !current)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-            >
-              {logOpen ? "Hide log" : "View log"}
-            </button>
-          </div>
-
-          {logOpen && (
-            <div className="space-y-3">
-              <Card title="Log Filters">
-                {isSingleProjectScope ? (
-                  <p className="mb-3 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                    Project locked to {scopedProject?.name || "selected project"}. Filters below apply only within this project.
-                  </p>
-                ) : null}
-                <div className={`grid gap-3 md:grid-cols-2 ${isSingleProjectScope ? "lg:grid-cols-4" : "lg:grid-cols-5"}`}>
-                  {!isSingleProjectScope ? (
-                    <label className="text-sm text-ink-700">
-                      Project
-                      <select
-                        value={logFilters.projectId}
-                        onChange={(event) =>
-                          setLogFilters((current) => ({
-                            ...current,
-                            projectId: event.target.value
-                          }))
-                        }
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                      >
-                        <option value="">All projects</option>
-                        {projects.map((project) => (
-                          <option key={project.id} value={project.id}>
-                            {project.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  ) : null}
-                  <label className="text-sm text-ink-700">
-                    Rig
-                    <select
-                      value={logFilters.rigId}
-                      onChange={(event) =>
-                        setLogFilters((current) => ({
-                          ...current,
-                          rigId: event.target.value
-                        }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <option value="">All rigs</option>
-                      {rigFilterOptions.map((rig) => (
-                        <option key={rig.id} value={rig.id}>
-                          {rig.rigCode}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    Status
-                    <select
-                      value={logFilters.status}
-                      onChange={(event) =>
-                        setLogFilters((current) => ({
-                          ...current,
-                          status: event.target.value as BreakdownLogFilterState["status"]
-                        }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    >
-                      <option value="all">All statuses</option>
-                      <option value="OPEN">Open</option>
-                      <option value="RESOLVED">Resolved</option>
-                    </select>
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    From
-                    <input
-                      type="date"
-                      value={logFilters.from}
-                      onChange={(event) =>
-                        setLogFilters((current) => ({ ...current, from: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    />
-                  </label>
-                  <label className="text-sm text-ink-700">
-                    To
-                    <input
-                      type="date"
-                      value={logFilters.to}
-                      onChange={(event) =>
-                        setLogFilters((current) => ({ ...current, to: event.target.value }))
-                      }
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    />
-                  </label>
-                </div>
-              </Card>
-
-              <Card title="Rigs with Breakdown Activity">
-                {loading ? (
-                  <p className="text-sm text-ink-600">Loading breakdown records...</p>
-                ) : rigHistoryRows.length === 0 ? (
-                  <p className="text-sm text-slate-600">
-                    No breakdown records found for the selected filters.
-                  </p>
-                ) : (
-                  <DataTable
-                    columns={[
-                      "Rig",
-                      "Current breakdown state",
-                      "Breakdown cases",
-                      "Latest breakdown",
-                      "Action"
-                    ]}
-                    rows={rigHistoryRows.map((entry) => [
-                      entry.rigCode,
-                      entry.currentStatus ? (
-                        <BreakdownStatusChip
-                          key={`${entry.rigId}-state`}
-                          status={entry.currentStatus}
-                        />
-                      ) : (
-                        "No active case"
-                      ),
-                      formatNumber(entry.caseCount),
-                      toDate(entry.latestBreakdownDate),
-                      <button
-                        key={`${entry.rigId}-view`}
-                        type="button"
-                        onClick={() => {
-                          void openRigDetail(entry.rigId);
-                        }}
-                        className={`rounded-md border px-2 py-1 text-xs font-semibold ${
-                          selectedRigHistoryId === entry.rigId
-                            ? "border-brand-300 bg-brand-50 text-brand-800"
-                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                        }`}
-                      >
-                        View
-                      </button>
-                    ])}
-                    rowClassNames={rigHistoryRows.map((entry) =>
-                      focusedRowId && entry.cases.some((record) => record.id === focusedRowId)
-                        ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200"
-                        : ""
-                    )}
-                  />
-                )}
-              </Card>
-            </div>
-          )}
-        </section>
-
-        {rigDetailOpen && (
-          <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-900/45 p-4">
-            <section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900">
-                    Rig Breakdown View{" "}
-                    {rigDetailSelectedRig?.rigCode ? `• ${rigDetailSelectedRig.rigCode}` : ""}
-                  </h3>
-                  <p className="text-xs text-slate-600">
-                    Rig-level breakdown summary and case list
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeRigDetail}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="space-y-4 px-4 py-4">
-                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2 lg:grid-cols-4">
-                  <p>
-                    <span className="font-semibold">Rig:</span>{" "}
-                    {rigDetailSelectedRig?.rigCode || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Current breakdown state:</span>{" "}
-                    {formatBreakdownCurrentState(rigDetailSelectedRig?.currentStatus)}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Active breakdown case:</span>{" "}
-                    {rigDetailCases.find((entry) => isBreakdownOpenStatus(entry.status))?.id ||
-                      "None"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Total breakdown cases:</span>{" "}
-                    {formatNumber(rigDetailCases.length)}
-                  </p>
-                </div>
-
-                {rigDetailError && (
-                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                    {rigDetailError}
-                  </p>
-                )}
-
-                {rigDetailLoading ? (
-                  <p className="text-sm text-slate-600">Loading rig breakdown details...</p>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                      <p>
-                        Open breakdown cases:{" "}
-                        <span className="font-semibold">{rigDetailCaseSummary.open}</span>
-                      </p>
-                      <p>
-                        Resolved breakdown cases:{" "}
-                        <span className="font-semibold">{rigDetailCaseSummary.resolved}</span>
-                      </p>
-                      <p>
-                        Critical severity cases:{" "}
-                        <span className="font-semibold">{rigDetailCaseSummary.critical}</span>
-                      </p>
-                      <p className="mt-1 text-slate-600">
-                        Rig-level view is summary only. Open a case to see linked requests and
-                        actions.
-                      </p>
-                    </div>
-
-                    <Card title="Breakdown Cases">
-                      {rigDetailCases.length === 0 ? (
-                        <p className="text-sm text-slate-600">
-                          No breakdown cases found for this rig.
-                        </p>
-                      ) : (
-                        <DataTable
-                          columns={[
-                            "Breakdown case ID",
-                            "Date opened",
-                            "Issue summary",
-                            "Severity",
-                            "Status",
-                            "View details"
-                          ]}
-                          rows={rigDetailCases.map((row) => [
-                            row.id,
-                            toDate(row.reportDate),
-                            row.title || "-",
-                            row.severity || "-",
-                            <BreakdownStatusChip key={`${row.id}-rig-status`} status={row.status} />,
-                            <button
-                              key={`${row.id}-open`}
-                              type="button"
-                              onClick={() => openCaseFromRigDetail(row.id)}
-                              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                            >
-                              View details
-                            </button>
-                          ])}
-                        />
-                      )}
-                    </Card>
-                  </div>
-                )}
-              </div>
-            </section>
-          </div>
-        )}
-
-        {detailOpen && selectedRecord && (
-          <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-4">
-            <section className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
-              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900">
-                    Breakdown Case {selectedRecord.id}
-                  </h3>
-                  <p className="text-xs text-slate-600">
-                    Operational case details and next actions
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={closeBreakdownDetail}
-                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="space-y-4 px-4 py-4">
-                <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2">
-                  <p>
-                    <span className="font-semibold">Breakdown ID:</span> {selectedRecord.id}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Status:</span>{" "}
-                    {normalizeBreakdownStatus(selectedRecord.status)}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Project:</span>{" "}
-                    {selectedRecord.project?.name || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Rig:</span>{" "}
-                    {selectedRecord.rig?.rigCode || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Client:</span>{" "}
-                    {selectedRecord.client?.name || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Date reported:</span>{" "}
-                    {toDate(selectedRecord.reportDate)}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Severity:</span>{" "}
-                    {selectedRecord.severity}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Downtime:</span>{" "}
-                    {formatNumber(selectedRecord.downtimeHours)} hrs
-                  </p>
-                  <p className="md:col-span-2">
-                    <span className="font-semibold">Issue summary:</span>{" "}
-                    {selectedRecord.title}
-                  </p>
-                  <p className="md:col-span-2">
-                    <span className="font-semibold">Problem description:</span>{" "}
-                    {selectedRecord.description || "-"}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => goToBreakdownPartsRequest(selectedRecord)}
-                    disabled={!selectedRecordIsOpen}
-                    className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Request parts
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => goToBreakdownPurchaseRequest(selectedRecord)}
-                    disabled={!selectedRecordIsOpen}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    Create purchase request
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void resolveBreakdown(selectedRecord);
-                    }}
-                    disabled={!selectedRecordIsOpen || resolvingId === selectedRecord.id}
-                    className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {resolvingId === selectedRecord.id
-                      ? "Resolving..."
-                      : "Mark breakdown resolved"}
-                  </button>
-                </div>
-                {!selectedRecordIsOpen && (
-                  <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                    This breakdown case is resolved. Linked history remains viewable, but new
-                    item or purchase actions are disabled.
-                  </p>
-                )}
-
-                {detailError && (
-                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                    {detailError}
-                  </p>
-                )}
-
-                {detailLoading ? (
-                  <p className="text-sm text-slate-600">Loading linked case details...</p>
-                ) : (
-                  <div className="grid gap-3 lg:grid-cols-2">
-                    <Card title="Linked Maintenance Records">
-                      {linkedMaintenanceRows.length === 0 ? (
-                        <p className="text-sm text-slate-600">
-                          No linked maintenance records yet.
-                        </p>
-                      ) : (
-                        <DataTable
-                          columns={["Record", "Date", "Status", "Description"]}
-                          rows={linkedMaintenanceRows.map((row) => [
-                            row.requestCode,
-                            toDate(row.requestDate),
-                            formatMaintenanceLifecycleStatus(row.status),
-                            row.issueDescription || "-"
-                          ])}
-                        />
-                      )}
-                    </Card>
-
-                    <Card title="Linked Inventory Usage Requests">
-                      {linkedUsageRows.length === 0 ? (
-                        <p className="text-sm text-slate-600">
-                          No linked inventory usage requests yet.
-                        </p>
-                      ) : (
-                        <DataTable
-                          columns={["Requested", "Item", "Qty", "Status", "Requester"]}
-                          rows={linkedUsageRows.map((row) => [
-                            toDate(row.createdAt),
-                            row.item ? `${row.item.name} (${row.item.sku})` : "-",
-                            formatNumber(row.quantity),
-                            row.status,
-                            row.requestedBy?.fullName || "-"
-                          ])}
-                        />
-                      )}
-                    </Card>
-
-                    <Card title="Linked Purchase Requests">
-                      {linkedRequisitionRows.length === 0 ? (
-                        <p className="text-sm text-slate-600">
-                          No linked purchase requests yet.
-                        </p>
-                      ) : (
-                        <DataTable
-                          columns={["Requisition", "Type", "Status", "Submitted", "Estimated"]}
-                          rows={linkedRequisitionRows.map((row) => [
-                            row.requisitionCode,
-                            row.type,
-                            row.status,
-                            toDate(row.submittedAt),
-                            formatCurrency(row.totals?.estimatedTotalCost || 0)
-                          ])}
-                        />
-                      )}
-                    </Card>
-
-                    <Card title="Case Update History">
-                      {auditRows.length === 0 ? (
-                        <p className="text-sm text-slate-600">
-                          No update history available for this record.
-                        </p>
-                      ) : (
-                        <div className="space-y-2">
-                          {auditRows.map((entry) => (
-                            <div
-                              key={entry.id}
-                              className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
-                            >
-                              <p className="font-semibold text-slate-900">
-                                {entry.action.replaceAll("_", " ")}
-                              </p>
-                              <p className="mt-0.5">
-                                {entry.description || "Breakdown case updated."}
-                              </p>
-                              <p className="mt-0.5 text-slate-500">
-                                {toDateTime(entry.createdAt)}
-                                {entry.actorName ? ` • ${entry.actorName}` : ""}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </Card>
-                  </div>
-                )}
-              </div>
-            </section>
-          </div>
-        )}
-      </div>
-    </AccessGate>
+    <BreakdownsPageView
+      notice={notice}
+      errorMessage={errorMessage}
+      isSingleProjectScope={isSingleProjectScope}
+      scopeProjectId={scopeProjectId}
+      scopedProject={scopedProject}
+      effectiveProject={effectiveProject}
+      effectiveProjectRigOptions={effectiveProjectRigOptions}
+      activeProjects={activeProjects}
+      selectedRigCode={selectedRigCode}
+      form={form}
+      setForm={setForm}
+      formError={formError}
+      submitBreakdown={submitBreakdown}
+      submitting={submitting}
+      focusedSectionId={focusedSectionId}
+      openRecordsCount={openRecords.length}
+      criticalCount={criticalCount}
+      blockedProjectCount={blockedProjectCount}
+      totalDowntime={totalDowntime}
+      logOpen={logOpen}
+      setLogOpen={setLogOpen}
+      logFilters={logFilters}
+      setLogFilters={setLogFilters}
+      projects={projects}
+      rigFilterOptions={rigFilterOptions}
+      loading={loading}
+      rigHistoryRows={rigHistoryRows}
+      selectedRigHistoryId={selectedRigHistoryId}
+      openRigDetail={openRigDetail}
+      focusedRowId={focusedRowId}
+      rigDetailOpen={rigDetailOpen}
+      rigDetailSelectedRig={rigDetailSelectedRig}
+      rigDetailCases={rigDetailCases}
+      rigDetailCaseSummary={rigDetailCaseSummary}
+      rigDetailLoading={rigDetailLoading}
+      rigDetailError={rigDetailError}
+      closeRigDetail={closeRigDetail}
+      openCaseFromRigDetail={openCaseFromRigDetail}
+      detailOpen={detailOpen}
+      selectedRecord={selectedRecord}
+      selectedRecordIsOpen={selectedRecordIsOpen}
+      resolvingId={resolvingId}
+      linkedMaintenanceRows={linkedMaintenanceRows}
+      linkedUsageRows={linkedUsageRows}
+      linkedRequisitionRows={linkedRequisitionRows}
+      auditRows={auditRows}
+      detailLoading={detailLoading}
+      detailError={detailError}
+      closeBreakdownDetail={closeBreakdownDetail}
+      goToBreakdownPartsRequest={goToBreakdownPartsRequest}
+      goToBreakdownPurchaseRequest={goToBreakdownPurchaseRequest}
+      resolveBreakdown={resolveBreakdown}
+    />
   );
 }

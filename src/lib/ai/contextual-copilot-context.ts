@@ -150,8 +150,8 @@ export function resolveScopedPageHref(context: CopilotPageContext) {
     "executive-overview": "/executive-overview",
     "alerts-center": "/alerts-center",
     "data-quality-linkage-center": "/data-quality/linkage-center",
-    "budget-vs-actual": "/cost-tracking/budget-vs-actual",
-    "cost-tracking": "/cost-tracking",
+    "budget-vs-actual": "/spending",
+    "cost-tracking": "/spending",
     expenses: "/expenses",
     "drilling-reports": "/drilling-reports",
     breakdowns: "/breakdowns",
@@ -164,7 +164,7 @@ export function resolveScopedPageHref(context: CopilotPageContext) {
     "inventory-locations": "/inventory/locations",
     maintenance: "/maintenance",
     rigs: "/rigs",
-    profit: "/profit",
+    profit: "/spending/profit",
     forecasting: "/forecasting"
   };
   const fallback = fallbackMap[context.pageKey] || "/";
@@ -199,10 +199,22 @@ export function inferPageKeyFromHref(href: string | undefined) {
   if (path.startsWith("/data-quality/linkage-center")) {
     return "data-quality-linkage-center";
   }
+  if (path.startsWith("/spending/drilling-reports")) {
+    return "drilling-reports";
+  }
+  if (path.startsWith("/spending/expenses")) {
+    return "expenses";
+  }
+  if (path.startsWith("/spending/profit")) {
+    return "profit";
+  }
   if (path.startsWith("/cost-tracking/budget-vs-actual")) {
     return "budget-vs-actual";
   }
-  if (path.startsWith("/cost-tracking")) {
+  if (path.startsWith("/budget-vs-actual")) {
+    return "budget-vs-actual";
+  }
+  if (path.startsWith("/spending")) {
     return "cost-tracking";
   }
   if (path.startsWith("/expenses")) {
@@ -222,9 +234,6 @@ export function inferPageKeyFromHref(href: string | undefined) {
   }
   if (path.startsWith("/rigs")) {
     return "rigs";
-  }
-  if (path.startsWith("/profit")) {
-    return "profit";
   }
   if (path.startsWith("/forecasting")) {
     return "forecasting";

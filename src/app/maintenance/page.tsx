@@ -8,16 +8,11 @@ import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provi
 import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useRole } from "@/components/layout/role-provider";
 import { Card } from "@/components/ui/card";
-import { DataTable } from "@/components/ui/table";
+import { MaintenanceHistorySection } from "@/app/maintenance/maintenance-history-section";
 import {
-  MaintenanceStatusChip,
-  formatMaintenanceStatus,
-  formatMaintenanceTypeLabel,
   getProjectRigIds,
   maintenanceRowSortValue,
-  normalizeMaintenanceStatus,
-  toDate,
-  toDateTime
+  normalizeMaintenanceStatus
 } from "@/app/maintenance/maintenance-page-utils";
 import {
   INITIAL_FORM_STATE,
@@ -37,8 +32,9 @@ import {
   type RigOption,
   validateMaintenanceStep as validateMaintenanceFormStep
 } from "@/app/maintenance/maintenance-page-types";
+import { MaintenanceRecordDetailModal, MaintenanceRigDetailModal } from "@/app/maintenance/maintenance-page-modals";
+import { MaintenanceReportWizardCard } from "@/app/maintenance/maintenance-report-wizard-card";
 import { canReportMaintenanceActivity } from "@/lib/auth/approval-policy";
-import { formatCurrency, formatNumber } from "@/lib/utils";
 
 export default function MaintenancePage() {
   return (
@@ -870,841 +866,81 @@ function MaintenanceWorkspace() {
         />
       ) : null}
 
-      <Card
-        title="Report maintenance activity"
-        subtitle="Keep this simple: pick project rig, enter work details, save."
-      >
-        <div className="mb-3 gf-guided-strip">
-          <p className="gf-guided-strip-title">Guided workflow</p>
-          <div className="gf-guided-step-list">
-            {shouldSkipRigSelectionStep ? (
-              <>
-                <p className="gf-guided-step">1. Confirm maintenance details.</p>
-                <p className="gf-guided-step">2. Save maintenance record.</p>
-                <p className="gf-guided-step">Project rig is already fixed by project setup.</p>
-              </>
-            ) : (
-              <>
-                <p className="gf-guided-step">1. Select the project rig.</p>
-                <p className="gf-guided-step">2. Enter maintenance details.</p>
-                <p className="gf-guided-step">3. Save maintenance record.</p>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="mb-3 grid gap-2 text-xs sm:grid-cols-3">
-          {visibleWizardSteps.map((entry, index) => (
-            <div
-              key={entry.step}
-              className={`rounded-lg border px-2 py-1.5 ${
-                activeWizardStep === entry.step
-                  ? "border-brand-300 bg-brand-50 text-brand-900"
-                  : "border-slate-200 bg-slate-50 text-slate-600"
-              }`}
-            >
-              <p className="font-semibold">
-                {index + 1}. {entry.label}
-              </p>
-            </div>
-          ))}
-        </div>
+      <MaintenanceReportWizardCard
+        shouldSkipRigSelectionStep={shouldSkipRigSelectionStep}
+        visibleWizardSteps={visibleWizardSteps}
+        activeWizardStep={activeWizardStep}
+        isSingleProjectScope={isSingleProjectScope}
+        scopedProject={scopedProject}
+        scopedProjectRigOptions={scopedProjectRigOptions}
+        rigOptionsForForm={rigOptionsForForm}
+        loadingRefs={loadingRefs}
+        form={form}
+        setForm={setForm}
+        isPrefilledFromBreakdown={isPrefilledFromBreakdown}
+        linkedBreakdown={linkedBreakdown}
+        breakdownOptionsForRig={breakdownOptionsForRig}
+        selectedRig={selectedRig}
+        projectContextForForm={projectContextForForm}
+        detailsStepNumber={detailsStepNumber}
+        saveStepNumber={saveStepNumber}
+        maintenanceTypeOptions={MAINTENANCE_TYPE_OPTIONS}
+        canReportMaintenance={canReportMaintenance}
+        submitting={submitting}
+        currentStepError={currentStepError}
+        onContinueWizard={continueWizard}
+        onBackWizard={backWizard}
+        onSave={() => {
+          void saveMaintenance();
+        }}
+      />
 
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-          }}
-          className="space-y-3"
-        >
-          {activeWizardStep === 1 && (
-            <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">
-                {isSingleProjectScope ? "Step 1 — Confirm project rig" : "Step 1 — Select rig"}
-              </p>
-              {isSingleProjectScope && (
-                <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                  <p>
-                    <span className="font-semibold">Project locked:</span>{" "}
-                    {scopedProject?.name || "Selected project"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Client:</span>{" "}
-                    {scopedProject?.client?.name || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Allowed rigs:</span>{" "}
-                    {scopedProjectRigOptions.length > 0
-                      ? scopedProjectRigOptions.map((entry) => entry.rigCode).join(", ")
-                      : "None"}
-                  </p>
-                </div>
-              )}
+      <MaintenanceHistorySection
+        isSingleProjectScope={isSingleProjectScope}
+        scopedProjectName={scopedProject?.name || null}
+        logOpen={logOpen}
+        onToggleLogOpen={() => setLogOpen((current) => !current)}
+        statusCounts={statusCounts}
+        logFilters={logFilters}
+        setLogFilters={setLogFilters}
+        scopedProjectRigOptions={scopedProjectRigOptions}
+        rigs={rigs}
+        loadingRows={loadingRows}
+        rigHistoryRows={rigHistoryRows}
+        selectedRigHistoryId={selectedRigHistoryId}
+        onOpenRigDetail={(rigId) => {
+          void openRigDetail(rigId);
+        }}
+      />
 
-              {isSingleProjectScope && scopedProjectRigOptions.length === 0 ? (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  This project has no assigned rig. Assign a rig to the project first.
-                </div>
-              ) : rigOptionsForForm.length === 1 ? (
-                <label className="text-sm text-ink-700">
-                  Rig
-                  <input
-                    value={rigOptionsForForm[0]?.rigCode || "No project rig"}
-                    disabled
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                  />
-                </label>
-              ) : (
-                <label className="text-sm text-ink-700">
-                  Rig
-                  <select
-                    value={form.rigId}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        rigId: event.target.value,
-                        linkedBreakdownId:
-                          current.rigId === event.target.value || isPrefilledFromBreakdown
-                            ? current.linkedBreakdownId
-                            : ""
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    required
-                    disabled={loadingRefs || isPrefilledFromBreakdown}
-                  >
-                    <option value="">{loadingRefs ? "Loading rigs..." : "Select rig"}</option>
-                    {rigOptionsForForm.map((rig) => (
-                      <option key={rig.id} value={rig.id}>
-                        {rig.rigCode}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
+      <MaintenanceRigDetailModal
+        open={rigDetailOpen}
+        selectedRig={rigDetailSelectedRig}
+        loading={rigDetailLoading}
+        error={rigDetailError}
+        cases={rigDetailCases}
+        summary={rigDetailCaseSummary}
+        onClose={closeRigDetail}
+        onOpenCase={openCaseFromRigDetail}
+      />
 
-              {isPrefilledFromBreakdown ? (
-                <label className="text-sm text-ink-700">
-                  Linked breakdown
-                  <input
-                    value={
-                      linkedBreakdown
-                        ? `${linkedBreakdown.title} (${linkedBreakdown.severity})`
-                        : form.linkedBreakdownId
-                    }
-                    disabled
-                    className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
-                  />
-                </label>
-              ) : (
-                <label className="text-sm text-ink-700">
-                  Link breakdown (optional)
-                  <select
-                    value={form.linkedBreakdownId}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        linkedBreakdownId: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    disabled={!form.rigId}
-                  >
-                    <option value="">
-                      {form.rigId ? "No breakdown link" : "Select a rig first"}
-                    </option>
-                    {breakdownOptionsForRig.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.title} ({entry.severity})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              {form.rigId && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  <p>
-                    <span className="font-semibold">Rig status:</span> {selectedRig?.status || "-"}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Project:</span>{" "}
-                    {projectContextForForm?.name || "Rig is idle (no active project)"}
-                  </p>
-                  {selectedRig?.status === "BREAKDOWN" && (
-                    <p className="text-amber-800">Rig is currently in breakdown status.</p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeWizardStep === 2 && (
-            <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">
-                Step {detailsStepNumber} — Enter details
-              </p>
-              {isSingleProjectScope ? (
-                <p className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                  Project mode is locked to {scopedProject?.name || "the selected project"}.
-                  {selectedRig?.rigCode ? ` Using rig ${selectedRig.rigCode}.` : ""}
-                </p>
-              ) : null}
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                <label className="text-sm text-ink-700">
-                  Date
-                  <input
-                    type="date"
-                    value={form.requestDate}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, requestDate: event.target.value }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    required
-                  />
-                </label>
-                <label className="text-sm text-ink-700">
-                  Status
-                  <select
-                    value={form.status}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        status: event.target.value as MaintenanceFormState["status"]
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  >
-                    <option value="OPEN">Open</option>
-                    <option value="IN_REPAIR">In repair</option>
-                    <option value="WAITING_FOR_PARTS">Waiting for parts</option>
-                    <option value="COMPLETED">Completed</option>
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700">
-                  Maintenance type
-                  <select
-                    value={form.maintenanceType}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        maintenanceType:
-                          event.target.value as MaintenanceFormState["maintenanceType"]
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    required
-                  >
-                    <option value="">Select type</option>
-                    {MAINTENANCE_TYPE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700">
-                  Estimated downtime (hrs)
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={form.estimatedDowntimeHrs}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        estimatedDowntimeHrs: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    placeholder="Optional"
-                  />
-                </label>
-                <label className="text-sm text-ink-700 lg:col-span-3">
-                  Issue / work description
-                  <textarea
-                    value={form.issueDescription}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        issueDescription: event.target.value
-                      }))
-                    }
-                    className="mt-1 min-h-24 w-full rounded-lg border border-slate-200 px-3 py-2"
-                    placeholder="Describe the maintenance activity."
-                    required
-                  />
-                </label>
-                <label className="text-sm text-ink-700 lg:col-span-3">
-                  Notes (optional)
-                  <textarea
-                    value={form.notes}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, notes: event.target.value }))
-                    }
-                    className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  />
-                </label>
-              </div>
-            </div>
-          )}
-
-          {activeWizardStep === 3 && (
-            <div className="space-y-3">
-              <p className="text-sm font-semibold text-slate-900">Step {saveStepNumber} — Save</p>
-              <div className="grid gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:grid-cols-2">
-                <p>
-                  <span className="font-semibold">Rig:</span>{" "}
-                  {selectedRig?.rigCode || form.rigId || "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Date:</span> {form.requestDate || "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Project:</span>{" "}
-                  {projectContextForForm?.name || "Idle (no active project)"}
-                </p>
-                <p>
-                  <span className="font-semibold">Linked breakdown:</span>{" "}
-                  {linkedBreakdown?.title || form.linkedBreakdownId || "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Maintenance type:</span>{" "}
-                  {formatMaintenanceTypeLabel(form.maintenanceType)}
-                </p>
-                <p>
-                  <span className="font-semibold">Status:</span>{" "}
-                  {formatMaintenanceStatus(form.status)}
-                </p>
-                <p>
-                  <span className="font-semibold">Downtime:</span>{" "}
-                  {form.estimatedDowntimeHrs ? `${form.estimatedDowntimeHrs} hrs` : "-"}
-                </p>
-                <p className="md:col-span-2">
-                  <span className="font-semibold">Description:</span>{" "}
-                  {form.issueDescription || "-"}
-                </p>
-                <p className="md:col-span-2">
-                  <span className="font-semibold">Notes:</span> {form.notes.trim() || "-"}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-            {activeWizardStep > 1 && (
-              <button
-                type="button"
-                onClick={backWizard}
-                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Back
-              </button>
-            )}
-            {activeWizardStep < 3 ? (
-              <button
-                type="button"
-                onClick={continueWizard}
-                disabled={Boolean(currentStepError)}
-                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Continue
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  void saveMaintenance();
-                }}
-                disabled={!canReportMaintenance || submitting}
-                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
-              >
-                {submitting ? "Saving..." : "Save maintenance record"}
-              </button>
-            )}
-            {!canReportMaintenance && (
-              <p className="text-xs text-amber-800">
-                Your role can view maintenance history but cannot create records.
-              </p>
-            )}
-            {activeWizardStep < 3 && currentStepError && (
-              <p className="text-xs text-amber-800">{currentStepError}</p>
-            )}
-          </div>
-        </form>
-      </Card>
-
-      <section id="maintenance-log-section" className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-900">Maintenance History</h2>
-            <p className="text-xs text-slate-600">
-              Total {statusCounts.total} • Open {statusCounts.open} • In repair{" "}
-              {statusCounts.inRepair} • Waiting for parts {statusCounts.waitingParts} • Completed{" "}
-              {statusCounts.completed}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setLogOpen((current) => !current)}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-          >
-            {logOpen ? "Hide history" : "View history"}
-          </button>
-        </div>
-
-        {logOpen && (
-          <div className="space-y-3">
-            <Card title="History Filters">
-              {isSingleProjectScope ? (
-                <p className="mb-3 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2 text-xs text-brand-900">
-                  Project locked to {scopedProject?.name || "selected project"}. History below is limited to this project.
-                </p>
-              ) : null}
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-5">
-                <label className="text-sm text-ink-700">
-                  Rig
-                  <select
-                    value={logFilters.rigId}
-                    onChange={(event) =>
-                      setLogFilters((current) => ({
-                        ...current,
-                        rigId: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  >
-                    <option value="">All rigs</option>
-                    {(isSingleProjectScope ? scopedProjectRigOptions : rigs).map((rig) => (
-                      <option key={rig.id} value={rig.id}>
-                        {rig.rigCode}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700">
-                  Status
-                  <select
-                    value={logFilters.status}
-                    onChange={(event) =>
-                      setLogFilters((current) => ({
-                        ...current,
-                        status: event.target.value as LogFilterState["status"]
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  >
-                    <option value="all">All statuses</option>
-                    <option value="OPEN">Open</option>
-                    <option value="IN_REPAIR">In repair</option>
-                    <option value="WAITING_FOR_PARTS">Waiting for parts</option>
-                    <option value="COMPLETED">Completed</option>
-                  </select>
-                </label>
-                <label className="text-sm text-ink-700">
-                  From
-                  <input
-                    type="date"
-                    value={logFilters.from}
-                    onChange={(event) =>
-                      setLogFilters((current) => ({
-                        ...current,
-                        from: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  />
-                </label>
-                <label className="text-sm text-ink-700">
-                  To
-                  <input
-                    type="date"
-                    value={logFilters.to}
-                    onChange={(event) =>
-                      setLogFilters((current) => ({
-                        ...current,
-                        to: event.target.value
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  />
-                </label>
-                <label className="text-sm text-ink-700">
-                  Linked breakdown
-                  <select
-                    value={logFilters.linkage}
-                    onChange={(event) =>
-                      setLogFilters((current) => ({
-                        ...current,
-                        linkage: event.target.value as LogFilterState["linkage"]
-                      }))
-                    }
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
-                  >
-                    <option value="all">All</option>
-                    <option value="linked">Linked only</option>
-                    <option value="unlinked">Unlinked only</option>
-                  </select>
-                </label>
-              </div>
-            </Card>
-
-            <Card title="Rigs with Maintenance Activity">
-              {loadingRows ? (
-                <p className="text-sm text-slate-600">Loading maintenance records...</p>
-              ) : rigHistoryRows.length === 0 ? (
-                <p className="text-sm text-slate-600">
-                  No maintenance records found for the current filters.
-                </p>
-              ) : (
-                <DataTable
-                  columns={[
-                    "Rig",
-                    "Current maintenance state",
-                    "Maintenance cases",
-                    "Latest maintenance",
-                    "Action"
-                  ]}
-                  rows={rigHistoryRows.map((entry) => [
-                    entry.rigCode,
-                    entry.currentStatus ? (
-                      <MaintenanceStatusChip
-                        key={`${entry.rigId}-state`}
-                        status={entry.currentStatus}
-                        legacySource={null}
-                      />
-                    ) : (
-                      "No active case"
-                    ),
-                    formatNumber(entry.caseCount),
-                    entry.latestMaintenanceDate,
-                    <button
-                      key={`${entry.rigId}-view`}
-                      type="button"
-                      onClick={() => {
-                        void openRigDetail(entry.rigId);
-                      }}
-                      className={`rounded-md border px-2 py-1 text-xs font-semibold ${
-                        selectedRigHistoryId === entry.rigId
-                          ? "border-brand-300 bg-brand-50 text-brand-800"
-                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                      }`}
-                    >
-                      View
-                    </button>
-                  ])}
-                />
-              )}
-            </Card>
-          </div>
-        )}
-      </section>
-
-      {rigDetailOpen && (
-        <div className="fixed inset-0 z-[88] flex items-center justify-center bg-slate-900/45 p-4">
-          <section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">
-                  Rig Maintenance View {rigDetailSelectedRig?.rigCode ? `• ${rigDetailSelectedRig.rigCode}` : ""}
-                </h3>
-                <p className="text-xs text-slate-600">
-                  Rig-level maintenance history and linked operational records
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeRigDetail}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-4 px-4 py-4">
-              <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2 lg:grid-cols-4">
-                <p>
-                  <span className="font-semibold">Rig:</span>{" "}
-                  {rigDetailSelectedRig?.rigCode || "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Current maintenance state:</span>{" "}
-                  {rigDetailSelectedRig?.currentStatus
-                    ? formatMaintenanceStatus(rigDetailSelectedRig.currentStatus)
-                    : "No active case"}
-                </p>
-                <p>
-                  <span className="font-semibold">Active maintenance case:</span>{" "}
-                  {rigDetailCases.find(
-                    (entry) => normalizeMaintenanceStatus(entry.status).status !== "COMPLETED"
-                  )?.requestCode || "None"}
-                </p>
-                <p>
-                  <span className="font-semibold">Total maintenance cases:</span>{" "}
-                  {formatNumber(rigDetailCases.length)}
-                </p>
-              </div>
-
-              {rigDetailError && (
-                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                  {rigDetailError}
-                </p>
-              )}
-
-              {rigDetailLoading ? (
-                <p className="text-sm text-slate-600">Loading rig maintenance details...</p>
-              ) : (
-                <div className="space-y-3">
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                    <p>
-                      Active maintenance cases:{" "}
-                      <span className="font-semibold">
-                        {rigDetailCaseSummary.open +
-                          rigDetailCaseSummary.inRepair +
-                          rigDetailCaseSummary.waitingParts}
-                      </span>
-                    </p>
-                    <p>
-                      Historical completed cases:{" "}
-                      <span className="font-semibold">{rigDetailCaseSummary.completed}</span>
-                    </p>
-                    <p className="mt-1 text-slate-600">
-                      Rig-level view is summary only. Open a case to manage linked requests and
-                      actions.
-                    </p>
-                  </div>
-                  <Card title="Maintenance Cases">
-                    {rigDetailCases.length === 0 ? (
-                      <p className="text-sm text-slate-600">
-                        No maintenance cases found for this rig.
-                      </p>
-                    ) : (
-                      <DataTable
-                        columns={[
-                          "Maintenance case ID",
-                          "Date opened",
-                          "Type",
-                          "Status",
-                          "Linked breakdown",
-                          "View details"
-                        ]}
-                        rows={rigDetailCases.map((row) => {
-                          const normalizedStatus = normalizeMaintenanceStatus(row.status);
-                          return [
-                            row.requestCode,
-                            row.date,
-                            formatMaintenanceTypeLabel(
-                              (row.issueType || "").toUpperCase() as MaintenanceFormState["maintenanceType"]
-                            ),
-                            <MaintenanceStatusChip
-                              key={`${row.id}-rig-status`}
-                              status={normalizedStatus.status}
-                              legacySource={normalizedStatus.legacySource}
-                            />,
-                            row.breakdownReport?.title || row.breakdownReportId || "-",
-                            <button
-                              key={`${row.id}-open`}
-                              type="button"
-                              onClick={() => openCaseFromRigDetail(row.id)}
-                              className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                            >
-                              View details
-                            </button>
-                          ];
-                        })}
-                      />
-                    )}
-                  </Card>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
-
-      {detailOpen && selectedRecord && (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-4">
-          <section className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl border border-slate-200 bg-white shadow-2xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">
-                  Maintenance Case {selectedRecord.requestCode}
-                </h3>
-                <p className="text-xs text-slate-600">
-                  Operational case details and next actions
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeRecordDetail}
-                className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="space-y-4 px-4 py-4">
-              <div className="grid gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 md:grid-cols-2">
-                <p>
-                  <span className="font-semibold">Maintenance ID:</span> {selectedRecord.id}
-                </p>
-                <p>
-                  <span className="font-semibold">Current status:</span>{" "}
-                  {formatMaintenanceStatus(selectedRecord.status, true)}
-                </p>
-                <p>
-                  <span className="font-semibold">Rig:</span>{" "}
-                  {selectedRecord.rig?.rigCode || selectedRecord.rigId}
-                </p>
-                <p>
-                  <span className="font-semibold">Project:</span>{" "}
-                  {selectedRecord.project?.name || "No active project"}
-                </p>
-                <p>
-                  <span className="font-semibold">Linked breakdown:</span>{" "}
-                  {selectedRecord.breakdownReport?.title ||
-                    selectedRecord.breakdownReportId ||
-                    "-"}
-                </p>
-                <p>
-                  <span className="font-semibold">Date opened:</span> {selectedRecord.date}
-                </p>
-                <p>
-                  <span className="font-semibold">Maintenance type:</span>{" "}
-                  {formatMaintenanceTypeLabel(selectedRecord.issueType)}
-                </p>
-                <p>
-                  <span className="font-semibold">Downtime:</span>{" "}
-                  {formatNumber(selectedRecord.estimatedDowntimeHours)} hrs
-                </p>
-                <p className="md:col-span-2">
-                  <span className="font-semibold">Issue / work description:</span>{" "}
-                  {selectedRecord.issueDescription}
-                </p>
-                <p className="md:col-span-2">
-                  <span className="font-semibold">Notes:</span> {selectedRecord.notes || "-"}
-                </p>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={goToInventoryRequest}
-                  disabled={selectedRecordStatus === "COMPLETED"}
-                  className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Request item
-                </button>
-                <button
-                  type="button"
-                  onClick={goToPurchaseRequest}
-                  disabled={selectedRecordStatus === "COMPLETED"}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Create purchase request
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void markMaintenanceResolved();
-                  }}
-                  disabled={
-                    selectedRecordStatus === "COMPLETED" ||
-                    resolvingRecordId === selectedRecord.id
-                  }
-                  className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {resolvingRecordId === selectedRecord.id
-                    ? "Resolving..."
-                    : "Mark resolved"}
-                </button>
-              </div>
-              {selectedRecordStatus === "COMPLETED" && (
-                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                  This maintenance case is completed. Linked history remains viewable, but new
-                  item or purchase actions are disabled.
-                </p>
-              )}
-
-              {detailError && (
-                <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
-                  {detailError}
-                </p>
-              )}
-
-              {detailLoading ? (
-                <p className="text-sm text-slate-600">Loading linked case details...</p>
-              ) : (
-                <div className="grid gap-3 lg:grid-cols-2">
-                  <Card title="Linked Inventory Usage Requests">
-                    {linkedUsageRows.length === 0 ? (
-                      <p className="text-sm text-slate-600">
-                        No linked inventory usage requests yet.
-                      </p>
-                    ) : (
-                      <DataTable
-                        columns={["Requested", "Item", "Qty", "Status", "Requester"]}
-                        rows={linkedUsageRows.map((row) => [
-                          toDate(row.createdAt),
-                          row.item ? `${row.item.name} (${row.item.sku})` : "-",
-                          formatNumber(row.quantity),
-                          row.status,
-                          row.requestedBy?.fullName || "-"
-                        ])}
-                      />
-                    )}
-                  </Card>
-
-                  <Card title="Linked Purchase Requests">
-                    {linkedRequisitionRows.length === 0 ? (
-                      <p className="text-sm text-slate-600">
-                        No linked purchase requests yet.
-                      </p>
-                    ) : (
-                      <DataTable
-                        columns={["Requisition", "Type", "Status", "Submitted", "Estimated"]}
-                        rows={linkedRequisitionRows.map((row) => [
-                          row.requisitionCode,
-                          row.type,
-                          row.status,
-                          toDate(row.submittedAt),
-                          formatCurrency(row.totals?.estimatedTotalCost || 0)
-                        ])}
-                      />
-                    )}
-                  </Card>
-
-                  <Card title="Activity History">
-                    {auditRows.length === 0 ? (
-                      <p className="text-sm text-slate-600">
-                        No update history available for this record.
-                      </p>
-                    ) : (
-                      <div className="space-y-2">
-                        {auditRows.map((entry) => (
-                          <div
-                            key={entry.id}
-                            className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
-                          >
-                            <p className="font-semibold text-slate-900">
-                              {entry.action.replaceAll("_", " ")}
-                            </p>
-                            <p className="mt-0.5">
-                              {entry.description || "Maintenance case updated."}
-                            </p>
-                            <p className="mt-0.5 text-slate-500">
-                              {toDateTime(entry.createdAt)}
-                              {entry.actorName ? ` • ${entry.actorName}` : ""}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </Card>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
+      <MaintenanceRecordDetailModal
+        open={detailOpen}
+        selectedRecord={selectedRecord}
+        selectedRecordStatus={selectedRecordStatus}
+        resolvingRecordId={resolvingRecordId}
+        loading={detailLoading}
+        error={detailError}
+        linkedUsageRows={linkedUsageRows}
+        linkedRequisitionRows={linkedRequisitionRows}
+        auditRows={auditRows}
+        onClose={closeRecordDetail}
+        onRequestItem={goToInventoryRequest}
+        onCreatePurchaseRequest={goToPurchaseRequest}
+        onResolve={() => {
+          void markMaintenanceResolved();
+        }}
+      />
     </div>
   );
 }

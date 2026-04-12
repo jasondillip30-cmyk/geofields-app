@@ -4,7 +4,7 @@ import type {
   QrParseStatus,
   ScanDiagnosticsState,
   ScanFailureStage
-} from "@/components/inventory/receipt-intake-panel";
+} from "@/components/inventory/receipt-intake-panel-types";
 
 function asString(value: unknown) {
   return typeof value === "string" ? value : "";

@@ -191,6 +191,7 @@ export async function readApiError(response: Response, fallback: string) {
 }
 
 export function buildFiltersQuery(filters: {
+  workspaceMode?: string;
   projectId: string;
   clientId: string;
   rigId: string;
@@ -198,6 +199,9 @@ export function buildFiltersQuery(filters: {
   to: string;
 }) {
   const params = new URLSearchParams();
+  if (filters.workspaceMode && filters.workspaceMode !== "all-projects") {
+    params.set("workspace", filters.workspaceMode);
+  }
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
   if (filters.projectId !== "all") {

@@ -376,7 +376,7 @@ export async function GET(request: NextRequest) {
           ? "Monitor this rig budget closely and review pending spend drivers."
           : "Immediate budget intervention recommended for this rig.",
       destinationHref: buildScopedHref({
-        path: "/cost-tracking/budget-vs-actual",
+        path: "/spending",
         filters: scopedFilterValues,
         extra: key !== UNASSIGNED_RIG_ID ? { rigId: key } : undefined
       }),
@@ -420,7 +420,7 @@ export async function GET(request: NextRequest) {
           ? "Watch this project budget and review near-term costs."
           : "Immediate budget intervention recommended for this project.",
       destinationHref: buildScopedHref({
-        path: "/cost-tracking/budget-vs-actual",
+        path: "/spending",
         filters: scopedFilterValues
       }),
       status: "OPEN",

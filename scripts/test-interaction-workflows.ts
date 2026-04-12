@@ -19,6 +19,10 @@ interface InteractionFixtures {
   clientId: string;
   rigId: string;
   itemId: string;
+  rigsOneProjectId: string | null;
+  rigsTwoProjectId: string | null;
+  rigsNoRigProjectId: string | null;
+  backupRigId: string | null;
 }
 
 async function main() {
@@ -67,6 +71,14 @@ async function main() {
       await testRequisitionStatusActions(page, baseUrl, fixtures!);
     });
 
+    await runStep("purchase requests mode split + project lock scoping", async () => {
+      await testPurchaseRequestsModeSplit(page, baseUrl, fixtures!);
+    });
+
+    await runStep("rigs project-locked profile mode behavior", async () => {
+      await testRigsProjectLockedProfileMode(page, baseUrl, fixtures!);
+    });
+
     console.log("[interaction] all interaction workflow checks passed.");
   } finally {
     if (context) {
@@ -83,8 +95,14 @@ async function main() {
 }
 
 async function testManualMovementModal(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
-  await page.goto(`${baseUrl}/inventory/stock-movements`, { waitUntil: "networkidle" });
-  await page.getByText("Movement History").first().waitFor({ state: "visible" });
+  await page.goto(`${baseUrl}/inventory/stock-movements`, { waitUntil: "domcontentloaded" });
+  await waitForHydratedApp(page);
+  const modeMismatchGuard = page.getByText("Page hidden in current workspace mode").first();
+  assert(
+    !(await modeMismatchGuard.isVisible().catch(() => false)),
+    "Inventory stock movements should render in all-projects mode, not workspace-mode guard."
+  );
+  await page.getByText("Movement History").first().waitFor({ state: "visible", timeout: 60_000 });
 
   await page.getByRole("button", { name: "New Manual Adjustment" }).click();
   const modal = page.getByTestId("inventory-manual-movement-modal");
@@ -122,7 +140,8 @@ async function testManualMovementModal(page: Page, baseUrl: string, fixtures: In
 }
 
 async function testIssueWorkflowModal(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
-  await page.goto(`${baseUrl}/inventory/issues`, { waitUntil: "networkidle" });
+  await page.goto(`${baseUrl}/inventory/issues`, { waitUntil: "domcontentloaded" });
+  await waitForHydratedApp(page);
   await page.getByText("Issue Queue").first().waitFor({ state: "visible" });
 
   await page.getByPlaceholder("Item, maintenance code, movement, linkage").fill(fixtures.maintenanceRequestCode);
@@ -166,8 +185,9 @@ async function testReceiptIntakeStageFlow(page: Page, baseUrl: string, fixtures:
     rigId: fixtures.rigId
   });
   await page.goto(`${baseUrl}/inventory/receipt-intake?${requisitionPrefillQuery.toString()}`, {
-    waitUntil: "networkidle"
+    waitUntil: "domcontentloaded"
   });
+  await waitForHydratedApp(page);
   const manualIntakeButton = page.getByRole("button", { name: "Manual intake" }).first();
   await manualIntakeButton.waitFor({ state: "visible" });
 
@@ -205,8 +225,19 @@ async function testReceiptIntakeStageFlow(page: Page, baseUrl: string, fixtures:
 }
 
 async function testExpenseStatusActions(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
-  await page.goto(`${baseUrl}/inventory/expenses`, { waitUntil: "networkidle" });
-  await page.getByText("Expense Queue").first().waitFor({ state: "visible" });
+  await page.goto(`${baseUrl}/inventory/expenses?workspace=all-projects&projectId=all&clientId=all&rigId=all`, {
+    waitUntil: "domcontentloaded"
+  });
+  await waitForHydratedApp(page);
+  const queueHeading = page.getByText("Expense Queue").first();
+  if (!(await queueHeading.isVisible().catch(() => false))) {
+    const projectSelect = page.getByLabel("Project").first();
+    if (await projectSelect.isVisible().catch(() => false)) {
+      await projectSelect.selectOption("all").catch(() => undefined);
+      await page.waitForLoadState("domcontentloaded");
+    }
+  }
+  await queueHeading.waitFor({ state: "visible" });
 
   await page.getByRole("button", { name: /Pending approval/i }).click();
   const expenseCard = page.locator("article").filter({ hasText: fixtures.expenseSubcategory }).first();
@@ -248,7 +279,10 @@ async function testExpenseStatusActions(page: Page, baseUrl: string, fixtures: I
 }
 
 async function testRequisitionStatusActions(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
-  await page.goto(`${baseUrl}/approvals`, { waitUntil: "networkidle" });
+  await page.goto(`${baseUrl}/approvals?workspace=workshop&projectId=all&clientId=all&rigId=all`, {
+    waitUntil: "domcontentloaded"
+  });
+  await waitForHydratedApp(page);
   await page.getByRole("button", { name: "Purchase Requisitions" }).first().waitFor({ state: "visible" });
 
   const row = page.locator("tr").filter({ hasText: fixtures.requisitionCode }).first();
@@ -281,6 +315,205 @@ async function testRequisitionStatusActions(page: Page, baseUrl: string, fixture
   assert(statusCalls === 1, `Requisition status update should issue exactly one POST request (got ${statusCalls}).`);
 }
 
+async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
+  const requisitionsRoutePattern = "**/api/requisitions?*";
+
+  const projectModeCalls: string[] = [];
+  await page.route(requisitionsRoutePattern, async (route) => {
+    if (route.request().method() === "GET") {
+      projectModeCalls.push(route.request().url());
+    }
+    await route.continue();
+  });
+  await page.goto(
+    `${baseUrl}/expenses?workspace=project&projectId=${encodeURIComponent(fixtures.projectId)}&clientId=all&rigId=all`,
+    {
+      waitUntil: "domcontentloaded"
+    }
+  );
+  await waitForHydratedApp(page);
+  await page.getByText("Requisition History").first().waitFor({ state: "visible" });
+  await page.getByText("Project Purchase").first().waitFor({ state: "visible" });
+  assert(
+    !(await page.getByText("Inventory Stock-up").first().isVisible().catch(() => false)),
+    "Project-mode purchase requests must not expose inventory stock-up request type controls."
+  );
+  assert(
+    await page.locator("label:has-text('Project') input[readonly]").first().isVisible().catch(() => false),
+    "Project-mode request context must show a locked project as read-only."
+  );
+  assert(
+    !(await page.locator("label:has-text('Project') select").first().isVisible().catch(() => false)),
+    "Project-mode request context must not show a project selector."
+  );
+  await waitFor(
+    () => projectModeCalls.length > 0,
+    10_000,
+    "Project-mode purchase requests did not issue a requisition history query."
+  );
+  await page.unroute(requisitionsRoutePattern);
+
+  const projectModeUrl = new URL(projectModeCalls.at(-1) || projectModeCalls[0]);
+  assert(
+    projectModeUrl.searchParams.get("projectId") === fixtures.projectId,
+    "Project-mode requisition history must be scoped to the locked project."
+  );
+  assert(
+    projectModeUrl.searchParams.get("type") === "LIVE_PROJECT_PURCHASE",
+    "Project-mode requisition history must be limited to project purchases."
+  );
+
+  const workshopModeCalls: string[] = [];
+  await page.route(requisitionsRoutePattern, async (route) => {
+    if (route.request().method() === "GET") {
+      workshopModeCalls.push(route.request().url());
+    }
+    await route.continue();
+  });
+  await page.goto(`${baseUrl}/expenses?workspace=workshop&projectId=all&clientId=all&rigId=all`, {
+    waitUntil: "domcontentloaded"
+  });
+  await waitForHydratedApp(page);
+  await page.getByText("Requisition History").first().waitFor({ state: "visible" });
+  await page.getByText("Inventory Stock-up").first().waitFor({ state: "visible" });
+  assert(
+    !(await page.getByText("Project Purchase").first().isVisible().catch(() => false)),
+    "Workshop-mode purchase requests must not expose project purchase controls."
+  );
+  await waitFor(
+    () => workshopModeCalls.length > 0,
+    10_000,
+    "Workshop-mode purchase requests did not issue a requisition history query."
+  );
+  await page.unroute(requisitionsRoutePattern);
+
+  const workshopModeUrl = new URL(workshopModeCalls.at(-1) || workshopModeCalls[0]);
+  assert(
+    workshopModeUrl.searchParams.get("type") === "INVENTORY_STOCK_UP",
+    "Workshop-mode requisition history must default to inventory stock-up requests."
+  );
+
+  if (fixtures.maintenanceRequestId) {
+    const maintenanceWorkshopCalls: string[] = [];
+    await page.route(requisitionsRoutePattern, async (route) => {
+      if (route.request().method() === "GET") {
+        maintenanceWorkshopCalls.push(route.request().url());
+      }
+      await route.continue();
+    });
+    await page.goto(
+      `${baseUrl}/expenses?workspace=workshop&projectId=all&clientId=all&rigId=all&maintenanceRequestId=${encodeURIComponent(fixtures.maintenanceRequestId)}`,
+      {
+        waitUntil: "domcontentloaded"
+      }
+    );
+    await waitForHydratedApp(page);
+    await page.getByText("Maintenance-linked Purchase").first().waitFor({ state: "visible" });
+    await waitFor(
+      () => maintenanceWorkshopCalls.length > 0,
+      10_000,
+      "Workshop maintenance-context purchase requests did not issue a requisition history query."
+    );
+    await page.unroute(requisitionsRoutePattern);
+
+    const maintenanceWorkshopUrl = new URL(
+      maintenanceWorkshopCalls.at(-1) || maintenanceWorkshopCalls[0]
+    );
+    assert(
+      maintenanceWorkshopUrl.searchParams.get("type") === "MAINTENANCE_PURCHASE",
+      "Workshop maintenance-context requisition history must use maintenance purchase type."
+    );
+    assert(
+      maintenanceWorkshopUrl.searchParams.get("maintenanceRequestId") === fixtures.maintenanceRequestId,
+      "Workshop maintenance-context requisition history must stay scoped to the maintenance request."
+    );
+  }
+}
+
+async function testRigsProjectLockedProfileMode(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
+  if (!fixtures.rigsOneProjectId || !fixtures.rigsTwoProjectId || !fixtures.rigsNoRigProjectId) {
+    throw new Error("Rigs locked-mode fixtures are missing.");
+  }
+
+  await page.goto(
+    `${baseUrl}/rigs?workspace=project&projectId=${encodeURIComponent(fixtures.rigsOneProjectId)}&clientId=all&rigId=all`,
+    {
+      waitUntil: "domcontentloaded"
+    }
+  );
+  await waitForHydratedApp(page);
+  await page.getByText("Rig profiles").first().waitFor({ state: "visible" });
+  assert(
+    !(await page.getByText("No assigned or backup rig is linked to this project yet.").first().isVisible().catch(() => false)),
+    "Locked project with one assigned rig should not show the empty no-rig state."
+  );
+  assert(
+    (await fetchProjectRigCount(page, baseUrl, fixtures.rigsOneProjectId)) === 1,
+    "Locked project mode API should return exactly one rig when only assigned rig exists."
+  );
+  assert(
+    !(await page.locator("#rig-registry-section").first().isVisible().catch(() => false)),
+    "Locked project mode should not show the rig registry table."
+  );
+  assert(
+    !(await page.getByText("Rig focus").first().isVisible().catch(() => false)),
+    "Locked project mode should not show status filter controls."
+  );
+  assert(
+    !(await page.getByRole("link", { name: "Create rig" }).first().isVisible().catch(() => false)),
+    "Locked project mode should not show create rig action."
+  );
+  assert(
+    !(await page.getByRole("button", { name: "Mark Out of Service" }).first().isVisible().catch(() => false)),
+    "Locked project mode should not show out-of-service action."
+  );
+
+  await page.goto(
+    `${baseUrl}/rigs?workspace=project&projectId=${encodeURIComponent(fixtures.rigsTwoProjectId)}&clientId=all&rigId=all`,
+    {
+      waitUntil: "domcontentloaded"
+    }
+  );
+  await waitForHydratedApp(page);
+  await page.getByText("Rig profiles").first().waitFor({ state: "visible" });
+  assert(
+    (await fetchProjectRigCount(page, baseUrl, fixtures.rigsTwoProjectId)) === 2,
+    "Locked project mode API should return two rigs when assigned and backup rigs exist."
+  );
+
+  await page.goto(
+    `${baseUrl}/rigs?workspace=project&projectId=${encodeURIComponent(fixtures.rigsNoRigProjectId)}&clientId=all&rigId=all`,
+    {
+      waitUntil: "domcontentloaded"
+    }
+  );
+  await waitForHydratedApp(page);
+  assert(
+    (await fetchProjectRigCount(page, baseUrl, fixtures.rigsNoRigProjectId)) === 0,
+    "Locked project mode API should return no rigs when the project has no assigned/backup rig."
+  );
+  await page.getByText("No assigned or backup rig is linked to this project yet.").first().waitFor({
+    state: "visible"
+  });
+  await page.getByRole("link", { name: "Edit project setup" }).first().waitFor({ state: "visible" });
+
+  await page.goto(`${baseUrl}/rigs?workspace=all-projects&projectId=all&clientId=all&rigId=all`, {
+    waitUntil: "domcontentloaded"
+  });
+  await waitForHydratedApp(page);
+  await page.getByText("Rig Registry").first().waitFor({ state: "visible" });
+  await page.getByText("Rig focus").first().waitFor({ state: "visible" });
+}
+
+async function fetchProjectRigCount(page: Page, baseUrl: string, projectId: string) {
+  const response = await page.request.get(
+    `${baseUrl}/api/rigs?projectId=${encodeURIComponent(projectId)}&clientId=all&rigId=all`
+  );
+  assert(response.ok(), "Failed to load project-scoped rigs from /api/rigs.");
+  const payload = (await response.json()) as { data?: unknown[] };
+  return Array.isArray(payload.data) ? payload.data.length : 0;
+}
+
 async function createFixtures(baseUrl: string, sessionCookie: string, runToken: string): Promise<InteractionFixtures> {
   const adminUser = await prisma.user.findUnique({
     where: { email: DEFAULT_ADMIN_EMAIL.toLowerCase() },
@@ -306,6 +539,55 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
   if (!adminUser || !mechanic || !project || !rig || !item) {
     throw new Error("Interaction test prerequisites missing. Seed users/project/rig/item first.");
   }
+
+  const backupRig = await prisma.rig.create({
+    data: {
+      rigCode: `IT-BACKUP-${runToken.slice(-8).toUpperCase()}`,
+      model: "Interaction Backup Model",
+      serialNumber: `IT-SN-${runToken.slice(-8).toUpperCase()}`,
+      status: "IDLE",
+      condition: "GOOD",
+      conditionScore: 82,
+      totalHoursWorked: 0,
+      totalMetersDrilled: 0,
+      totalLifetimeDays: 0
+    },
+    select: { id: true }
+  });
+
+  const rigTestProjectBase = {
+    clientId: project.clientId,
+    location: "Interaction Test Site",
+    startDate: new Date(),
+    status: "ACTIVE" as const
+  };
+
+  const [rigsOneProject, rigsTwoProject, rigsNoRigProject] = await prisma.$transaction([
+    prisma.project.create({
+      data: {
+        ...rigTestProjectBase,
+        name: `Interaction Rigs One ${runToken}`,
+        assignedRigId: rig.id
+      },
+      select: { id: true }
+    }),
+    prisma.project.create({
+      data: {
+        ...rigTestProjectBase,
+        name: `Interaction Rigs Two ${runToken}`,
+        assignedRigId: rig.id,
+        backupRigId: backupRig.id
+      },
+      select: { id: true }
+    }),
+    prisma.project.create({
+      data: {
+        ...rigTestProjectBase,
+        name: `Interaction Rigs None ${runToken}`
+      },
+      select: { id: true }
+    })
+  ]);
 
   const maintenanceRequestCode = `MR-IT-${Date.now().toString(36).toUpperCase()}`;
   const maintenanceRequest = await prisma.maintenanceRequest.create({
@@ -336,6 +618,7 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
       category: "MISC",
       subcategory: expenseSubcategory,
       entrySource: "MANUAL",
+      receiptNumber: `INT-${runToken}`.slice(0, 48),
       vendor: `Interaction Vendor ${runToken}`,
       notes: `interaction fixture ${runToken}`,
       enteredByUserId: adminUser.id,
@@ -404,12 +687,27 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
     projectId: project.id,
     clientId: project.clientId || "",
     rigId: rig.id,
-    itemId: item.id
+    itemId: item.id,
+    rigsOneProjectId: rigsOneProject.id,
+    rigsTwoProjectId: rigsTwoProject.id,
+    rigsNoRigProjectId: rigsNoRigProject.id,
+    backupRigId: backupRig.id
   };
 }
 
 async function cleanupFixtures(fixtures: InteractionFixtures) {
   try {
+    if (fixtures.rigsOneProjectId || fixtures.rigsTwoProjectId || fixtures.rigsNoRigProjectId) {
+      const projectIds = [fixtures.rigsOneProjectId, fixtures.rigsTwoProjectId, fixtures.rigsNoRigProjectId].filter(
+        (value): value is string => Boolean(value)
+      );
+      if (projectIds.length > 0) {
+        await prisma.project.deleteMany({ where: { id: { in: projectIds } } });
+      }
+    }
+    if (fixtures.backupRigId) {
+      await prisma.rig.deleteMany({ where: { id: fixtures.backupRigId } });
+    }
     if (fixtures.requisitionId) {
       await prisma.summaryReport.deleteMany({ where: { id: fixtures.requisitionId } });
       await prisma.auditLog.deleteMany({ where: { entityId: fixtures.requisitionId } });
@@ -577,6 +875,12 @@ async function waitFor(check: () => boolean, timeoutMs: number, errorMessage: st
     await sleep(80);
   }
   throw new Error(errorMessage);
+}
+
+async function waitForHydratedApp(page: Page, timeoutMs = 30_000) {
+  await page.waitForFunction(() => document.documentElement.dataset.gfHydrated === "1", undefined, {
+    timeout: timeoutMs
+  });
 }
 
 main().catch((error) => {

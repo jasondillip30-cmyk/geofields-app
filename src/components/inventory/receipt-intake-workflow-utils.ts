@@ -5,7 +5,7 @@ import type {
   ReceiptWorkflowChoice,
   ReviewLineState,
   ReviewState
-} from "@/components/inventory/receipt-intake-panel";
+} from "@/components/inventory/receipt-intake-panel-types";
 
 export function normalizeReceiptPurpose(value: string): ReceiptPurpose {
   if (

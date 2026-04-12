@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
@@ -9,6 +10,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/revenue/summary");
 
   const fromParam = request.nextUrl.searchParams.get("from");
   const toParam = request.nextUrl.searchParams.get("to");
@@ -88,7 +90,8 @@ export async function GET(request: NextRequest) {
   const revenueByProject = sortRevenue(Array.from(projectMap.values()));
   const revenueByRig = sortRevenue(Array.from(rigMap.values()));
 
-  return NextResponse.json({
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json({
     filters: {
       projectId: projectId || "all",
       clientId: clientId || "all",
@@ -106,7 +109,9 @@ export async function GET(request: NextRequest) {
     revenueByClient,
     revenueByProject,
     revenueByRig
-  });
+    }),
+    "/api/revenue/summary"
+  );
 }
 
 function sortRevenue(items: Array<{ id: string; name: string; revenue: number }>) {

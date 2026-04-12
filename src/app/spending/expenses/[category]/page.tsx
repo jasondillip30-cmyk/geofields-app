@@ -112,15 +112,39 @@ export default function SpendingCategoryDetailPage() {
     [ledger.rows]
   );
 
+  const drillingWorkspaceHref = useMemo(() => {
+    const search = new URLSearchParams();
+    if (isSingleProjectScope) {
+      search.set("projectId", scopeProjectId);
+    }
+    if (filters.from) search.set("from", filters.from);
+    if (filters.to) search.set("to", filters.to);
+    search.set("view", "drilling-reports");
+    const query = search.toString();
+    return query ? `/spending?${query}` : "/spending?view=drilling-reports";
+  }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
+
   return (
-    <AccessGate permission="finance:view">
+    <AccessGate
+      permission="finance:view"
+      fallback={
+        <Card title="Finance permission required">
+          <p className="text-sm text-ink-700">
+            Expense category detail is available to finance roles only.
+          </p>
+          <Link href={drillingWorkspaceHref} className="gf-btn-subtle mt-3 inline-flex">
+            Open drilling reports in Project Operations
+          </Link>
+        </Card>
+      }
+    >
       <div className="gf-page-stack">
         {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
 
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
-              Spending detail is project-first. Choose one project in the top bar to open category-level expense rows.
+              Project Operations detail is project-first. Choose one project in the top bar to open category-level expense rows.
             </p>
           </Card>
         ) : (
@@ -128,11 +152,11 @@ export default function SpendingCategoryDetailPage() {
             <Card>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Spending / Expenses</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Project Operations / Expenses</p>
                   <h2 className="text-xl font-semibold text-ink-900">{categoryParam || "Category"}</h2>
                 </div>
                 <Link href="/spending" className="gf-btn-subtle">
-                  Back to Spending
+                  Back to Project Operations
                 </Link>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2">

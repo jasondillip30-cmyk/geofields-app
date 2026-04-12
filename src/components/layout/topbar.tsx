@@ -9,6 +9,7 @@ import { canViewApprovalWorkspace } from "@/lib/auth/approval-policy";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
 import { cn } from "@/lib/utils";
+import { WORKSPACE_MODE_LABELS, type WorkspaceMode } from "@/lib/workspace-mode";
 
 interface TopbarProps {
   sidebarHidden: boolean;
@@ -79,22 +80,22 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
   {
     test: (pathname) => pathname.startsWith("/spending/profit"),
     meta: {
-      title: "Spending / Profit",
+      title: "Project Operations / Profit",
       subtitle: "Project-first profit view with margin and trend for the locked project."
     }
   },
   {
     test: (pathname) => pathname.startsWith("/spending/drilling-reports"),
     meta: {
-      title: "Spending / Drilling Reports",
-      subtitle: "Project-first drilling report list and detail inside the Spending workspace."
+      title: "Project Operations / Drilling Reports",
+      subtitle: "Project-first drilling report list and detail inside the Project Operations workspace."
     }
   },
   {
     test: (pathname) => pathname.startsWith("/spending"),
     meta: {
-      title: "Spending",
-      subtitle: "Project-first spending view with revenue, recognized expenses, and profit."
+      title: "Project Operations",
+      subtitle: "Project-first workspace for revenue, transactions, and drilling operations."
     }
   },
   {
@@ -275,7 +276,7 @@ function resolveProjectStatusChip(status: string | null) {
 export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
   const pathname = usePathname();
   const { user, logout } = useRole();
-  const { filters, setFilters, resetFilters } = useAnalyticsFilters();
+  const { filters, setFilters, setWorkspaceMode, resetFilters } = useAnalyticsFilters();
   const [projects, setProjects] = useState<ProjectScopeOption[]>([]);
   const [optionsLoaded, setOptionsLoaded] = useState(false);
   const [approvalSummary, setApprovalSummary] = useState<{
@@ -399,10 +400,11 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
 
   const hasActiveFilters = useMemo(
     () =>
+      filters.workspaceMode !== "all-projects" ||
       filters.projectId !== "all" ||
       Boolean(filters.from) ||
       Boolean(filters.to),
-    [filters.from, filters.projectId, filters.to]
+    [filters.from, filters.projectId, filters.to, filters.workspaceMode]
   );
   const selectedProjectLabel = useMemo(() => {
     if (filters.projectId === "all") {
@@ -411,14 +413,24 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     return projects.find((project) => project.id === filters.projectId)?.name || "Selected project";
   }, [filters.projectId, projects]);
   const selectedProjectStatus = useMemo(() => {
-    if (filters.projectId === "all") {
+    if (filters.workspaceMode !== "project" || filters.projectId === "all") {
       return null;
     }
     return projects.find((project) => project.id === filters.projectId)?.status || null;
-  }, [filters.projectId, projects]);
+  }, [filters.projectId, filters.workspaceMode, projects]);
   const selectedProjectStatusChip = useMemo(
     () => (selectedProjectStatus ? resolveProjectStatusChip(selectedProjectStatus) : null),
     [selectedProjectStatus]
+  );
+  const workspaceModeLabel = WORKSPACE_MODE_LABELS[filters.workspaceMode];
+  const isProjectMode = filters.workspaceMode === "project";
+  const workspaceModeOptions: Array<{ value: WorkspaceMode; label: string }> = useMemo(
+    () => [
+      { value: "all-projects", label: "All projects" },
+      { value: "project", label: "Project" },
+      { value: "workshop", label: "Workshop" }
+    ],
+    []
   );
 
   const pageMeta = useMemo(() => resolvePageMeta(pathname), [pathname]);
@@ -467,11 +479,30 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
           <div className="flex flex-wrap items-center gap-2.5">
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
               <Filter size={14} />
+              <span className="uppercase tracking-wide text-slate-500">Workspace</span>
+              <select
+                value={filters.workspaceMode}
+                onChange={(event) => setWorkspaceMode(event.target.value as WorkspaceMode)}
+                className="min-w-[150px] rounded-lg border border-slate-200 px-2 py-1 text-xs"
+              >
+                {workspaceModeOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
+              <Filter size={14} />
               <span className="uppercase tracking-wide text-slate-500">Project</span>
               <select
-                value={filters.projectId}
+                value={isProjectMode ? filters.projectId : "all"}
                 onChange={(event) => {
                   const nextProjectId = event.target.value;
+                  if (!isProjectMode) {
+                    return;
+                  }
                   setFilters((current) => ({
                     ...current,
                     projectId: nextProjectId,
@@ -479,6 +510,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
                     rigId: nextProjectId === "all" ? current.rigId : "all"
                   }));
                 }}
+                disabled={!isProjectMode}
                 className="min-w-[170px] rounded-lg border border-slate-200 px-2 py-1 text-xs"
               >
                 <option value="all">All projects</option>
@@ -520,7 +552,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               </button>
             )}
 
-            {filters.projectId !== "all" && selectedProjectStatusChip ? (
+            {isProjectMode && filters.projectId !== "all" && selectedProjectStatusChip ? (
               <span
                 className={cn(
                   "ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold",
@@ -542,7 +574,16 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
             ) : null}
           </div>
           <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-            {filters.projectId !== "all" ? (
+            {filters.workspaceMode === "workshop" ? (
+              <>
+                <span className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-0.5 font-semibold text-slate-800">
+                  Workshop mode
+                </span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
+                  Global workshop operations are in focus.
+                </span>
+              </>
+            ) : isProjectMode && filters.projectId !== "all" ? (
               <>
                 <span className="rounded-full border border-brand-300 bg-brand-100 px-2.5 py-0.5 font-semibold text-brand-900">
                   Project locked: {selectedProjectLabel}
@@ -551,14 +592,23 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
                   All actions stay in this project.
                 </span>
               </>
+            ) : isProjectMode ? (
+              <>
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-semibold text-amber-900">
+                  Project mode
+                </span>
+                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
+                  Select one project to lock this workspace.
+                </span>
+              </>
             ) : (
               <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                All projects mode
+                {workspaceModeLabel} mode
               </span>
             )}
           </div>
 
-          {approvalSummary && filters.projectId === "all" && (
+          {approvalSummary && filters.workspaceMode === "all-projects" && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
               <span className="rounded-full border border-amber-200 bg-amber-100 px-2.5 py-0.5 font-semibold text-amber-900">
                 Pending approvals: {approvalSummary.pendingApprovals}

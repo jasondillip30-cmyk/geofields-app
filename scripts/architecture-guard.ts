@@ -6,17 +6,28 @@ type FileSizeRule = {
   maxLines: number;
 };
 
-const WARNING_THRESHOLD = 0.95;
+const WARNING_THRESHOLD = 0.9;
 
 const rules: FileSizeRule[] = [
-  { file: "src/app/inventory/page.tsx", maxLines: 5600 },
-  { file: "src/components/inventory/receipt-intake-panel.tsx", maxLines: 7000 },
-  { file: "src/lib/inventory-receipt-intake.ts", maxLines: 5200 },
-  { file: "src/lib/ai/contextual-copilot.ts", maxLines: 4800 },
-  { file: "src/app/maintenance/page.tsx", maxLines: 1900 },
-  { file: "src/app/breakdowns/page.tsx", maxLines: 1600 },
-  { file: "src/app/cost-tracking/budget-vs-actual/page.tsx", maxLines: 1600 },
-  { file: "src/app/profit/page.tsx", maxLines: 1500 }
+  { file: "src/components/inventory/receipt-intake-review-state-core.ts", maxLines: 1200 },
+  { file: "src/lib/ai/contextual-copilot-navigation.ts", maxLines: 1200 },
+  { file: "src/lib/inventory-receipt-intake-tra.ts", maxLines: 1200 },
+  { file: "src/app/inventory/inventory-page-content.tsx", maxLines: 1200 },
+  { file: "src/components/inventory/receipt-intake-panel.tsx", maxLines: 1200 },
+  { file: "src/components/layout/global-ai-copilot-content.tsx", maxLines: 1200 },
+  { file: "src/components/modules/requisition-workflow-sections.tsx", maxLines: 1200 },
+  { file: "src/components/modules/requisition-workflow-card-content.tsx", maxLines: 1200 },
+  { file: "src/lib/inventory-intelligence.ts", maxLines: 1200 },
+  { file: "src/app/drilling-reports/drilling-reports-page-view.tsx", maxLines: 1200 },
+  { file: "src/app/executive-overview/page.tsx", maxLines: 1200 },
+  { file: "src/app/cost-tracking/budget-vs-actual/page.tsx", maxLines: 1200 },
+  { file: "src/lib/ai/contextual-copilot-insights.ts", maxLines: 1200 },
+  { file: "src/app/api/alerts-center/route.ts", maxLines: 1200 },
+  { file: "src/app/data-quality/linkage-center/page.tsx", maxLines: 1200 },
+  { file: "src/app/api/requisitions/route.ts", maxLines: 1200 },
+  { file: "src/app/maintenance/page.tsx", maxLines: 1200 },
+  { file: "src/app/forecasting/forecasting-page-view.tsx", maxLines: 1200 },
+  { file: "src/app/approvals/page.tsx", maxLines: 1200 }
 ];
 
 function fail(message: string) {

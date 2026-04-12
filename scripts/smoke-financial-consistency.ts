@@ -165,11 +165,12 @@ async function main() {
   const queryString = query.toString();
   const scopedSuffix = queryString ? `?${queryString}` : "";
 
-  const [dashboard, costTracking, budgets, profit, inventoryExpenses] = await Promise.all([
+  const [dashboard, costTracking, budgets, profit, spending, inventoryExpenses] = await Promise.all([
     getJson(baseUrl, `/api/dashboard/summary${scopedSuffix}`, cookie),
     getJson(baseUrl, `/api/cost-tracking/summary${scopedSuffix}`, cookie),
     getJson(baseUrl, `/api/budgets/summary${scopedSuffix}`, cookie),
     getJson(baseUrl, `/api/profit/summary${scopedSuffix}`, cookie),
+    getJson(baseUrl, `/api/spending/summary${scopedSuffix}`, cookie),
     getJson(baseUrl, `/api/inventory/expenses${scopedSuffix}`, cookie)
   ]);
 
@@ -178,6 +179,7 @@ async function main() {
     ["cost-tracking", costTracking],
     ["budgets", budgets],
     ["profit", profit],
+    ["spending", spending],
     ["inventory-expenses", inventoryExpenses]
   ] as const;
 
@@ -193,6 +195,7 @@ async function main() {
     (budgets.json?.totals as Record<string, unknown> | null)?.recognizedSpend
   );
   const profitSpend = toNumber((profit.json?.totals as Record<string, unknown> | null)?.totalExpenses);
+  const spendingSpend = toNumber((spending.json?.totals as Record<string, unknown> | null)?.expenses);
   const inventoryRecognizedSpend = Array.isArray(inventoryExpenses.json?.data)
     ? roundCurrency(
         (inventoryExpenses.json?.data as Array<Record<string, unknown>>).reduce((sum, row) => {
@@ -203,8 +206,20 @@ async function main() {
 
   assertClose("Dashboard vs Cost Tracking spend", dashboardSpend, costTrackingSpend);
   assertClose("Dashboard vs Budget vs Actual spend", dashboardSpend, budgetsSpend);
-  assertClose("Dashboard vs Profit spend", dashboardSpend, profitSpend);
   assertClose("Dashboard vs Inventory Expenses recognized spend", dashboardSpend, inventoryRecognizedSpend);
+  assertClose("Spending vs Profit spend (actual-use lens)", spendingSpend, profitSpend);
+
+  const dashboardBasis = (dashboard.json?.meta as Record<string, unknown> | null)?.expenseBasis;
+  const costTrackingBasis = (costTracking.json?.meta as Record<string, unknown> | null)?.expenseBasis;
+  const budgetsBasis = (budgets.json?.meta as Record<string, unknown> | null)?.expenseBasis;
+  const profitBasis = (profit.json?.meta as Record<string, unknown> | null)?.expenseBasis;
+  const spendingBasis = (spending.json?.meta as Record<string, unknown> | null)?.expenseBasis;
+
+  assert(dashboardBasis === "recognized", `Dashboard expense basis expected "recognized" (got "${String(dashboardBasis)}").`);
+  assert(costTrackingBasis === "recognized", `Cost Tracking expense basis expected "recognized" (got "${String(costTrackingBasis)}").`);
+  assert(budgetsBasis === "recognized", `Budgets expense basis expected "recognized" (got "${String(budgetsBasis)}").`);
+  assert(profitBasis === "actual-use", `Profit expense basis expected "actual-use" (got "${String(profitBasis)}").`);
+  assert(spendingBasis === "actual-use", `Spending expense basis expected "actual-use" (got "${String(spendingBasis)}").`);
 
   const dashboardPurpose = normalizePurposeSummary(
     (dashboard.json?.operationalPurposeSummary as Record<string, unknown> | null) || null
@@ -229,10 +244,17 @@ async function main() {
   const profitPurpose = normalizePurposeSummary(
     (profit.json?.operationalPurposeSummary as Record<string, unknown> | null) || null
   );
+  const profitRecognizedPurpose = normalizePurposeSummary(
+    (profit.json?.recognizedPurposeSummary as Record<string, unknown> | null) || null
+  );
 
   assertClose("Purpose total (dashboard vs cost-tracking)", dashboardPurpose.totalRecognizedSpend, costPurpose.totalRecognizedSpend);
   assertClose("Purpose total (dashboard vs budgets)", dashboardPurpose.totalRecognizedSpend, budgetPurpose.totalRecognizedSpend);
-  assertClose("Purpose total (dashboard vs profit)", dashboardPurpose.totalRecognizedSpend, profitPurpose.totalRecognizedSpend);
+  assertClose(
+    "Purpose total (dashboard vs profit recognized compatibility)",
+    dashboardPurpose.totalRecognizedSpend,
+    profitRecognizedPurpose.totalRecognizedSpend
+  );
 
   const purposeKeys: Array<keyof Omit<PurposeSummary, "totalRecognizedSpend">> = [
     "breakdownCost",
@@ -244,7 +266,11 @@ async function main() {
   for (const key of purposeKeys) {
     assertClose(`Purpose bucket ${key} (dashboard vs cost-tracking)`, dashboardPurpose[key], costPurpose[key]);
     assertClose(`Purpose bucket ${key} (dashboard vs budgets)`, dashboardPurpose[key], budgetPurpose[key]);
-    assertClose(`Purpose bucket ${key} (dashboard vs profit)`, dashboardPurpose[key], profitPurpose[key]);
+    assertClose(
+      `Purpose bucket ${key} (dashboard vs profit recognized compatibility)`,
+      dashboardPurpose[key],
+      profitRecognizedPurpose[key]
+    );
   }
 
   assert(
@@ -265,6 +291,16 @@ async function main() {
   );
   assertClose("Purpose bucket sum vs total recognized spend", sumOfBuckets, dashboardPurpose.totalRecognizedSpend);
 
+  const profitPurposeBucketSum = roundCurrency(
+    profitPurpose.breakdownCost +
+      profitPurpose.maintenanceCost +
+      profitPurpose.stockReplenishmentCost +
+      profitPurpose.operatingCost +
+      profitPurpose.otherUnlinkedCost
+  );
+  assertClose("Profit operational purpose bucket sum vs total", profitPurposeBucketSum, profitPurpose.totalRecognizedSpend);
+  assertClose("Profit operational purpose total vs profit expenses", profitPurpose.totalRecognizedSpend, profitSpend);
+
   console.info("✅ Financial consistency smoke checks passed.");
   console.info(
     JSON.stringify(
@@ -275,6 +311,7 @@ async function main() {
           costTrackingSpend,
           budgetsSpend,
           profitSpend,
+          spendingSpend,
           inventoryRecognizedSpend
         },
         purposeSummary: dashboardPurpose,

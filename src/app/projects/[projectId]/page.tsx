@@ -2,18 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { ProjectProfitabilityOverview } from "@/components/modules/project-profitability-overview";
-import { Card, MetricCard } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
-import {
-  buildProjectDirectCostSummary,
-  buildProjectOperationalKpiSummary
-} from "@/lib/drilling-direct-cost-summary";
-import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
+import { formatCurrency } from "@/lib/utils";
 import { prisma } from "@/lib/prisma";
-import { calculateProjectRevenueFromBillableLines } from "@/lib/project-revenue-calculator";
-import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
-import { formatCurrency, formatNumber } from "@/lib/utils";
+
+type ContractType = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 
 export default async function ProjectWorkspacePage({
   params
@@ -21,102 +15,44 @@ export default async function ProjectWorkspacePage({
   params: Promise<{ projectId: string }>;
 }) {
   const { projectId } = await params;
-
-  const [project, approvedDrillReports, recognizedSpendContext, projectConsumablesCostAggregate] =
-    await Promise.all([
-      prisma.project.findUnique({
-        where: { id: projectId },
-        include: {
-          client: true,
-          billingRateItems: {
-            where: {
-              isActive: true
-            },
-            orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-            select: {
-              itemCode: true,
-              label: true,
-              unit: true,
-              unitRate: true,
-              sortOrder: true,
-              isActive: true
-            }
-          },
-          assignedRig: {
-            select: {
-              rigCode: true
-            }
-          }
-        }
-      }),
-      prisma.drillReport.findMany({
-        where: withFinancialDrillReportApproval({ projectId }),
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    include: {
+      client: true,
+      assignedRig: {
         select: {
-          totalMetersDrilled: true,
-          workHours: true,
-          billableLines: {
-            select: {
-              itemCode: true,
-              quantity: true,
-              unit: true
-            }
-          }
+          rigCode: true
         }
-      }),
-      buildRecognizedSpendContext({ projectId }),
-      prisma.inventoryMovement.aggregate({
+      },
+      backupRig: {
+        select: {
+          rigCode: true
+        }
+      },
+      billingRateItems: {
         where: {
-          projectId,
-          movementType: "OUT",
-          contextType: "DRILLING_REPORT",
-          drillReportId: {
-            not: null
-          }
+          isActive: true
         },
-        _sum: {
-          totalCost: true
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        select: {
+          itemCode: true,
+          label: true,
+          unit: true,
+          unitRate: true,
+          drillingStageLabel: true,
+          depthBandStartM: true,
+          depthBandEndM: true
         }
-      })
-    ]);
+      }
+    }
+  });
 
   if (!project) {
     notFound();
   }
 
-  const drilledMeters = approvedDrillReports.reduce((sum, report) => sum + report.totalMetersDrilled, 0);
-  const contractRate = resolveContractRate({
-    perMeter: project.contractRatePerM,
-    dayRate: project.contractDayRate,
-    lumpSum: project.contractLumpSumValue
-  });
-  const lineRevenueResult = calculateProjectRevenueFromBillableLines({
-    approvedReports: approvedDrillReports,
-    activeRateItems: project.billingRateItems
-  });
-  const canUseLineRevenue = project.billingRateItems.length > 0 && lineRevenueResult.lineItems.length > 0;
-  const revenue = canUseLineRevenue ? lineRevenueResult.totalRevenue : drilledMeters * contractRate;
-  const cost = recognizedSpendContext.purposeTotals.recognizedSpendTotal;
-  const profitLoss = revenue - cost;
-  const totalWorkHours = approvedDrillReports.reduce((sum, report) => sum + report.workHours, 0);
-  const directCostSummary = buildProjectDirectCostSummary({
-    totalRevenue: revenue,
-    totalUsedConsumablesCost: projectConsumablesCostAggregate._sum.totalCost || 0
-  });
-  const operationalKpis = buildProjectOperationalKpiSummary({
-    totalMetersDrilled: drilledMeters,
-    totalWorkHours,
-    totalUsedConsumablesCost: directCostSummary.totalUsedConsumablesCost
-  });
-
-  const categoryTotals = new Map<string, number>();
-  for (const expense of recognizedSpendContext.recognizedExpenses) {
-    const category = expense.category?.trim() || "Other";
-    categoryTotals.set(category, (categoryTotals.get(category) || 0) + expense.amount);
-  }
-
-  const costBreakdown = Array.from(categoryTotals.entries())
-    .map(([label, amount]) => ({ label, amount }))
-    .sort((left, right) => right.amount - left.amount);
+  const spendingHref = `/spending?projectId=${encodeURIComponent(project.id)}`;
+  const drillingReportsHref = `/spending?view=drilling-reports&projectId=${encodeURIComponent(project.id)}`;
 
   return (
     <AccessGate permission="projects:view">
@@ -128,112 +64,77 @@ export default async function ProjectWorkspacePage({
               {project.client.name} • {project.location}
             </p>
           </div>
-          <Link href="/projects" className="text-sm text-brand-700 underline-offset-2 hover:underline">
-            Back to projects
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              href={spendingHref}
+              className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-slate-50"
+            >
+              Open Spending
+            </Link>
+            <Link
+              href={drillingReportsHref}
+              className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-slate-50"
+            >
+              Open Drilling reports
+            </Link>
+            <AccessGate permission="projects:manage">
+              <Link
+                href={`/projects/setup?projectId=${project.id}`}
+                className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
+              >
+                Edit project setup
+              </Link>
+            </AccessGate>
+            <Link href="/projects" className="text-sm text-brand-700 underline-offset-2 hover:underline">
+              Back to projects
+            </Link>
+          </div>
         </section>
-
-        <ProjectProfitabilityOverview
-          drilledMeters={drilledMeters}
-          contractRate={contractRate}
-          revenue={revenue}
-          cost={cost}
-          profitLoss={profitLoss}
-          costBreakdown={costBreakdown}
-          revenueBreakdown={lineRevenueResult.lineItems}
-          isUsingSimpleRevenueModel={!canUseLineRevenue}
-        />
-
-        <Card title="Basic direct-cost view">
-          <div className="grid gap-3 md:grid-cols-3">
-            <MetricCard label="Total revenue" value={formatCurrency(directCostSummary.totalRevenue)} tone="good" />
-            <MetricCard
-              label="Total used consumables cost"
-              value={formatCurrency(directCostSummary.totalUsedConsumablesCost)}
-              tone="warn"
-            />
-            <MetricCard
-              label="Simple result"
-              value={formatCurrency(directCostSummary.simpleResult)}
-              tone={directCostSummary.simpleResult >= 0 ? "good" : "danger"}
-            />
-          </div>
-          <p className="mt-3 text-xs text-slate-600">
-            Direct-cost only: includes drilling revenue and consumables used. Other project costs are not included.
-          </p>
-        </Card>
-
-        <Card title="Operational KPI view">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <MetricCard label="Meters drilled" value={formatNumber(operationalKpis.metersDrilled)} />
-            <MetricCard label="Work hours" value={formatNumber(operationalKpis.workHours)} />
-            <MetricCard
-              label="Meters per hour"
-              value={operationalKpis.metersPerHour === null ? "—" : formatNumber(operationalKpis.metersPerHour)}
-            />
-            <MetricCard
-              label="Consumables cost used"
-              value={formatCurrency(operationalKpis.consumablesCostUsed)}
-              tone="warn"
-            />
-            <MetricCard
-              label="Consumables cost per meter"
-              value={
-                operationalKpis.consumablesCostPerMeter === null
-                  ? "—"
-                  : formatCurrency(operationalKpis.consumablesCostPerMeter)
-              }
-              tone="warn"
-            />
-          </div>
-          <p className="mt-3 text-xs text-slate-600">
-            Operational KPIs only: based on drilling activity and consumables used. This is not full project margin.
-          </p>
-        </Card>
 
         <Card title="Project details">
           <DataTable
             compact
             columns={["Detail", "Value"]}
             rows={[
+              ["Project", project.name],
               ["Client", project.client.name],
               ["Site / location", project.location || "-"],
+              ["Project status", formatStatus(project.status)],
               ["Assigned rig", project.assignedRig?.rigCode || "Unassigned"],
-              ["Project status", project.status],
+              ["Backup rig", project.backupRig?.rigCode || "Unassigned"],
               ["Project type", formatProjectType(project.contractType)],
+              ["Contract rate", formatContractRate(project)],
               ["Start date", formatDate(project.startDate)],
               ["End date", project.endDate ? formatDate(project.endDate) : "-"],
               ["Description", project.description || "-"]
             ]}
           />
         </Card>
+
+        <Card title="Active billing setup">
+          {project.billingRateItems.length > 0 ? (
+            <DataTable
+              compact
+              columns={["Line", "Stage / Depth", "Unit", "Rate"]}
+              rows={project.billingRateItems.map((line) => [
+                line.label || line.itemCode,
+                formatStageDepth(line.drillingStageLabel, line.depthBandStartM, line.depthBandEndM),
+                line.unit,
+                formatCurrency(line.unitRate)
+              ])}
+            />
+          ) : (
+            <p className="text-sm text-ink-600">
+              No active billing lines are configured for this project yet.
+            </p>
+          )}
+        </Card>
       </div>
     </AccessGate>
   );
 }
 
-function resolveContractRate({
-  perMeter,
-  dayRate,
-  lumpSum
-}: {
-  perMeter: number;
-  dayRate: number | null;
-  lumpSum: number | null;
-}) {
-  if (perMeter > 0) {
-    return perMeter;
-  }
-  if ((dayRate || 0) > 0) {
-    return dayRate || 0;
-  }
-  if ((lumpSum || 0) > 0) {
-    return lumpSum || 0;
-  }
-  return 0;
-}
-
-function formatProjectType(value: "PER_METER" | "DAY_RATE" | "LUMP_SUM") {
+function formatProjectType(value: ContractType) {
   if (value === "PER_METER") {
     return "Per meter";
   }
@@ -241,6 +142,59 @@ function formatProjectType(value: "PER_METER" | "DAY_RATE" | "LUMP_SUM") {
     return "Day rate";
   }
   return "Lump sum";
+}
+
+function formatContractRate(project: {
+  contractType: ContractType;
+  contractRatePerM: number;
+  contractDayRate: number | null;
+  contractLumpSumValue: number | null;
+}) {
+  if (project.contractType === "PER_METER") {
+    return `${formatCurrency(project.contractRatePerM)} / meter`;
+  }
+  if (project.contractType === "DAY_RATE") {
+    return `${formatCurrency(project.contractDayRate || 0)} / day`;
+  }
+  return formatCurrency(project.contractLumpSumValue || 0);
+}
+
+function formatStageDepth(stageLabel: string | null, startM: number | null, endM: number | null) {
+  const cleanedStage = stageLabel?.trim() || "";
+  const hasBand = Number.isFinite(startM) || Number.isFinite(endM);
+  if (!cleanedStage && !hasBand) {
+    return "—";
+  }
+  if (cleanedStage && hasBand) {
+    return `${cleanedStage} • ${formatDepthBand(startM, endM)}`;
+  }
+  if (cleanedStage) {
+    return cleanedStage;
+  }
+  return formatDepthBand(startM, endM);
+}
+
+function formatDepthBand(startM: number | null, endM: number | null) {
+  const start = Number.isFinite(startM) ? Number(startM) : null;
+  const end = Number.isFinite(endM) ? Number(endM) : null;
+  if (start === null && end === null) {
+    return "—";
+  }
+  if (start !== null && end !== null) {
+    return `${start}-${end}m`;
+  }
+  if (start !== null) {
+    return `${start}m+`;
+  }
+  return `Up to ${end}m`;
+}
+
+function formatStatus(value: string) {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
 }
 
 function formatDate(value: Date) {

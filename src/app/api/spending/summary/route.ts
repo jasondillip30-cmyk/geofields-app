@@ -31,6 +31,27 @@ interface FrequentUsageRow {
   usageCount: number;
 }
 
+type RevenueRateCardMode =
+  | "STAGED_PER_METER"
+  | "PER_METER"
+  | "DAY_RATE"
+  | "LUMP_SUM"
+  | "NOT_CONFIGURED";
+
+interface RevenueRateCardRow {
+  id: string;
+  label: string;
+  rangeLabel: string | null;
+  rate: number;
+  rateSuffix: string;
+}
+
+interface RevenueRateCardPayload {
+  mode: RevenueRateCardMode;
+  rows: RevenueRateCardRow[];
+  message: string | null;
+}
+
 export async function GET(request: NextRequest) {
   const auth = await requireApiPermission(request, "finance:view");
   if (!auth.ok) {
@@ -61,7 +82,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const [reports, expenseMovements, usageMovements] = await Promise.all([
+  const [reports, expenseMovements, usageMovements, projectRateCard] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -126,7 +147,32 @@ export async function GET(request: NextRequest) {
           }
         }
       }
-    })
+    }),
+    projectId
+      ? prisma.project.findUnique({
+          where: { id: projectId },
+          select: {
+            contractType: true,
+            contractRatePerM: true,
+            contractDayRate: true,
+            contractLumpSumValue: true,
+            billingRateItems: {
+              where: { isActive: true },
+              orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+              select: {
+                id: true,
+                label: true,
+                unit: true,
+                unitRate: true,
+                drillingStageLabel: true,
+                depthBandStartM: true,
+                depthBandEndM: true,
+                sortOrder: true
+              }
+            }
+          }
+        })
+      : Promise.resolve(null)
   ]);
 
   const totalIncome = reports.reduce((sum, report) => sum + safeNumber(report.billableAmount), 0);
@@ -145,8 +191,12 @@ export async function GET(request: NextRequest) {
   );
   const largestExpenses = buildLargestExpenses(expenseMovements);
   const mostFrequentUsage = buildMostFrequentUsage(usageMovements);
+  const revenueRateCard = buildRevenueRateCard(projectRateCard);
 
   return NextResponse.json({
+    meta: {
+      expenseBasis: "actual-use" as const
+    },
     filters: {
       projectId: projectId || "all",
       clientId: clientId || "all",
@@ -164,8 +214,112 @@ export async function GET(request: NextRequest) {
     expenseByCategory,
     incomeByHole,
     largestExpenses,
-    mostFrequentUsage
+    mostFrequentUsage,
+    revenueRateCard
   });
+}
+
+function buildRevenueRateCard(
+  project:
+    | {
+        contractType: "PER_METER" | "DAY_RATE" | "LUMP_SUM";
+        contractRatePerM: number;
+        contractDayRate: number;
+        contractLumpSumValue: number;
+        billingRateItems: Array<{
+          id: string;
+          label: string;
+          unit: string;
+          unitRate: number;
+          drillingStageLabel: string | null;
+          depthBandStartM: number | null;
+          depthBandEndM: number | null;
+          sortOrder: number;
+        }>;
+      }
+    | null
+): RevenueRateCardPayload {
+  if (!project) {
+    return {
+      mode: "NOT_CONFIGURED",
+      rows: [],
+      message: "Rates not configured for this project."
+    };
+  }
+
+  const stagedRows = project.billingRateItems
+    .filter((entry) => `${entry.unit || ""}`.trim().toLowerCase() === "meter")
+    .filter((entry) => Number.isFinite(entry.depthBandStartM) && Number.isFinite(entry.depthBandEndM))
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map<RevenueRateCardRow>((entry) => ({
+      id: entry.id,
+      label: normalizeLabel(entry.drillingStageLabel || entry.label, "Stage"),
+      rangeLabel: `${safeNumber(entry.depthBandStartM)}-${safeNumber(entry.depthBandEndM)} m`,
+      rate: roundCurrency(safeNumber(entry.unitRate)),
+      rateSuffix: "/ m"
+    }));
+
+  if (stagedRows.length > 0) {
+    return {
+      mode: "STAGED_PER_METER",
+      rows: stagedRows,
+      message: null
+    };
+  }
+
+  if (project.contractType === "DAY_RATE" && safeNumber(project.contractDayRate) > 0) {
+    return {
+      mode: "DAY_RATE",
+      rows: [
+        {
+          id: "day-rate",
+          label: "Day rate",
+          rangeLabel: null,
+          rate: roundCurrency(safeNumber(project.contractDayRate)),
+          rateSuffix: "/ day"
+        }
+      ],
+      message: null
+    };
+  }
+
+  if (project.contractType === "LUMP_SUM" && safeNumber(project.contractLumpSumValue) > 0) {
+    return {
+      mode: "LUMP_SUM",
+      rows: [
+        {
+          id: "lump-sum",
+          label: "Lump sum",
+          rangeLabel: null,
+          rate: roundCurrency(safeNumber(project.contractLumpSumValue)),
+          rateSuffix: ""
+        }
+      ],
+      message: null
+    };
+  }
+
+  if (project.contractType === "PER_METER" && safeNumber(project.contractRatePerM) > 0) {
+    return {
+      mode: "PER_METER",
+      rows: [
+        {
+          id: "per-meter",
+          label: "Per meter rate",
+          rangeLabel: null,
+          rate: roundCurrency(safeNumber(project.contractRatePerM)),
+          rateSuffix: "/ m"
+        }
+      ],
+      message: null
+    };
+  }
+
+  return {
+    mode: "NOT_CONFIGURED",
+    rows: [],
+    message: "Rates not configured for this project."
+  };
 }
 
 function buildRevenueTrend(

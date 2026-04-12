@@ -113,12 +113,13 @@ export async function GET(request: NextRequest) {
   );
   const type = parseRequisitionType(request.nextUrl.searchParams.get("type"));
   const status = parseRequisitionStatus(request.nextUrl.searchParams.get("status"));
+  const isProjectScoped = Boolean(projectId);
 
   const requisitionRows = await prisma.summaryReport.findMany({
     where: {
       reportType: PURCHASE_REQUISITION_REPORT_TYPE,
       ...(projectId ? { projectId } : {}),
-      ...(clientId ? { clientId } : {})
+      ...(!isProjectScoped && clientId ? { clientId } : {})
     },
     orderBy: [{ reportDate: "desc" }, { createdAt: "desc" }]
   });
@@ -144,7 +145,7 @@ export async function GET(request: NextRequest) {
       if (status && entry.payload.status !== status) {
         return false;
       }
-      if (rigId && entry.payload.context.rigId !== rigId) {
+      if (!isProjectScoped && rigId && entry.payload.context.rigId !== rigId) {
         return false;
       }
       if (
@@ -287,9 +288,9 @@ export async function GET(request: NextRequest) {
       filters: {
         from: from ? from.toISOString() : null,
         to: to ? to.toISOString() : null,
-        clientId: clientId || "all",
+        clientId: isProjectScoped ? "all" : clientId || "all",
         projectId: projectId || "all",
-        rigId: rigId || "all",
+        rigId: isProjectScoped ? "all" : rigId || "all",
         maintenanceRequestId: maintenanceRequestId || "all",
         breakdownReportId: breakdownReportId || "all",
         type: type || "all",

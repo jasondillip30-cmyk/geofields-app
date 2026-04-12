@@ -2,7 +2,7 @@
 
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ReceiptFollowUpStage, RequisitionComparisonResult } from "@/components/inventory/receipt-intake-panel";
+import type { ReceiptFollowUpStage, RequisitionComparisonResult } from "@/components/inventory/receipt-intake-panel-types";
 
 export function ReceiptIntakeMismatchStep({
   showMismatchFinalizeConfirm,

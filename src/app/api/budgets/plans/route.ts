@@ -1,6 +1,7 @@
 import type { BudgetScopeType, Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import {
@@ -16,6 +17,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/budgets/plans");
 
   const scopeType = parseBudgetScopeType(request.nextUrl.searchParams.get("scopeType"));
   const activeOnly = request.nextUrl.searchParams.get("activeOnly") !== "false";
@@ -37,7 +39,7 @@ export async function GET(request: NextRequest) {
     orderBy: [{ periodStart: "desc" }, { createdAt: "desc" }]
   });
 
-  return NextResponse.json({
+  return deprecatedJson("/api/budgets/plans", {
     data: plans.map((plan) => ({
       id: plan.id,
       scopeType: plan.scopeType,
@@ -67,6 +69,7 @@ export async function POST(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/budgets/plans");
 
   const body = (await request.json().catch(() => null)) as
     | {
@@ -95,19 +98,19 @@ export async function POST(request: NextRequest) {
   const rawRigId = normalizeId(body?.rigId || null);
 
   if (!scopeType) {
-    return NextResponse.json({ message: "scopeType must be RIG or PROJECT." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans", { message: "scopeType must be RIG or PROJECT." }, { status: 400 });
   }
   if (!name) {
-    return NextResponse.json({ message: "name is required." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans", { message: "name is required." }, { status: 400 });
   }
   if (amount === null || amount <= 0) {
-    return NextResponse.json({ message: "amount must be a number greater than 0." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans", { message: "amount must be a number greater than 0." }, { status: 400 });
   }
   if (!periodStart || !periodEnd) {
-    return NextResponse.json({ message: "periodStart and periodEnd are required valid dates." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans", { message: "periodStart and periodEnd are required valid dates." }, { status: 400 });
   }
   if (periodStart.getTime() > periodEnd.getTime()) {
-    return NextResponse.json({ message: "periodStart must be on or before periodEnd." }, { status: 400 });
+    return deprecatedJson("/api/budgets/plans", { message: "periodStart must be on or before periodEnd." }, { status: 400 });
   }
 
   const normalized = await normalizeScopeContext({
@@ -128,7 +131,7 @@ export async function POST(request: NextRequest) {
     periodEnd
   });
   if (overlapping) {
-    return NextResponse.json(
+    return deprecatedJson("/api/budgets/plans", 
       {
         message:
           "An active budget plan already exists for this scope entity in an overlapping period."
@@ -178,7 +181,7 @@ export async function POST(request: NextRequest) {
     return inserted;
   });
 
-  return NextResponse.json({ data: created }, { status: 201 });
+  return deprecatedJson("/api/budgets/plans", { data: created }, { status: 201 });
 }
 
 function normalizeId(value: string | null) {
@@ -203,7 +206,7 @@ async function normalizeScopeContext({
     if (!rigId) {
       return {
         ok: false as const,
-        response: NextResponse.json({ message: "rigId is required for RIG budgets." }, { status: 400 })
+        response: deprecatedJson("/api/budgets/plans", { message: "rigId is required for RIG budgets." }, { status: 400 })
       };
     }
 
@@ -214,7 +217,7 @@ async function normalizeScopeContext({
     if (!rig) {
       return {
         ok: false as const,
-        response: NextResponse.json({ message: "Selected rig was not found." }, { status: 404 })
+        response: deprecatedJson("/api/budgets/plans", { message: "Selected rig was not found." }, { status: 404 })
       };
     }
 
@@ -226,7 +229,7 @@ async function normalizeScopeContext({
       if (!client) {
         return {
           ok: false as const,
-          response: NextResponse.json({ message: "Selected client was not found." }, { status: 404 })
+          response: deprecatedJson("/api/budgets/plans", { message: "Selected client was not found." }, { status: 404 })
         };
       }
     }
@@ -244,7 +247,7 @@ async function normalizeScopeContext({
   if (!projectId) {
     return {
       ok: false as const,
-      response: NextResponse.json({ message: "projectId is required for PROJECT budgets." }, { status: 400 })
+      response: deprecatedJson("/api/budgets/plans", { message: "projectId is required for PROJECT budgets." }, { status: 400 })
     };
   }
 
@@ -255,13 +258,13 @@ async function normalizeScopeContext({
   if (!project) {
     return {
       ok: false as const,
-      response: NextResponse.json({ message: "Selected project was not found." }, { status: 404 })
+      response: deprecatedJson("/api/budgets/plans", { message: "Selected project was not found." }, { status: 404 })
     };
   }
   if (clientId && clientId !== project.clientId) {
     return {
       ok: false as const,
-      response: NextResponse.json(
+      response: deprecatedJson("/api/budgets/plans", 
         { message: "Project does not belong to selected client." },
         { status: 400 }
       )
@@ -306,3 +309,9 @@ async function findOverlappingActivePlan({
   });
 }
 
+function deprecatedJson(route: string, body: unknown, init?: ResponseInit) {
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json(body, init),
+    route
+  );
+}

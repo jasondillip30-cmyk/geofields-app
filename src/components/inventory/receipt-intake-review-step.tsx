@@ -8,7 +8,7 @@ import type {
   RequisitionComparisonResult,
   ReviewLineState,
   ReviewState
-} from "@/components/inventory/receipt-intake-panel";
+} from "@/components/inventory/receipt-intake-panel-types";
 
 interface ItemLike {
   id: string;

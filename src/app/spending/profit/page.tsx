@@ -2,16 +2,22 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { RotateCw } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { AnalyticsEmptyState } from "@/components/layout/analytics-empty-state";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { LineTrendChart } from "@/components/charts/line-trend-chart";
-import { SpendingProfitFlowChart } from "@/components/charts/spending-profit-flow-chart";
+import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card, MetricCard } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+const SpendingProfitFlowChart = dynamic(
+  () =>
+    import("@/components/charts/spending-profit-flow-chart").then(
+      (module) => module.SpendingProfitFlowChart
+    )
+);
 
 interface ProfitTrendPoint {
   bucketStart: string;
@@ -132,6 +138,18 @@ export default function SpendingProfitPage() {
     return query ? `/spending?${query}` : "/spending";
   }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
 
+  const drillingWorkspaceHref = useMemo(() => {
+    const search = new URLSearchParams();
+    if (isSingleProjectScope) {
+      search.set("projectId", scopeProjectId);
+    }
+    if (filters.from) search.set("from", filters.from);
+    if (filters.to) search.set("to", filters.to);
+    search.set("view", "drilling-reports");
+    const query = search.toString();
+    return query ? `/spending?${query}` : "/spending?view=drilling-reports";
+  }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
+
   const marginTone = useMemo<"good" | "warn" | "danger">(() => {
     if (margin >= 40) return "good";
     if (margin >= 15) return "warn";
@@ -167,14 +185,26 @@ export default function SpendingProfitPage() {
   }, [summary.costBreakdownByCategory, summary.totals.totalExpenses, summary.totals.totalProfit, summary.totals.totalRevenue]);
 
   return (
-    <AccessGate permission="finance:view">
+    <AccessGate
+      permission="finance:view"
+      fallback={
+        <Card title="Finance permission required">
+          <p className="text-sm text-ink-700">
+            Profit view is available to finance roles only.
+          </p>
+          <Link href={drillingWorkspaceHref} className="gf-btn-subtle mt-3 inline-flex">
+            Open drilling reports in Project Operations
+          </Link>
+        </Card>
+      }
+    >
       <div className="gf-page-stack">
         {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
 
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
-              Profit is project-first. Choose one project in the top bar to view project profit and margin.
+              Project Operations profit is project-first. Choose one project in the top bar to view project profit and margin.
             </p>
           </Card>
         ) : (
@@ -184,7 +214,7 @@ export default function SpendingProfitPage() {
               subtitle="Operational finance view for the locked project."
               action={
                 <Link href={spendingHref} className="gf-btn-subtle">
-                  Back to Spending
+                  Back to Project Operations
                 </Link>
               }
             >
@@ -229,7 +259,7 @@ export default function SpendingProfitPage() {
               ) : !hasData ? (
                 <AnalyticsEmptyState
                   variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
-                  moduleHint="Create drilling reports and recognized spending records to populate profit trend."
+                  moduleHint="Create drilling reports and recognized project operations records to populate profit trend."
                   onClearFilters={resetFilters}
                   onLast30Days={() => applyDatePreset(30)}
                   onLast90Days={() => applyDatePreset(90)}

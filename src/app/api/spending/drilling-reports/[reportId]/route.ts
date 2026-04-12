@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { Prisma } from "@prisma/client";
 
-import { requireApiPermission } from "@/lib/auth/api-guard";
+import { requireAnyApiPermission } from "@/lib/auth/api-guard";
+import { canAccess } from "@/lib/auth/permissions";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
 
@@ -27,26 +29,24 @@ const reportInclude = {
           name: true,
           sku: true
         }
-      },
-      expense: {
-        select: {
-          id: true,
-          amount: true,
-          approvalStatus: true
-        }
       }
     }
   }
 } as const;
 
+type DrillReportWithSpendingInclude = Prisma.DrillReportGetPayload<{
+  include: typeof reportInclude;
+}>;
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ reportId: string }> }
 ) {
-  const auth = await requireApiPermission(request, "finance:view");
+  const auth = await requireAnyApiPermission(request, ["finance:view", "drilling:view"]);
   if (!auth.ok) {
     return auth.response;
   }
+  const canViewFinance = canAccess(auth.session.role, "finance:view");
 
   const { reportId } = await params;
   if (!reportId) {
@@ -86,7 +86,7 @@ export async function GET(
   }
 
   return NextResponse.json({
-    data: report
+    data: buildResponseReport(report, canViewFinance)
   });
 }
 
@@ -108,4 +108,51 @@ function parseDateOrNull(value: string | null, endOfDay = false) {
     parsed.setUTCHours(0, 0, 0, 0);
   }
   return parsed;
+}
+
+function safeNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildResponseReport(
+  report: DrillReportWithSpendingInclude,
+  canViewFinance: boolean
+) {
+  return {
+    id: report.id,
+    date: report.date,
+    holeNumber: report.holeNumber,
+    areaLocation: report.areaLocation,
+    fromMeter: safeNumber(report.fromMeter),
+    toMeter: safeNumber(report.toMeter),
+    totalMetersDrilled: safeNumber(report.totalMetersDrilled),
+    workHours: safeNumber(report.workHours),
+    rigMoves: safeNumber(report.rigMoves),
+    standbyHours: safeNumber(report.standbyHours),
+    delayHours: safeNumber(report.delayHours),
+    delayReasonCategory: report.delayReasonCategory,
+    delayReasonNote: report.delayReasonNote,
+    holeContinuityOverrideReason: report.holeContinuityOverrideReason,
+    leadOperatorName: report.leadOperatorName,
+    assistantCount: safeNumber(report.assistantCount),
+    operatorCrew: report.operatorCrew,
+    billableAmount: canViewFinance ? safeNumber(report.billableAmount) : 0,
+    comments: report.comments,
+    createdAt: report.createdAt,
+    updatedAt: report.updatedAt,
+    submittedAt: report.submittedAt,
+    project: report.project,
+    client: report.client,
+    rig: report.rig,
+    submittedBy: report.submittedBy,
+    approvedBy: report.approvedBy,
+    inventoryMovements: report.inventoryMovements.map((movement) => ({
+      id: movement.id,
+      date: movement.date,
+      quantity: safeNumber(movement.quantity),
+      totalCost: canViewFinance ? safeNumber(movement.totalCost) : 0,
+      item: movement.item
+    }))
+  };
 }

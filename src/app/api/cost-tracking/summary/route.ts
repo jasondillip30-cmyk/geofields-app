@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import {
   calculatePercent,
@@ -64,6 +65,7 @@ export async function GET(request: NextRequest) {
   if (!auth.ok) {
     return auth.response;
   }
+  logLegacyFinanceApiUsage("/api/cost-tracking/summary");
 
   const rawClientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const rawRigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
@@ -350,6 +352,9 @@ export async function GET(request: NextRequest) {
     costByProject.find((entry) => entry.id !== UNASSIGNED_PROJECT_ID) || costByProject[0] || null;
 
   const response: CostTrackingSummaryPayload = {
+    meta: {
+      expenseBasis: "recognized"
+    },
     filters: {
       projectId: projectId || "all",
       clientId: clientId || "all",
@@ -401,5 +406,8 @@ export async function GET(request: NextRequest) {
     { channel: "finance" }
   );
 
-  return NextResponse.json(response);
+  return withLegacyFinanceDeprecationHeaders(
+    NextResponse.json(response),
+    "/api/cost-tracking/summary"
+  );
 }

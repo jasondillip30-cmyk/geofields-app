@@ -22,6 +22,11 @@ import { canAccess } from "@/lib/auth/permissions";
 import { inventoryNavChildren, navItems, setupNavChildren } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { useRole } from "@/components/layout/role-provider";
+import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import {
+  MODE_VISIBLE_NAV_LABELS,
+  MODE_VISIBLE_SETUP_LABELS
+} from "@/lib/workspace-mode";
 
 const iconMap: Record<string, typeof LayoutDashboard> = {
   Dashboard: LayoutDashboard,
@@ -29,7 +34,7 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Projects: ClipboardList,
   "Drilling Reports": Drill,
   Breakdowns: Drill,
-  Spending: BarChart3,
+  "Project Operations": BarChart3,
   Approvals: ClipboardList,
   "Purchase Requests": Gauge,
   Inventory: Boxes,
@@ -58,7 +63,6 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
       "Clients",
       "Employees",
       "Rigs",
-      "Drilling Reports",
       "Breakdowns",
       "Maintenance",
       "Inventory",
@@ -67,7 +71,7 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
   },
   {
     title: "Profitability",
-    labels: ["Spending"]
+    labels: ["Project Operations"]
   },
   {
     title: "System",
@@ -77,21 +81,48 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
 
 export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
   const pathname = usePathname();
-  const { role, loading } = useRole();
+  const { role, loading, bootstrapError, refreshSession } = useRole();
+  const { filters } = useAnalyticsFilters();
   const [inventoryExpanded, setInventoryExpanded] = useState(false);
   const [setupExpanded, setSetupExpanded] = useState(false);
 
+  const allowedNavLabels = useMemo(
+    () => new Set(MODE_VISIBLE_NAV_LABELS[filters.workspaceMode]),
+    [filters.workspaceMode]
+  );
+  const allowedSetupLabels = useMemo(
+    () => new Set(MODE_VISIBLE_SETUP_LABELS[filters.workspaceMode]),
+    [filters.workspaceMode]
+  );
+
   const visibleNavItems = useMemo(
-    () => (role ? navItems.filter((item) => canAccess(role, item.permission)) : []),
-    [role]
+    () =>
+      role
+        ? navItems.filter((item) => {
+            if (!allowedNavLabels.has(item.label)) {
+              return false;
+            }
+            if (item.permission && canAccess(role, item.permission)) {
+              return true;
+            }
+            return Array.isArray(item.anyOf) ? item.anyOf.some((permission) => canAccess(role, permission)) : false;
+          })
+        : [],
+    [allowedNavLabels, role]
   );
   const visibleInventoryChildren = useMemo(
-    () => (role ? inventoryNavChildren.filter((item) => canAccess(role, item.permission)) : []),
+    () =>
+      role ? inventoryNavChildren.filter((item) => canAccess(role, item.permission)) : [],
     [role]
   );
   const visibleSetupChildren = useMemo(
-    () => (role ? setupNavChildren.filter((item) => canAccess(role, item.permission)) : []),
-    [role]
+    () =>
+      role
+        ? setupNavChildren.filter(
+            (item) => canAccess(role, item.permission) && allowedSetupLabels.has(item.label)
+          )
+        : [],
+    [allowedSetupLabels, role]
   );
   const visibleNavByLabel = useMemo(
     () => new Map(visibleNavItems.map((item) => [item.label, item])),
@@ -189,7 +220,24 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
             </div>
           )}
 
+          {!loading && bootstrapError ? (
+            <div className="mx-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
+              <p className="text-sm font-medium">Menu unavailable</p>
+              <p className="mt-1 text-xs">{bootstrapError}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  void refreshSession();
+                }}
+                className="mt-3 rounded-md border border-amber-300 bg-white px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              >
+                Retry session
+              </button>
+            </div>
+          ) : null}
+
           {!loading &&
+            !bootstrapError &&
             navGroups.map((group) => {
               const groupItems = group.labels
                 .map((label) => visibleNavByLabel.get(label))

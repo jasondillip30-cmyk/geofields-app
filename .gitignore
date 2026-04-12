@@ -4,7 +4,10 @@
 # next
 /.next
 /.next-dev
+/.next-dev-*
 /.next-build
+/.next-preflight
+/.next-smoke
 /out
 
 # production

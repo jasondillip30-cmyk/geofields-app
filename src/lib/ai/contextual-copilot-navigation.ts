@@ -36,6 +36,7 @@ import {
   findMetricValue,
   focusSeverityRank
 } from "@/lib/ai/contextual-copilot-ranking";
+import { COPILOT_NAVIGATION_FALLBACKS } from "@/lib/ai/contextual-copilot-navigation-fallbacks";
 import {
   buildComparisonAnswer,
   buildDecisionFirstNarrative,
@@ -47,6 +48,7 @@ import {
   resolveUrgencyLabel,
   resolveDecisionPlanItems
 } from "@/lib/ai/contextual-copilot-response";
+import { buildGeoFieldsCommandAnswer } from "@/lib/ai/contextual-copilot-geo-command";
 
 type CopilotRoleSegment = "MANAGEMENT" | "OFFICE" | "MECHANIC" | "OPERATIONS" | "GENERAL";
 
@@ -84,96 +86,7 @@ export function resolveNavigationTargets({
     return dedupeNavigationTargets([...explicitTargets, ...focusTargets]).slice(0, 6);
   }
 
-  const fallbackMap: Record<string, CopilotNavigationTarget[]> = {
-    "atlas-related": [
-      { label: "Open Alerts Center", href: "/alerts-center", reason: "Triage operational alerts first.", pageKey: "alerts-center" },
-      { label: "Open Budget vs Actual", href: "/cost-tracking/budget-vs-actual", reason: "Check budget pressure behind current risks.", pageKey: "budget-vs-actual" },
-      { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix missing linkage impacts quickly.", pageKey: "data-quality-linkage-center" }
-    ],
-    "atlas-whole-app": [
-      { label: "Open Executive Overview", href: "/executive-overview", reason: "Start from top-level risk posture.", pageKey: "executive-overview" },
-      { label: "Open Alerts Center", href: "/alerts-center", reason: "Clear urgent alert backlog.", pageKey: "alerts-center" },
-      { label: "Open Budget vs Actual", href: "/cost-tracking/budget-vs-actual", reason: "Prioritize overspent and critical buckets.", pageKey: "budget-vs-actual" }
-    ],
-    "executive-overview": [
-      { label: "Open Alerts Center", href: "/alerts-center", reason: "Triage current risk signals.", pageKey: "alerts-center" },
-      { label: "Open Budget vs Actual", href: "/cost-tracking/budget-vs-actual", reason: "Review budget pressure.", pageKey: "budget-vs-actual" },
-      { label: "Open Drilling Reports Approvals", href: "/approvals?tab=drilling-reports", reason: "Process drilling backlog.", pageKey: "approvals", sectionId: "approvals-tab-drilling-reports" }
-    ],
-    "alerts-center": [
-      { label: "Open Alerts Center", href: "/alerts-center", reason: "Continue triage in current queue.", pageKey: "alerts-center", sectionId: "alerts-active-section" },
-      { label: "Open Approvals", href: "/approvals", reason: "Process pending queue items.", pageKey: "approvals" },
-      { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix linkage-driven alerts.", pageKey: "data-quality-linkage-center" },
-      { label: "Open Drilling Reports Approvals", href: "/approvals?tab=drilling-reports", reason: "Resolve stale drilling approvals first.", pageKey: "approvals", sectionId: "approvals-tab-drilling-reports" }
-    ],
-    "data-quality-linkage-center": [
-      { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Apply linkage corrections.", pageKey: "data-quality-linkage-center" },
-      { label: "Open Cost Tracking", href: "/cost-tracking", reason: "Validate impact after corrections.", pageKey: "cost-tracking" }
-    ],
-    "budget-vs-actual": [
-      { label: "Open Budget vs Actual", href: "/cost-tracking/budget-vs-actual", reason: "Review budget buckets.", pageKey: "budget-vs-actual" },
-      { label: "Open Cost Tracking", href: "/cost-tracking", reason: "Inspect spend drivers.", pageKey: "cost-tracking" },
-      { label: "Open Alerts Center", href: "/alerts-center", reason: "Review related budget alerts.", pageKey: "alerts-center" }
-    ],
-    expenses: [
-      { label: "Open Expenses", href: "/expenses", reason: "Review cost drivers and expense records.", pageKey: "expenses", sectionId: "expenses-records-section" },
-      { label: "Open Budget vs Actual", href: "/cost-tracking/budget-vs-actual", reason: "Check budget pressure related to current spend.", pageKey: "budget-vs-actual" },
-      { label: "Open Approvals", href: "/approvals", reason: "Clear submitted records affecting expense visibility.", pageKey: "approvals" },
-      { label: "Open Linkage Center", href: "/data-quality/linkage-center", reason: "Fix missing rig/project linkage from expense records.", pageKey: "data-quality-linkage-center" }
-    ],
-    "drilling-reports": [
-      { label: "Open Drilling Reports", href: "/drilling-reports", reason: "Review drilling records and status.", pageKey: "drilling-reports", sectionId: "drilling-reports-table-section" },
-      { label: "Open Approvals", href: "/approvals?tab=drilling-reports", reason: "Resolve drilling approval queue.", pageKey: "approvals", sectionId: "approvals-tab-drilling-reports" },
-      { label: "Open Revenue", href: "/revenue", reason: "Validate drilling impact on revenue.", pageKey: "revenue" }
-    ],
-    breakdowns: [
-      { label: "Open Breakdown Reports", href: "/breakdowns", reason: "Review breakdown severity and downtime.", pageKey: "breakdowns", sectionId: "breakdown-log-section" },
-      { label: "Open Maintenance", href: "/maintenance", reason: "Coordinate maintenance response.", pageKey: "maintenance", sectionId: "maintenance-log-section" }
-    ],
-    "inventory-overview": [
-      { label: "Open Inventory Items", href: "/inventory/items", reason: "Review inventory item health.", pageKey: "inventory-items", sectionId: "inventory-items-section" },
-      { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace stock changes.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
-      { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Resolve data quality risks.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" }
-    ],
-    "inventory-items": [
-      { label: "Open Inventory Items", href: "/inventory/items", reason: "Manage inventory items.", pageKey: "inventory-items", sectionId: "inventory-items-section" },
-      { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Review linked movements.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
-      { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Clean inventory data issues.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" }
-    ],
-    "inventory-stock-movements": [
-      { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace movement records.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
-      { label: "Open Inventory Items", href: "/inventory/items", reason: "Inspect affected items.", pageKey: "inventory-items", sectionId: "inventory-items-section" }
-    ],
-    "inventory-issues": [
-      { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Resolve quality issues.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" },
-      { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix cross-module linkage risks.", pageKey: "data-quality-linkage-center" }
-    ],
-    "inventory-receipt-intake": [
-      { label: "Open Purchase Follow-up", href: "/purchasing/receipt-follow-up", reason: "Review receipt scan and intake flow.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-scan-section" },
-      { label: "Open Intake History", href: "/purchasing/receipt-follow-up?view=history", reason: "Review pending and finalized intake records.", pageKey: "inventory-receipt-intake", sectionId: "inventory-receipt-history-section" },
-      { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace inventory impact from receipt intake.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" }
-    ],
-    maintenance: [
-      { label: "Open Maintenance", href: "/maintenance", reason: "Review maintenance activity log and rig status.", pageKey: "maintenance", sectionId: "maintenance-log-section" },
-      { label: "Open Breakdowns", href: "/breakdowns", reason: "Check open breakdowns linked to maintenance work.", pageKey: "breakdowns", sectionId: "breakdown-log-section" }
-    ],
-    rigs: [
-      { label: "Open Rigs", href: "/rigs", reason: "Review rig condition and utilization risk.", pageKey: "rigs", sectionId: "rig-registry-section" },
-      { label: "Open Maintenance", href: "/maintenance", reason: "Confirm maintenance demand for attention rigs.", pageKey: "maintenance", sectionId: "maintenance-log-section" },
-      { label: "Open Cost Tracking", href: "/cost-tracking", reason: "Check rig cost concentration.", pageKey: "cost-tracking" }
-    ],
-    profit: [
-      { label: "Open Profit", href: "/profit", reason: "Review profitability drivers.", pageKey: "profit", sectionId: "profit-primary-kpi-section" },
-      { label: "Open Forecasting", href: "/forecasting", reason: "Compare forecast scenarios.", pageKey: "forecasting", sectionId: "forecast-kpi-section" },
-      { label: "Open Expenses", href: "/expenses", reason: "Inspect cost contributors.", pageKey: "expenses" }
-    ],
-    forecasting: [
-      { label: "Open Forecasting", href: "/forecasting", reason: "Review simulation details.", pageKey: "forecasting", sectionId: "forecast-kpi-section" },
-      { label: "Open Profit", href: "/profit", reason: "Validate profitability impact.", pageKey: "profit", sectionId: "profit-primary-kpi-section" }
-    ]
-  };
-
-  return dedupeNavigationTargets([...(fallbackMap[context.pageKey] || []), ...focusTargets]).slice(0, 6);
+  return dedupeNavigationTargets([...(COPILOT_NAVIGATION_FALLBACKS[context.pageKey] || []), ...focusTargets]).slice(0, 6);
 }
 
 
@@ -359,7 +272,10 @@ export function buildAnswer({
       command: decisionCommand,
       focusItems: decisionCandidates,
       summary,
-      topTarget
+      topTarget,
+      resolveFocusByCommand,
+      describeTargetPrecision,
+      rankFocusItems
     });
     if (commandAnswer) {
       return commandAnswer;
@@ -640,96 +556,6 @@ export function buildAnswer({
     return `${viewPrefix}${conciseSummary || keyInsights[0]}`.trim();
   }
   return "I’m not seeing a major exception right now. If you want, I can still rank the next best checks.";
-}
-
-function buildGeoFieldsCommandAnswer({
-  command,
-  focusItems,
-  summary,
-  topTarget
-}: {
-  command: GeoFieldsDecisionCommand;
-  focusItems: CopilotFocusItem[];
-  summary: string;
-  topTarget: CopilotNavigationTarget | null;
-}) {
-  const focus = resolveFocusByCommand({ command, focusItems });
-  const focusTarget =
-    focus && focus.href
-      ? ({
-          label: focus.label,
-          href: focus.href,
-          reason: focus.reason,
-          targetId: focus.targetId,
-          sectionId: focus.sectionId,
-          pageKey: focus.targetPageKey
-        } satisfies CopilotNavigationTarget)
-      : topTarget;
-
-  if (!focus) {
-    if (command === "DATA_GAPS_HURTING_REPORTS") {
-      return `${compactSummaryLine(summary)} No major linkage or attribution gaps are visible in this scope.`.trim();
-    }
-    return `${compactSummaryLine(summary)} I don’t have a strong scoped record for that command yet.`.trim();
-  }
-
-  const targetHint =
-    focus.href || focus.targetId || focus.sectionId
-      ? ` ${focusTarget ? describeTargetPrecision(focusTarget) : "Use the action link to jump to this record."}`
-      : "";
-
-  if (command === "TOP_REVENUE_RIG") {
-    return `Top revenue rig: ${focus.label}. Why: ${condenseReason(focus.reason, 88)}.${targetHint}`.trim();
-  }
-  if (command === "HIGHEST_EXPENSE_RIG") {
-    return `Highest expense rig: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      82
-    )}. Next: confirm cost controls and operational necessity.${targetHint}`.trim();
-  }
-  if (command === "RIGS_NEEDING_ATTENTION") {
-    const additional = rankFocusItems(
-      focusItems.filter((item) =>
-        ["RIG_RISK", "RIG_UTILIZATION", "MAINTENANCE"].includes(normalizeIssueType(item.issueType))
-      )
-    )
-      .slice(1, 3)
-      .map((item) => item.label);
-    return `${focus.label} should be first. Why: ${condenseReason(focus.reason, 78)}.${
-      additional.length > 0 ? ` Then review ${additional.join(", ")}.` : ""
-    }${targetHint}`.trim();
-  }
-  if (command === "PENDING_MAINTENANCE_RISKS" || command === "TOP_MAINTENANCE_ISSUE") {
-    return `Top maintenance risk: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      84
-    )}. Next: prioritize approval/escalation based on downtime and urgency.${targetHint}`.trim();
-  }
-  if (command === "BIGGEST_PROFITABILITY_ISSUE") {
-    return `Biggest profitability issue: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      86
-    )}.${targetHint}`.trim();
-  }
-  if (command === "DATA_GAPS_HURTING_REPORTS") {
-    return `Top data gap: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      84
-    )}. Next: fix linkage to improve reporting confidence.${targetHint}`.trim();
-  }
-  if (command === "TOP_RIG_RISK") {
-    return `Top rig risk: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      84
-    )}. Next: inspect this before lower-severity rig items.${targetHint}`.trim();
-  }
-  if (command === "BIGGEST_APPROVAL_ISSUE") {
-    return `Biggest approval issue: ${focus.label}. Why: ${condenseReason(
-      focus.reason,
-      84
-    )}. Next: clear this first to unblock downstream decisions.${targetHint}`.trim();
-  }
-  return null;
 }
 
 function resolveSessionSuggestedFocus(context: CopilotPageContext) {
