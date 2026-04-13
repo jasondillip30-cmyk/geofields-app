@@ -1,12 +1,16 @@
 import { rm } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
+import { normalizeTrackedTsconfigIncludes } from "./tsconfig-next-include-normalizer";
 
 const DEFAULT_PORT = 3000;
 const GRACEFUL_KILL_TIMEOUT_MS = 5_000;
+const PORT_RELEASE_TIMEOUT_MS = 6_000;
+const PORT_RELEASE_POLL_INTERVAL_MS = 140;
 
 async function main() {
   const port = resolvePort(process.env.PORT);
   const distDir = resolveDistDir(port);
+  normalizeTrackedTsconfigIncludes(process.cwd());
 
   console.log(`[dev:reset] target port: ${port}`);
   console.log(`[dev:reset] target dist dir: ${distDir}`);
@@ -15,6 +19,14 @@ async function main() {
   if (pids.length > 0) {
     console.log(`[dev:reset] stopping process(es) on :${port}: ${pids.join(", ")}`);
     await terminatePids(pids);
+    const released = await waitForPortRelease(port, PORT_RELEASE_TIMEOUT_MS);
+    if (!released) {
+      const remaining = findPortPids(port);
+      throw new Error(
+        `[dev:reset] port :${port} is still busy after shutdown (${remaining.join(", ") || "unknown"}). ` +
+          `Run \`kill -9 ${remaining.join(" ")}\` or pick another port, then retry.`
+      );
+    }
   } else {
     console.log(`[dev:reset] no running process found on :${port}`);
   }
@@ -22,7 +34,11 @@ async function main() {
   await rm(distDir, { recursive: true, force: true });
   console.log(`[dev:reset] removed ${distDir}`);
 
-  await startDevServer(port, distDir);
+  await startDevServerWithRetry({
+    port,
+    distDir,
+    maxAttempts: 2
+  });
 }
 
 function resolvePort(raw: string | undefined) {
@@ -42,7 +58,7 @@ function resolveDistDir(port: number) {
 }
 
 function findPortPids(port: number) {
-  const lookup = spawnSync("lsof", ["-ti", `tcp:${port}`], {
+  const lookup = spawnSync("lsof", ["-tiTCP:" + String(port), "-sTCP:LISTEN"], {
     cwd: process.cwd(),
     encoding: "utf8"
   });
@@ -54,6 +70,17 @@ function findPortPids(port: number) {
     .split(/\s+/)
     .map((value) => Number(value))
     .filter((value) => Number.isInteger(value) && value > 0);
+}
+
+async function waitForPortRelease(port: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (findPortPids(port).length === 0) {
+      return true;
+    }
+    await sleep(PORT_RELEASE_POLL_INTERVAL_MS);
+  }
+  return findPortPids(port).length === 0;
 }
 
 async function terminatePids(pids: number[]) {
@@ -104,7 +131,14 @@ function startDevServer(port: number, distDir: string) {
       PORT: String(port),
       NEXT_DIST_DIR: distDir
     },
-    stdio: "inherit"
+    stdio: ["inherit", "inherit", "pipe"]
+  });
+  let recentStderr = "";
+
+  child.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString();
+    process.stderr.write(text);
+    recentStderr = `${recentStderr}${text}`.slice(-3_000);
   });
 
   const forwardSignal = (signal: NodeJS.Signals) => {
@@ -117,9 +151,25 @@ function startDevServer(port: number, distDir: string) {
   process.on("SIGINT", () => forwardSignal("SIGINT"));
   process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 
+  const normalizeTimer = setInterval(() => {
+    try {
+      const changed = normalizeTrackedTsconfigIncludes(process.cwd());
+      if (changed) {
+        console.info("[dev:reset] normalized tsconfig include patterns");
+      }
+    } catch (error) {
+      console.warn(
+        `[dev:reset] unable to normalize tsconfig includes: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`
+      );
+    }
+  }, 5_000);
+
   return new Promise<void>((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      clearInterval(normalizeTimer);
       if (signal) {
         resolve();
         return;
@@ -128,9 +178,62 @@ function startDevServer(port: number, distDir: string) {
         resolve();
         return;
       }
-      reject(new Error(`next dev exited with code ${code}`));
+      const detail = recentStderr.trim();
+      reject(
+        new Error(
+          detail
+            ? `next dev exited with code ${code}. Last stderr:\n${detail}`
+            : `next dev exited with code ${code}`
+        )
+      );
     });
   });
+}
+
+async function startDevServerWithRetry({
+  port,
+  distDir,
+  maxAttempts
+}: {
+  port: number;
+  distDir: string;
+  maxAttempts: number;
+}) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      await startDevServer(port, distDir);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const hasKnownBindError = /eaddrinuse|eperm|address already in use/i.test(message);
+      const currentPids = findPortPids(port);
+      const portStillBusy = currentPids.length > 0;
+      const shouldRetry = attempt < maxAttempts && (hasKnownBindError || portStillBusy);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      console.warn(
+        `[dev:reset] restart attempt ${attempt} failed (${hasKnownBindError ? "bind error" : "port still busy"}). ` +
+          `Retrying once...`
+      );
+
+      if (currentPids.length > 0) {
+        await terminatePids(currentPids);
+      }
+      const released = await waitForPortRelease(port, PORT_RELEASE_TIMEOUT_MS);
+      if (!released) {
+        const remaining = findPortPids(port);
+        throw new Error(
+          `[dev:reset] retry blocked: port :${port} still busy by ${remaining.join(", ") || "unknown"}`
+        );
+      }
+      await sleep(200);
+    }
+  }
 }
 
 function sleep(ms: number) {

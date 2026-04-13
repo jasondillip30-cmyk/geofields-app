@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".next-build/types/**/*.ts",
+    ".next-dev-*/types/**/*.ts",
+    ".next-dev/types/**/*.ts",
+    ".next-preflight/types/**/*.ts",
+    ".next-smoke/types/**/*.ts",
+    ".next/types/**/*.ts",
+    "next-env.d.ts"
+  ]
+}

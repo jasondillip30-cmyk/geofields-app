@@ -4,19 +4,35 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { RotateCw } from "lucide-react";
+import type { ComponentType } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { AnalyticsEmptyState } from "@/components/layout/analytics-empty-state";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { LineTrendChart } from "@/components/charts/line-trend-chart";
 import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card, MetricCard } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
+
+const LineTrendChart = dynamic(
+  () => import("@/components/charts/line-trend-chart").then((module) => module.LineTrendChart),
+  {
+    loading: () => <p className="text-sm text-ink-600">Preparing profit trend chart...</p>
+  }
+) as ComponentType<{
+  data: Array<Record<string, unknown>>;
+  xKey: string;
+  yKey: string;
+  color?: string;
+}>;
+
 const SpendingProfitFlowChart = dynamic(
   () =>
     import("@/components/charts/spending-profit-flow-chart").then(
       (module) => module.SpendingProfitFlowChart
-    )
+    ),
+  {
+    loading: () => <p className="text-sm text-ink-600">Preparing cash-flow chart...</p>
+  }
 );
 
 interface ProfitTrendPoint {

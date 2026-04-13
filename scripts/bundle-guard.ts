@@ -22,7 +22,7 @@ type RouteResult = {
 
 const ROUTE_BUDGETS: RouteBudget[] = [
   { route: "/spending", maxKb: 420 },
-  { route: "/spending/profit", maxKb: 820 },
+  { route: "/spending/profit", maxKb: 760 },
   { route: "/spending/drilling-reports", maxKb: 420 },
   { route: "/drilling-reports", maxKb: 500 }
 ];
@@ -33,7 +33,13 @@ function fail(message: string): never {
 
 function getDistDir() {
   const fromEnv = process.env.NEXT_DIST_DIR?.trim();
-  return fromEnv || ".next";
+  if (fromEnv) {
+    return fromEnv;
+  }
+  if (fs.existsSync(path.join(process.cwd(), ".next-build", "app-build-manifest.json"))) {
+    return ".next-build";
+  }
+  return ".next";
 }
 
 function readManifest(repoRoot: string, distDir: string) {

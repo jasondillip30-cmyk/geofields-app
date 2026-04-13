@@ -9,6 +9,10 @@ const migrationsDir = path.join(prismaDir, "migrations");
 const expectedLockPath = path.join(migrationsDir, "migration_lock.toml");
 const legacyRootLockPath = path.join(prismaDir, "migration_lock.toml");
 const generatedArtifactPaths = [".next", ".next-build", ".next-dev", ".next-preflight", ".next-smoke", "tsconfig.tsbuildinfo"];
+const tsconfigPaths = [
+  path.join(repoRoot, "tsconfig.json"),
+  path.join(repoRoot, "tsconfig.next.json")
+];
 
 function fail(message: string) {
   throw new Error(`[hygiene-check] ${message}`);
@@ -86,9 +90,33 @@ function verifyGeneratedArtifactsNotTracked() {
   }
 }
 
+function verifyTsconfigDynamicNextTypeIncludes() {
+  for (const tsconfigPath of tsconfigPaths) {
+    if (!fs.existsSync(tsconfigPath)) {
+      continue;
+    }
+    const tsconfig = JSON.parse(readFileText(tsconfigPath)) as {
+      include?: unknown;
+    };
+    const includes = Array.isArray(tsconfig.include)
+      ? tsconfig.include.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const explicitPortIncludes = includes.filter((entry) =>
+      /\.next-dev-\d+\/types\/\*\*\/\*\.ts$/.test(entry)
+    );
+    if (explicitPortIncludes.length > 0) {
+      const fileName = path.basename(tsconfigPath);
+      fail(
+        `${fileName} should use wildcard Next dev includes (".next-dev-*/types/**/*.ts"), not concrete port paths: ${explicitPortIncludes.join(", ")}`
+      );
+    }
+  }
+}
+
 function main() {
   verifyPrismaLockLayout();
   verifyGeneratedArtifactsNotTracked();
+  verifyTsconfigDynamicNextTypeIncludes();
   console.info(
     JSON.stringify(
       {
@@ -97,7 +125,8 @@ function main() {
           "prisma lock file path",
           "provider alignment (schema vs migration lock)",
           "timestamped migration directories present",
-          "generated artifacts are not tracked"
+          "generated artifacts are not tracked",
+          "tsconfig uses wildcard Next dev type includes"
         ]
       },
       null,

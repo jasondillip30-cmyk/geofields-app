@@ -7,8 +7,8 @@ export function resolveDevRuntimeResetCommand() {
     return "npm run dev:reset";
   }
   const port = window.location.port?.trim() || "3000";
-  if (port === "3000") {
-    return "npm run dev:reset";
+  if (port === "3000" || port === "3001") {
+    return `npm run dev:reset:${port}`;
   }
   return `PORT=${port} npm run dev:reset`;
 }

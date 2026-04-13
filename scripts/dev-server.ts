@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
+import { normalizeTrackedTsconfigIncludes } from "./tsconfig-next-include-normalizer";
 
 const DEFAULT_PORT = 3000;
 
 async function main() {
   const port = resolvePort(process.env.PORT);
   const distDir = resolveDistDir(port);
+  normalizeTrackedTsconfigIncludes(process.cwd());
 
   console.log(`[dev] starting Next.js on :${port}`);
   console.log(`[dev] NEXT_DIST_DIR=${distDir}`);
@@ -29,9 +31,25 @@ async function main() {
   process.on("SIGINT", () => forwardSignal("SIGINT"));
   process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 
+  const normalizeTimer = setInterval(() => {
+    try {
+      const changed = normalizeTrackedTsconfigIncludes(process.cwd());
+      if (changed) {
+        console.info("[dev] normalized tsconfig include patterns");
+      }
+    } catch (error) {
+      console.warn(
+        `[dev] unable to normalize tsconfig includes: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`
+      );
+    }
+  }, 5_000);
+
   await new Promise<void>((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      clearInterval(normalizeTimer);
       if (signal) {
         resolve();
         return;
