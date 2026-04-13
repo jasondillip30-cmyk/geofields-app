@@ -15,7 +15,8 @@ import {
   HardHat,
   LayoutDashboard,
   Settings,
-  Wrench
+  Wrench,
+  X
 } from "lucide-react";
 
 import { canAccess } from "@/lib/auth/permissions";
@@ -83,7 +84,15 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
   }
 ];
 
-export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
+export function Sidebar({
+  sidebarHidden,
+  mobileOpen,
+  onRequestClose
+}: {
+  sidebarHidden: boolean;
+  mobileOpen: boolean;
+  onRequestClose: () => void;
+}) {
   const pathname = usePathname();
   const { role, loading, bootstrapError, refreshSession } = useRole();
   const { filters } = useAnalyticsFilters();
@@ -217,18 +226,36 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
 
   const recoveryMessage = bootstrapError || (loadingTimedOut ? "Access profile is taking longer than expected." : null);
   const resetCommand = resolveDevRuntimeResetCommand();
+  const handleLinkNavigation = () => {
+    if (mobileOpen) {
+      onRequestClose();
+    }
+  };
 
   return (
     <aside
       className={cn(
-        "w-full border-b border-slate-200 bg-white/95 lg:sticky lg:top-0 lg:h-full lg:shrink-0 lg:border-b-0 lg:border-r lg:transition-all lg:duration-200",
-        sidebarHidden ? "lg:w-0 lg:border-r-0 lg:opacity-0 lg:pointer-events-none lg:overflow-hidden" : "lg:w-72 lg:opacity-100"
+        "fixed inset-y-0 left-0 z-40 w-72 max-w-[88vw] border-r border-slate-200 bg-white/95 shadow-[0_14px_32px_rgba(15,23,42,0.16)] transition-transform duration-200 lg:sticky lg:top-0 lg:h-full lg:max-w-none lg:shrink-0 lg:translate-x-0 lg:border-b-0 lg:shadow-none",
+        mobileOpen ? "translate-x-0" : "-translate-x-full pointer-events-none lg:pointer-events-auto",
+        sidebarHidden
+          ? "lg:w-0 lg:border-r-0 lg:opacity-0 lg:pointer-events-none lg:overflow-hidden"
+          : "lg:w-72 lg:opacity-100"
       )}
     >
-      <div className={cn("flex flex-col lg:h-full", sidebarHidden && "lg:hidden")}>
-        <div className="border-b border-slate-200 px-5 py-5">
+      <div className={cn("flex h-full flex-col", sidebarHidden && "lg:hidden")}>
+        <div className="flex items-start justify-between gap-2 border-b border-slate-200 px-5 py-4.5">
           <p className="font-display text-xl text-ink-900">GeoFields</p>
-          <p className="text-sm text-slate-600">Drilling Profitability</p>
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-slate-600">Drilling Profitability</p>
+            <button
+              type="button"
+              onClick={onRequestClose}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 lg:hidden"
+              aria-label="Close navigation menu"
+            >
+              <X size={15} />
+            </button>
+          </div>
         </div>
 
         <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
@@ -327,6 +354,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                                       <Link
                                         key={child.href}
                                         href={child.href}
+                                        onClick={handleLinkNavigation}
                                         className={cn(
                                           "flex items-center gap-2 rounded-md px-2.5 py-1 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
                                           isActive
@@ -378,6 +406,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                         <div key={item.href} className={wrapperClass}>
                           <Link
                             href={item.href}
+                            onClick={handleLinkNavigation}
                             className={cn(
                               "flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-all duration-200 ease-out",
                               isActive
@@ -434,6 +463,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
                             <Link
                               key={child.href}
                               href={child.href}
+                              onClick={handleLinkNavigation}
                               className={cn(
                                 "flex items-center gap-2 rounded-md px-2.5 py-1 text-[13px] transition-all duration-200 ease-out hover:translate-x-[1px]",
                                 isActive

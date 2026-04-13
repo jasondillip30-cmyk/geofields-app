@@ -3,6 +3,7 @@
 import type { Dispatch, SetStateAction } from "react";
 
 import type { ReceiptFollowUpStage, RequisitionComparisonResult } from "@/components/inventory/receipt-intake-panel-types";
+import { DataTable } from "@/components/ui/table";
 
 export function ReceiptIntakeMismatchStep({
   showMismatchFinalizeConfirm,
@@ -79,29 +80,20 @@ export function ReceiptIntakeMismatchStep({
               </button>
             </div>
             <div className="space-y-3 p-4">
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-xs text-slate-800">
-                  <thead>
-                    <tr className="text-left text-slate-500">
-                      <th className="px-2 py-1 font-semibold">Field</th>
-                      <th className="px-2 py-1 font-semibold">Approved Requisition</th>
-                      <th className="px-2 py-1 font-semibold">Scanned Receipt</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {requisitionComparison.headerRows.map((row) => (
-                      <tr
-                        key={row.label}
-                        className={row.mismatch ? "bg-red-50/70 text-red-900" : "border-t border-slate-200"}
-                      >
-                        <td className="px-2 py-1 font-medium">{row.label}</td>
-                        <td className="px-2 py-1">{row.approved || "-"}</td>
-                        <td className="px-2 py-1">{row.scanned || "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <DataTable
+                compact
+                columns={["Field", "Approved Requisition", "Scanned Receipt"]}
+                rows={requisitionComparison.headerRows.map((row) => [
+                  <span key={`${row.label}-field`} className="font-medium">
+                    {row.label}
+                  </span>,
+                  row.approved || "-",
+                  row.scanned || "-"
+                ])}
+                rowClassNames={requisitionComparison.headerRows.map((row) =>
+                  row.mismatch ? "bg-red-50/70 text-red-900 hover:bg-red-50/80" : ""
+                )}
+              />
               <div className="grid gap-3 md:grid-cols-2">
                 <div className="rounded border border-slate-200 bg-slate-50 p-2">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">

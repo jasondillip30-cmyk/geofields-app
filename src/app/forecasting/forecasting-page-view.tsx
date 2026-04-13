@@ -11,6 +11,7 @@ import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
+import { DataTable } from "@/components/ui/table";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { buildScopedHref, getBucketDateRange } from "@/lib/drilldown";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
@@ -764,45 +765,26 @@ export default function ForecastingPage() {
           {changedImpacts.length === 0 ? (
             <p className="text-sm text-ink-600">No active cost adjustment impact yet.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-ink-600">
-                    <th className="px-2 py-2">Category</th>
-                    <th className="px-2 py-2">Type</th>
-                    <th className="px-2 py-2">Adjustment</th>
-                    <th className="px-2 py-2">Impact on Profit (30d)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {changedImpacts.map((impact) => {
-                    const profitImpact = -impact.delta30;
-                    return (
-                      <tr key={impact.rowId} className="border-b border-slate-100">
-                        <td className="px-2 py-2 text-ink-800">{impact.category}</td>
-                        <td className="px-2 py-2 text-ink-700">{impact.mode === "percent" ? "Percent" : "Fixed"}</td>
-                        <td className="px-2 py-2 text-ink-700">
-                          {impact.mode === "percent"
-                            ? formatSignedPercent(impact.value)
-                            : formatSignedCurrency(impact.value)}
-                        </td>
-                        <td
-                          className={`px-2 py-2 font-medium ${
-                            profitImpact > 0
-                              ? "text-emerald-700"
-                              : profitImpact < 0
-                                ? "text-red-700"
-                                : "text-ink-700"
-                          }`}
-                        >
-                          {formatSignedCurrency(profitImpact)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              compact
+              columns={["Category", "Type", "Adjustment", "Impact on Profit (30d)"]}
+              rows={changedImpacts.map((impact) => {
+                const profitImpact = -impact.delta30;
+                return [
+                  impact.category,
+                  impact.mode === "percent" ? "Percent" : "Fixed",
+                  impact.mode === "percent" ? formatSignedPercent(impact.value) : formatSignedCurrency(impact.value),
+                  <span
+                    key={`${impact.rowId}-profit-impact`}
+                    className={
+                      profitImpact > 0 ? "font-medium text-emerald-700" : profitImpact < 0 ? "font-medium text-red-700" : "font-medium text-ink-700"
+                    }
+                  >
+                    {formatSignedCurrency(profitImpact)}
+                  </span>
+                ];
+              })}
+            />
           )}
         </Card>
         </section>

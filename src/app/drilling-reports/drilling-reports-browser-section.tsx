@@ -1,6 +1,7 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/table";
 import type {
   DrillOperationalKpiSummary,
   DrillReportDirectCostSummary
@@ -87,47 +88,41 @@ export function DrillingReportsBrowserSection({
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="max-h-[560px] overflow-auto">
-                <table className="min-w-full text-left text-sm">
-                  <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2">Date</th>
-                      <th className="px-3 py-2">Hole Number</th>
-                      <th className="px-3 py-2">Rig</th>
-                      <th className="px-3 py-2 text-right">Meters</th>
-                      <th className="px-3 py-2 text-right">Work Hrs</th>
-                      <th className="px-3 py-2 text-right">Delay Hrs</th>
-                      <th className="px-3 py-2 text-right">Rig Moves</th>
-                      <th className="px-3 py-2">Crew</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {reports.map((report) => (
-                      <tr
-                        key={report.id}
-                        id={`ai-focus-${report.id}`}
-                        onClick={() => onSelectReport(report.id)}
-                        className={`cursor-pointer transition-colors ${
-                          focusedRowId === report.id
-                            ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200"
-                            : report.id === selectedReportId
-                              ? "bg-brand-50"
-                              : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <td className="px-3 py-2 text-xs text-ink-700">{toIsoDate(report.date)}</td>
-                        <td className="px-3 py-2 font-medium text-ink-800">{report.holeNumber}</td>
-                        <td className="px-3 py-2 text-ink-700">{report.rig.rigCode}</td>
-                        <td className="px-3 py-2 text-right text-ink-700">
-                          {formatNumber(report.totalMetersDrilled)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-ink-700">{report.workHours.toFixed(1)}</td>
-                        <td className="px-3 py-2 text-right text-ink-700">{report.delayHours.toFixed(1)}</td>
-                        <td className="px-3 py-2 text-right text-ink-700">{report.rigMoves}</td>
-                        <td className="px-3 py-2 text-ink-700">{formatCrewSummary(report)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <DataTable
+                  columns={["Date", "Hole Number", "Rig", "Meters", "Work Hrs", "Delay Hrs", "Rig Moves", "Crew"]}
+                  rows={reports.map((report) => [
+                    toIsoDate(report.date),
+                    report.holeNumber,
+                    report.rig.rigCode,
+                    <span key={`${report.id}-meters`} className="inline-block w-full text-right">
+                      {formatNumber(report.totalMetersDrilled)}
+                    </span>,
+                    <span key={`${report.id}-work`} className="inline-block w-full text-right">
+                      {report.workHours.toFixed(1)}
+                    </span>,
+                    <span key={`${report.id}-delay`} className="inline-block w-full text-right">
+                      {report.delayHours.toFixed(1)}
+                    </span>,
+                    <span key={`${report.id}-moves`} className="inline-block w-full text-right">
+                      {report.rigMoves}
+                    </span>,
+                    formatCrewSummary(report)
+                  ])}
+                  rowIds={reports.map((report) => `ai-focus-${report.id}`)}
+                  rowClassNames={reports.map((report) =>
+                    focusedRowId === report.id
+                      ? "bg-indigo-50 ring-1 ring-inset ring-indigo-200"
+                      : report.id === selectedReportId
+                        ? "bg-brand-50"
+                        : ""
+                  )}
+                  onRowClick={(rowIndex) => {
+                    const report = reports[rowIndex];
+                    if (report) {
+                      onSelectReport(report.id);
+                    }
+                  }}
+                />
               </div>
             </div>
           )}

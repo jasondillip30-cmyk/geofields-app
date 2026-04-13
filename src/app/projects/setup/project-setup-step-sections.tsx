@@ -1,5 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 
+import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
 import { Input, Select } from "./project-setup-fields";
@@ -277,65 +278,49 @@ export function ProjectSetupStepSections({
               </p>
             ) : null}
 
-            <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
-                  <tr>
-                    <th className="px-3 py-2">Billable item</th>
-                    <th className="px-3 py-2">Unit</th>
-                    <th className="px-3 py-2">Rate</th>
-                    <th className="px-3 py-2 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeBillingRateItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={4} className="px-3 py-3 text-sm text-slate-600">
-                        No lines yet. Add line to define how this project is billed.
-                      </td>
-                    </tr>
-                  ) : (
-                    activeBillingRateItems.map((line) => (
-                      <tr key={line.itemCode} className="border-t border-slate-200">
-                        <td className="px-3 py-2">
-                          <p className="font-semibold text-ink-900">{line.label}</p>
-                          {line.drillingStageLabel ? (
-                            <p className="text-[11px] text-slate-600">
-                              Stage: {line.drillingStageLabel}
-                            </p>
-                          ) : null}
-                          {typeof line.depthBandStartM === "number" && typeof line.depthBandEndM === "number" ? (
-                            <p className="text-[11px] text-slate-600">
-                              Depth: {formatNumber(line.depthBandStartM)}m - {formatNumber(line.depthBandEndM)}m
-                            </p>
-                          ) : null}
-                          <p className="text-[11px] text-slate-600">{line.itemCode}</p>
-                        </td>
-                        <td className="px-3 py-2 text-slate-700">{line.unit}</td>
-                        <td className="px-3 py-2 text-slate-700">{formatCurrency(line.unitRate)}</td>
-                        <td className="px-3 py-2 text-right">
-                          <div className="inline-flex gap-2">
-                            <button
-                              type="button"
-                              onClick={() => startEditBillingLine(line)}
-                              className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => archiveBillingLine(line.itemCode)}
-                              className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                            >
-                              Archive
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+            <div className="mt-3">
+              {activeBillingRateItems.length === 0 ? (
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm text-slate-600">
+                  No lines yet. Add line to define how this project is billed.
+                </div>
+              ) : (
+                <DataTable
+                  compact
+                  columns={["Billable item", "Unit", "Rate", "Action"]}
+                  rows={activeBillingRateItems.map((line) => [
+                    <div key={`${line.itemCode}-label`}>
+                      <p className="font-semibold text-ink-900">{line.label}</p>
+                      {line.drillingStageLabel ? (
+                        <p className="text-[11px] text-slate-600">Stage: {line.drillingStageLabel}</p>
+                      ) : null}
+                      {typeof line.depthBandStartM === "number" && typeof line.depthBandEndM === "number" ? (
+                        <p className="text-[11px] text-slate-600">
+                          Depth: {formatNumber(line.depthBandStartM)}m - {formatNumber(line.depthBandEndM)}m
+                        </p>
+                      ) : null}
+                      <p className="text-[11px] text-slate-600">{line.itemCode}</p>
+                    </div>,
+                    line.unit,
+                    formatCurrency(line.unitRate),
+                    <div key={`${line.itemCode}-actions`} className="inline-flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => startEditBillingLine(line)}
+                        className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => archiveBillingLine(line.itemCode)}
+                        className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                      >
+                        Archive
+                      </button>
+                    </div>
+                  ])}
+                />
+              )}
             </div>
 
             {archivedBillingItemCount > 0 ? (

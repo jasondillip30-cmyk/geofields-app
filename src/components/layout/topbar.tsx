@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Filter, PanelLeft, PanelLeftClose } from "lucide-react";
+import { CalendarDays, Filter, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import { roleLabels } from "@/lib/auth/roles";
 import { canViewApprovalWorkspace } from "@/lib/auth/approval-policy";
@@ -284,6 +284,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     rejectedThisWeek: number;
     approvedToday: number;
   } | null>(null);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -398,6 +399,27 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     };
   }, [user]);
 
+  useEffect(() => {
+    setMobileFiltersOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    if (!mobileFiltersOpen) {
+      document.body.style.overflow = "";
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileFiltersOpen]);
+
   const hasActiveFilters = useMemo(
     () =>
       filters.workspaceMode !== "all-projects" ||
@@ -423,6 +445,18 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     [selectedProjectStatus]
   );
   const workspaceModeLabel = WORKSPACE_MODE_LABELS[filters.workspaceMode];
+  const dateRangeSummary = useMemo(() => {
+    if (!filters.from && !filters.to) {
+      return "All dates";
+    }
+    if (filters.from && filters.to) {
+      return `${filters.from} to ${filters.to}`;
+    }
+    if (filters.from) {
+      return `From ${filters.from}`;
+    }
+    return `Until ${filters.to}`;
+  }, [filters.from, filters.to]);
   const isProjectMode = filters.workspaceMode === "project";
   const workspaceModeOptions: Array<{ value: WorkspaceMode; label: string }> = useMemo(
     () => [
@@ -450,6 +484,14 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
             <button
               type="button"
               onClick={onToggleSidebar}
+              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-ink-700 hover:bg-slate-50 lg:hidden"
+              aria-label="Open navigation menu"
+            >
+              <PanelLeft size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={onToggleSidebar}
               className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50 lg:inline-flex"
               aria-label={sidebarHidden ? "Show navigation sidebar" : "Hide navigation sidebar"}
             >
@@ -458,7 +500,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
             </button>
 
             {user && (
-              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700">
+              <div className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700 sm:flex">
                 <div className="min-w-0 text-right">
                   <p className="truncate font-semibold text-ink-900">{user.name}</p>
                   <p className="text-slate-500">{roleLabels[user.role]}</p>
@@ -472,11 +514,37 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
                 </button>
               </div>
             )}
+            {user ? (
+              <button
+                type="button"
+                onClick={() => void logout()}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50 sm:hidden"
+              >
+                Logout
+              </button>
+            ) : null}
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-3">
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-start justify-between gap-2 lg:hidden">
+            <div className="min-w-0 space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Scope</p>
+              <p className="truncate text-sm font-medium text-ink-900">
+                {workspaceModeLabel} · {isProjectMode ? selectedProjectLabel : "Global"}
+              </p>
+              <p className="truncate text-xs text-slate-600">{dateRangeSummary}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileFiltersOpen(true)}
+              className="gf-btn-secondary px-3 py-2 text-xs"
+            >
+              Filters
+            </button>
+          </div>
+
+          <div className="hidden flex-wrap items-center gap-2.5 lg:flex">
             <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
               <Filter size={14} />
               <span className="uppercase tracking-wide text-slate-500">Workspace</span>
@@ -623,6 +691,119 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
           )}
         </div>
       </div>
+
+      {mobileFiltersOpen ? (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-900/45 backdrop-blur-[1px]"
+            onClick={() => setMobileFiltersOpen(false)}
+            aria-label="Close filters"
+          />
+          <section className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-hidden rounded-t-2xl border-t border-slate-200 bg-white shadow-[0_-16px_34px_rgba(15,23,42,0.26)]">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <p className="text-sm font-semibold text-ink-900">Scope filters</p>
+              <button
+                type="button"
+                onClick={() => setMobileFiltersOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600"
+                aria-label="Close filters panel"
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div className="max-h-[calc(88vh-120px)] space-y-3 overflow-y-auto px-4 py-4">
+              <label className="grid gap-1 text-xs font-medium text-ink-700">
+                <span className="uppercase tracking-wide text-slate-500">Workspace</span>
+                <select
+                  value={filters.workspaceMode}
+                  onChange={(event) => setWorkspaceMode(event.target.value as WorkspaceMode)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                >
+                  {workspaceModeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="grid gap-1 text-xs font-medium text-ink-700">
+                <span className="uppercase tracking-wide text-slate-500">Project</span>
+                <select
+                  value={isProjectMode ? filters.projectId : "all"}
+                  onChange={(event) => {
+                    const nextProjectId = event.target.value;
+                    if (!isProjectMode) {
+                      return;
+                    }
+                    setFilters((current) => ({
+                      ...current,
+                      projectId: nextProjectId,
+                      clientId: nextProjectId === "all" ? current.clientId : "all",
+                      rigId: nextProjectId === "all" ? current.rigId : "all"
+                    }));
+                  }}
+                  disabled={!isProjectMode}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
+                >
+                  <option value="all">All projects</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="grid gap-2">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Date range</p>
+                <label className="grid gap-1 text-xs font-medium text-ink-700">
+                  <span>From</span>
+                  <input
+                    type="date"
+                    value={filters.from}
+                    onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    aria-label="From date"
+                  />
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-ink-700">
+                  <span>To</span>
+                  <input
+                    type="date"
+                    value={filters.to}
+                    onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    aria-label="To date"
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => {
+                  resetFilters();
+                  setMobileFiltersOpen(false);
+                }}
+                className="gf-btn-secondary px-3 py-2 text-xs"
+              >
+                Reset scope
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileFiltersOpen(false)}
+                className="gf-btn-primary px-3 py-2 text-xs"
+              >
+                Done
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </header>
   );
 }

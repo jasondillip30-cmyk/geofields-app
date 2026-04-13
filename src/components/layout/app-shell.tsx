@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
+import { usePathname } from "next/navigation";
 
 import { AiCopilotProvider } from "@/components/layout/ai-copilot-context";
 import { AnalyticsFiltersProvider } from "@/components/layout/analytics-filters-provider";
@@ -25,7 +26,9 @@ const CopilotActionContextToast = dynamic(
 );
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [sidebarHidden, setSidebarHidden] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const assistantExperienceEnabled = isAssistantExperienceEnabled();
 
   useEffect(() => {
@@ -53,17 +56,74 @@ export function AppShell({ children }: { children: ReactNode }) {
     window.sessionStorage.setItem(SIDEBAR_HIDDEN_STORAGE_KEY, sidebarHidden ? "1" : "0");
   }, [sidebarHidden]);
 
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    if (!mobileSidebarOpen) {
+      document.body.style.overflow = "";
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileSidebarOpen]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen || typeof window === "undefined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileSidebarOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mobileSidebarOpen]);
+
+  const handleSidebarToggle = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
+      setSidebarHidden((current) => !current);
+      return;
+    }
+    setMobileSidebarOpen((current) => !current);
+  };
+
   return (
     <div className="min-h-screen overflow-x-hidden bg-app-gradient">
       <AnalyticsFiltersProvider>
         <AiCopilotProvider>
           <ChunkLoadRecovery />
+          {mobileSidebarOpen ? (
+            <button
+              type="button"
+              className="fixed inset-0 z-30 bg-slate-900/45 backdrop-blur-[1px] lg:hidden"
+              aria-label="Close navigation menu"
+              onClick={() => setMobileSidebarOpen(false)}
+            />
+          ) : null}
           <div className="flex min-h-screen flex-col lg:h-screen lg:min-h-0 lg:flex-row lg:overflow-hidden">
             <Suspense fallback={<div className="hidden w-72 border-r border-slate-200 bg-white lg:block" />}>
-              <Sidebar sidebarHidden={sidebarHidden} />
+              <Sidebar
+                sidebarHidden={sidebarHidden}
+                mobileOpen={mobileSidebarOpen}
+                onRequestClose={() => setMobileSidebarOpen(false)}
+              />
             </Suspense>
             <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
-              <Topbar sidebarHidden={sidebarHidden} onToggleSidebar={() => setSidebarHidden((current) => !current)} />
+              <Topbar sidebarHidden={sidebarHidden} onToggleSidebar={handleSidebarToggle} />
               <main className="flex-1 min-w-0 overflow-x-hidden px-4 py-5 md:px-6 md:py-6 lg:overflow-y-auto lg:px-7 lg:py-7">
                 <div className="mx-auto w-full min-w-0 max-w-[1720px] [&>*]:min-w-0">
                   <WorkspaceModeRouteGuard>{children}</WorkspaceModeRouteGuard>

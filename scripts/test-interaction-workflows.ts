@@ -7,6 +7,7 @@ const SESSION_COOKIE_NAME = "gf_session";
 const DEFAULT_BASE_URL = "http://127.0.0.1:3000";
 const DEFAULT_ADMIN_EMAIL = "admin@geofields.co.tz";
 const DEFAULT_ADMIN_PASSWORD = "Admin123!";
+const DEFAULT_VIEWPORT = { width: 1365, height: 900 };
 
 interface InteractionFixtures {
   maintenanceRequestId: string | null;
@@ -34,6 +35,11 @@ async function main() {
   const adminEmail = process.env.SMOKE_ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL;
   const adminPassword = process.env.SMOKE_ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
   const runToken = `interaction-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const viewport = resolveInteractionViewport();
+
+  console.log(
+    `[interaction] running with viewport ${viewport.width}x${viewport.height} (mobile=${viewport.isMobile ? "yes" : "no"})`
+  );
 
   await ensureServerReachable(baseUrl);
   const sessionCookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
@@ -46,7 +52,11 @@ async function main() {
     fixtures = await createFixtures(baseUrl, sessionCookie, runToken);
 
     browser = await chromium.launch({ headless: true });
-    context = await browser.newContext();
+    context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      isMobile: viewport.isMobile,
+      hasTouch: viewport.isMobile
+    });
     await setSessionCookie(context, baseUrl, sessionCookie);
 
     const page = await context.newPage();
@@ -307,7 +317,10 @@ async function testRequisitionStatusActions(page: Page, baseUrl: string, fixture
   await waitForHydratedApp(page);
   await page.getByRole("button", { name: "Purchase Requisitions" }).first().waitFor({ state: "visible" });
 
-  const row = page.locator("tr").filter({ hasText: fixtures.requisitionCode }).first();
+  const row = page
+    .locator("tr:visible, article:visible")
+    .filter({ hasText: fixtures.requisitionCode })
+    .first();
   await row.waitFor({ state: "visible" });
 
   await row.getByRole("button", { name: "Reject" }).click();
@@ -354,11 +367,11 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
     }
   );
   await waitForHydratedApp(page);
-  await page.getByText("Requisition History").first().waitFor({ state: "visible" });
-  await page.getByText("Project Purchase").first().waitFor({ state: "visible" });
   const requisitionWorkflow = page.locator("#expenses-requisition-workflow").first();
+  await page.getByText("Requisition History").first().waitFor({ state: "visible" });
+  await requisitionWorkflow.getByText("Project Request").first().waitFor({ state: "visible" });
   assert(
-    !(await page.getByText("Inventory Stock-up").first().isVisible().catch(() => false)),
+    !(await requisitionWorkflow.getByText("Inventory Stock-up Request").first().isVisible().catch(() => false)),
     "Project-mode purchase requests must not expose inventory stock-up request type controls."
   );
   assert(
@@ -405,10 +418,11 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
     waitUntil: "domcontentloaded"
   });
   await waitForHydratedApp(page);
+  const workshopRequisitionWorkflow = page.locator("#expenses-requisition-workflow").first();
   await page.getByText("Requisition History").first().waitFor({ state: "visible" });
-  await page.getByText("Inventory Stock-up").first().waitFor({ state: "visible" });
+  await workshopRequisitionWorkflow.getByText("Inventory Stock-up Request").first().waitFor({ state: "visible" });
   assert(
-    !(await page.getByText("Project Purchase").first().isVisible().catch(() => false)),
+    !(await workshopRequisitionWorkflow.getByText("Project Request").first().isVisible().catch(() => false)),
     "Workshop-mode purchase requests must not expose project purchase controls."
   );
   await waitFor(
@@ -439,7 +453,7 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
       }
     );
     await waitForHydratedApp(page);
-    await page.getByText("Maintenance-linked Purchase").first().waitFor({ state: "visible" });
+    await page.locator("#expenses-requisition-workflow").getByText("Maintenance Request").first().waitFor({ state: "visible" });
     await waitFor(
       () => maintenanceWorkshopCalls.length > 0,
       10_000,
@@ -831,25 +845,52 @@ async function ensureServerReachable(baseUrl: string) {
 }
 
 async function loginAndGetCookie(baseUrl: string, email: string, password: string) {
-  const response = await fetch(`${baseUrl}/api/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ email, password })
-  });
+  const maxAttempts = 6;
+  let lastError = "Unknown login failure";
 
-  const responseText = await response.clone().text().catch(() => "");
-  if (!response.ok) {
-    throw new Error(`Login failed (${response.status}): ${responseText}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ email, password })
+      });
+
+      const responseText = await response.clone().text().catch(() => "");
+      if (!response.ok) {
+        lastError = `Login failed (${response.status}): ${responseText}`;
+        const retryableStatus = response.status >= 500 && response.status <= 504;
+        if (retryableStatus && attempt < maxAttempts) {
+          await sleep(1_250);
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      const setCookieHeader = response.headers.get("set-cookie") || "";
+      const cookie = readCookieValue(setCookieHeader, SESSION_COOKIE_NAME);
+      if (!cookie) {
+        lastError = "Login succeeded but session cookie was not returned.";
+        if (attempt < maxAttempts) {
+          await sleep(1_250);
+          continue;
+        }
+        throw new Error(lastError);
+      }
+      return cookie;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < maxAttempts) {
+        await sleep(1_250);
+        continue;
+      }
+      throw new Error(lastError);
+    }
   }
 
-  const setCookieHeader = response.headers.get("set-cookie") || "";
-  const cookie = readCookieValue(setCookieHeader, SESSION_COOKIE_NAME);
-  if (!cookie) {
-    throw new Error("Login succeeded but session cookie was not returned.");
-  }
-  return cookie;
+  throw new Error(lastError);
 }
 
 function readCookieValue(setCookieHeader: string, cookieName: string) {
@@ -936,6 +977,34 @@ async function waitForHydratedApp(page: Page, timeoutMs = 30_000) {
   await page.waitForFunction(() => document.documentElement.dataset.gfHydrated === "1", undefined, {
     timeout: timeoutMs
   });
+}
+
+function resolveInteractionViewport() {
+  const raw = (process.env.INTERACTION_VIEWPORT || "").trim();
+  if (!raw) {
+    return {
+      ...DEFAULT_VIEWPORT,
+      isMobile: false
+    };
+  }
+  const match = raw.match(/^(\d{2,5})x(\d{2,5})$/i);
+  if (!match) {
+    throw new Error(
+      `Invalid INTERACTION_VIEWPORT "${raw}". Use WIDTHxHEIGHT format (example: 390x844).`
+    );
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 200 || height < 200) {
+    throw new Error(
+      `Invalid INTERACTION_VIEWPORT "${raw}". Width/height must be numeric and >= 200.`
+    );
+  }
+  return {
+    width,
+    height,
+    isMobile: width < 1024
+  };
 }
 
 main().catch((error) => {

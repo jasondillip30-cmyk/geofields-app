@@ -190,37 +190,22 @@ export function InventoryOverviewSection({
                     Global warehouse stock health is good.
                   </p>
                 ) : (
-                  <div className="overflow-hidden rounded-lg border border-slate-200">
-                    <div className="max-h-64 overflow-auto">
-                      <table className="min-w-full text-left text-sm">
-                        <thead className="sticky top-0 z-10 bg-slate-50 text-xs uppercase tracking-wide text-slate-600">
-                          <tr>
-                            <th className="px-3 py-2">Item</th>
-                            <th className="px-3 py-2">SKU</th>
-                            <th className="px-3 py-2 text-right">Current</th>
-                            <th className="px-3 py-2 text-right">Minimum</th>
-                            <th className="px-3 py-2">Severity</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">
-                          {stockAlertRows.slice(0, 30).map((item) => (
-                            <tr key={item.id}>
-                              <td className="px-3 py-2 text-ink-800">{item.name}</td>
-                              <td className="px-3 py-2 text-ink-700">{item.sku}</td>
-                              <td className="px-3 py-2 text-right text-ink-700">
-                                {formatNumber(item.quantityInStock)}
-                              </td>
-                              <td className="px-3 py-2 text-right text-ink-700">
-                                {formatNumber(item.minimumStockLevel)}
-                              </td>
-                              <td className="px-3 py-2">
-                                <StockSeverityBadge severity={item.severity} />
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                  <div className="max-h-64 overflow-auto">
+                    <DataTable
+                      compact
+                      columns={["Item", "SKU", "Current", "Minimum", "Severity"]}
+                      rows={stockAlertRows.slice(0, 30).map((item) => [
+                        item.name,
+                        item.sku,
+                        <span key={`${item.id}-current`} className="inline-block w-full text-right">
+                          {formatNumber(item.quantityInStock)}
+                        </span>,
+                        <span key={`${item.id}-minimum`} className="inline-block w-full text-right">
+                          {formatNumber(item.minimumStockLevel)}
+                        </span>,
+                        <StockSeverityBadge key={`${item.id}-severity`} severity={item.severity} />
+                      ])}
+                    />
                   </div>
                 )}
 

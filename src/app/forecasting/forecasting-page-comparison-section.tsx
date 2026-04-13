@@ -1,5 +1,6 @@
 import { BarCategoryChart } from "@/components/charts/bar-category-chart";
 import { Card } from "@/components/ui/card";
+import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
 import type {
@@ -154,147 +155,102 @@ export function ForecastingComparisonSection({
           <p className="text-xs text-ink-600">
             Profit uses 7-day projection. 30-day Forecast uses monthly projection.
           </p>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-ink-600">
-                  <th className="px-2 py-2">Scenario Name</th>
-                  <th className="px-2 py-2">Revenue</th>
-                  <th className="px-2 py-2">Expenses</th>
-                  <th className="px-2 py-2">Profit</th>
-                  <th className="px-2 py-2">Profit Change vs Baseline</th>
-                  <th className="px-2 py-2">30-day Forecast</th>
-                  <th className="px-2 py-2">Forecast Change vs Baseline</th>
-                  <th className="px-2 py-2">Margin %</th>
-                  <th className="px-2 py-2">Break-even</th>
-                </tr>
-              </thead>
-              <tbody>
-                {comparisonEntries.map((entry) => {
-                  const dailyProfitChange = roundValue(entry.metrics.dailyProfit - baselineDailyProfit);
-                  const isBestProfit = entry.id === bestProfitEntry.id;
-                  const isBestMargin = entry.id === bestMarginEntry.id;
-                  const isLowestRisk = entry.id === lowestRiskEntry.id && !entry.isBaseline;
-                  const isBestLossReduction =
-                    !entry.isBaseline &&
-                    entry.id === bestLossReductionEntry.id &&
-                    entry.metrics.diff30 > 0;
-                  const isRecommended = recommendation?.entry.id === entry.id;
-                  const isLiveEditing = Boolean(entry.isLiveEditing);
+          <DataTable
+            columns={[
+              "Scenario Name",
+              "Revenue",
+              "Expenses",
+              "Profit",
+              "Profit Change vs Baseline",
+              "30-day Forecast",
+              "Forecast Change vs Baseline",
+              "Margin %",
+              "Break-even"
+            ]}
+            rows={comparisonEntries.map((entry) => {
+              const dailyProfitChange = roundValue(entry.metrics.dailyProfit - baselineDailyProfit);
+              const isBestProfit = entry.id === bestProfitEntry.id;
+              const isBestMargin = entry.id === bestMarginEntry.id;
+              const isLowestRisk = entry.id === lowestRiskEntry.id && !entry.isBaseline;
+              const isBestLossReduction =
+                !entry.isBaseline && entry.id === bestLossReductionEntry.id && entry.metrics.diff30 > 0;
+              const isRecommended = recommendation?.entry.id === entry.id;
+              const isLiveEditing = Boolean(entry.isLiveEditing);
 
-                  return (
-                    <tr
-                      key={entry.id}
-                      className={`border-b border-slate-100 ${
-                        isRecommended
-                          ? "bg-emerald-100/80 ring-1 ring-emerald-300"
-                          : isLiveEditing
-                            ? "bg-blue-50/70"
-                            : ""
-                      }`}
-                    >
-                      <td
-                        className={`px-2 py-2 text-ink-800 ${
-                          isRecommended
-                            ? "border-l-4 border-emerald-500"
-                            : isLiveEditing
-                              ? "border-l-4 border-blue-400"
-                              : ""
-                        }`}
-                      >
-                        <div className="font-medium">{entry.name}</div>
-                        <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
-                          {isRecommended && (
-                            <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-emerald-800">
-                              Recommended
-                            </span>
-                          )}
-                          {entry.isBaseline && (
-                            <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-700">
-                              Baseline
-                            </span>
-                          )}
-                          {isLiveEditing && (
-                            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">
-                              Live editing
-                            </span>
-                          )}
-                          {isBestProfit && (
-                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
-                              {isLossContext ? "Least loss" : "Highest profit"}
-                            </span>
-                          )}
-                          {isBestMargin && (
-                            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">
-                              {isLossContext ? "Least negative margin" : "Best margin"}
-                            </span>
-                          )}
-                          {isLossContext && isBestLossReduction && (
-                            <span className="rounded bg-purple-100 px-1.5 py-0.5 text-purple-700">
-                              Best loss reduction
-                            </span>
-                          )}
-                          {isLowestRisk && (
-                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
-                              Lowest risk
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-2 py-2 text-ink-700">
-                        {formatCurrency(entry.metrics.forecast30Revenue)}
-                      </td>
-                      <td className="px-2 py-2 text-ink-700">
-                        {formatCurrency(entry.metrics.forecast30Expenses)}
-                      </td>
-                      <td className="px-2 py-2 text-ink-700">
-                        {formatCurrency(entry.metrics.forecast7Profit)}
-                      </td>
-                      <td
-                        className={`px-2 py-2 font-medium ${
-                          dailyProfitChange > 0
-                            ? "text-emerald-700"
-                            : dailyProfitChange < 0
-                              ? "text-red-700"
-                              : "text-ink-700"
-                        }`}
-                      >
-                        {formatSignedCurrency(dailyProfitChange)}
-                      </td>
-                      <td className="px-2 py-2 text-ink-700">
-                        {formatCurrency(entry.metrics.forecast30Profit)}
-                      </td>
-                      <td
-                        className={`px-2 py-2 font-medium ${
-                          entry.metrics.diff30 > 0
-                            ? "text-emerald-700"
-                            : entry.metrics.diff30 < 0
-                              ? "text-red-700"
-                              : "text-ink-700"
-                        }`}
-                      >
-                        {formatSignedCurrency(entry.metrics.diff30)}
-                      </td>
-                      <td className="px-2 py-2 text-ink-700">
-                        {formatPercent(entry.metrics.margin30)}
-                      </td>
-                      <td
-                        className={`px-2 py-2 font-medium ${
-                          entry.metrics.forecast30Profit >= 0
-                            ? "text-emerald-700"
-                            : "text-amber-800"
-                        }`}
-                      >
-                        {entry.metrics.forecast30Profit >= 0
-                          ? "Above break-even"
-                          : `${formatCurrency(Math.abs(entry.metrics.forecast30Profit))} below`}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+              return [
+                <div key={`${entry.id}-scenario`}>
+                  <div className="font-medium">{entry.name}</div>
+                  <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                    {isRecommended ? (
+                      <span className="rounded bg-emerald-200 px-1.5 py-0.5 text-emerald-800">Recommended</span>
+                    ) : null}
+                    {entry.isBaseline ? (
+                      <span className="rounded bg-slate-200 px-1.5 py-0.5 text-slate-700">Baseline</span>
+                    ) : null}
+                    {isLiveEditing ? (
+                      <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">Live editing</span>
+                    ) : null}
+                    {isBestProfit ? (
+                      <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">
+                        {isLossContext ? "Least loss" : "Highest profit"}
+                      </span>
+                    ) : null}
+                    {isBestMargin ? (
+                      <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-700">
+                        {isLossContext ? "Least negative margin" : "Best margin"}
+                      </span>
+                    ) : null}
+                    {isLossContext && isBestLossReduction ? (
+                      <span className="rounded bg-purple-100 px-1.5 py-0.5 text-purple-700">Best loss reduction</span>
+                    ) : null}
+                    {isLowestRisk ? (
+                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">Lowest risk</span>
+                    ) : null}
+                  </div>
+                </div>,
+                formatCurrency(entry.metrics.forecast30Revenue),
+                formatCurrency(entry.metrics.forecast30Expenses),
+                formatCurrency(entry.metrics.forecast7Profit),
+                <span
+                  key={`${entry.id}-daily-change`}
+                  className={
+                    dailyProfitChange > 0 ? "font-medium text-emerald-700" : dailyProfitChange < 0 ? "font-medium text-red-700" : "font-medium text-ink-700"
+                  }
+                >
+                  {formatSignedCurrency(dailyProfitChange)}
+                </span>,
+                formatCurrency(entry.metrics.forecast30Profit),
+                <span
+                  key={`${entry.id}-forecast-change`}
+                  className={
+                    entry.metrics.diff30 > 0 ? "font-medium text-emerald-700" : entry.metrics.diff30 < 0 ? "font-medium text-red-700" : "font-medium text-ink-700"
+                  }
+                >
+                  {formatSignedCurrency(entry.metrics.diff30)}
+                </span>,
+                formatPercent(entry.metrics.margin30),
+                <span
+                  key={`${entry.id}-breakeven`}
+                  className={entry.metrics.forecast30Profit >= 0 ? "font-medium text-emerald-700" : "font-medium text-amber-800"}
+                >
+                  {entry.metrics.forecast30Profit >= 0
+                    ? "Above break-even"
+                    : `${formatCurrency(Math.abs(entry.metrics.forecast30Profit))} below`}
+                </span>
+              ];
+            })}
+            rowClassNames={comparisonEntries.map((entry) => {
+              const isRecommended = recommendation?.entry.id === entry.id;
+              const isLiveEditing = Boolean(entry.isLiveEditing);
+              if (isRecommended) {
+                return "bg-emerald-100/80 ring-1 ring-emerald-300";
+              }
+              if (isLiveEditing) {
+                return "bg-blue-50/70";
+              }
+              return "";
+            })}
+          />
 
           <div className="grid gap-4 xl:grid-cols-2">
             <Card
