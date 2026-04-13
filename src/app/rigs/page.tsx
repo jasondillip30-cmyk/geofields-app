@@ -378,9 +378,9 @@ export default function RigsPage() {
           sectionId: "maintenance-log-section"
         },
         {
-          label: "Open Cost Tracking",
+          label: "Open Project Operations",
           href: buildHref("/spending"),
-          reason: "Review rig cost concentration.",
+          reason: "Review rig cost concentration in the Spending workspace.",
           pageKey: "cost-tracking"
         },
         {

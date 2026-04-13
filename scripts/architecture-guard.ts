@@ -20,7 +20,6 @@ const rules: FileSizeRule[] = [
   { file: "src/lib/inventory-intelligence.ts", maxLines: 1200 },
   { file: "src/app/drilling-reports/drilling-reports-page-view.tsx", maxLines: 1200 },
   { file: "src/app/executive-overview/page.tsx", maxLines: 1200 },
-  { file: "src/app/cost-tracking/budget-vs-actual/page.tsx", maxLines: 1200 },
   { file: "src/lib/ai/contextual-copilot-insights.ts", maxLines: 1200 },
   { file: "src/app/api/alerts-center/route.ts", maxLines: 1200 },
   { file: "src/app/data-quality/linkage-center/page.tsx", maxLines: 1200 },

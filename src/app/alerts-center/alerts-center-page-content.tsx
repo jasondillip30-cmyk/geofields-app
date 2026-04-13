@@ -69,10 +69,10 @@ export default function AlertsCenterPage() {
     const query = params.toString();
     return `/approvals${query ? `?${query}` : ""}`;
   }, [filters]);
-  const budgetVsActualHref = useMemo(() => {
+  const projectOperationsHref = useMemo(() => {
     const params = buildFiltersQuery(filters);
     const query = params.toString();
-    return `/cost-tracking/budget-vs-actual${query ? `?${query}` : ""}`;
+    return `/spending${query ? `?${query}` : ""}`;
   }, [filters]);
   const linkageCenterHref = useMemo(() => {
     const params = buildFiltersQuery(filters);
@@ -666,7 +666,12 @@ export default function AlertsCenterPage() {
         })),
       navigationTargets: [
         { label: "Open Approvals", href: approvalsHref, reason: "Process stale pending items.", pageKey: "approvals" },
-        { label: "Open Budget vs Actual", href: budgetVsActualHref, reason: "Review budget-driven alerts.", pageKey: "budget-vs-actual" },
+        {
+          label: "Open Project Operations",
+          href: projectOperationsHref,
+          reason: "Review project finance context in the Spending workspace.",
+          pageKey: "project-operations"
+        },
         { label: "Open Data Quality Center", href: linkageCenterHref, reason: "Resolve linkage-related alerts.", pageKey: "data-quality-linkage-center" },
         {
           label: "Open Drilling Reports Approvals",
@@ -683,7 +688,7 @@ export default function AlertsCenterPage() {
     [
       approvalsHref,
       alertsCenterHref,
-      budgetVsActualHref,
+      projectOperationsHref,
       filteredAlerts,
       filters.clientId,
       filters.from,

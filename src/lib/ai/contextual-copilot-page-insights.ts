@@ -196,7 +196,7 @@ export function derivePageSpecificInsights({
         ? `Primary cost driver is ${topCategory}${topProject && topProject !== "N/A" ? `, with ${topProject} as top project spend` : ""}${topRig && topRig !== "N/A" ? ` and ${topRig} as top rig spend` : ""}.`
         : "No dominant cost driver is visible in this scope yet.",
       topCategory && topCategory !== "N/A"
-        ? "Cross-check Budget vs Actual for this scope to confirm whether current cost concentration is driving budget pressure."
+        ? "Cross-check Project Operations for this scope to confirm whether current cost concentration is driving budget pressure."
         : "No budget-pressure cross-check is needed yet from expense concentration alone.",
       submittedCount > 0
         ? `${submittedCount} submitted expense(s) worth ${formatAsMoney(submittedAmount)} may shift totals once decisions land.`

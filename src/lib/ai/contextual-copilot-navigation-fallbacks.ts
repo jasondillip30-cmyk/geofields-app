@@ -3,17 +3,17 @@ import type { CopilotNavigationTarget } from "@/lib/ai/contextual-copilot-types"
 export const COPILOT_NAVIGATION_FALLBACKS: Record<string, CopilotNavigationTarget[]> = {
   "atlas-related": [
     { label: "Open Alerts Center", href: "/alerts-center", reason: "Triage operational alerts first.", pageKey: "alerts-center" },
-    { label: "Open Budget vs Actual", href: "/spending", reason: "Check budget pressure behind current risks.", pageKey: "budget-vs-actual" },
+    { label: "Open Project Operations", href: "/spending", reason: "Check budget pressure behind current risks.", pageKey: "budget-vs-actual" },
     { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix missing linkage impacts quickly.", pageKey: "data-quality-linkage-center" }
   ],
   "atlas-whole-app": [
     { label: "Open Executive Overview", href: "/executive-overview", reason: "Start from top-level risk posture.", pageKey: "executive-overview" },
     { label: "Open Alerts Center", href: "/alerts-center", reason: "Clear urgent alert backlog.", pageKey: "alerts-center" },
-    { label: "Open Budget vs Actual", href: "/spending", reason: "Prioritize overspent and critical buckets.", pageKey: "budget-vs-actual" }
+    { label: "Open Project Operations", href: "/spending", reason: "Prioritize overspent and critical buckets.", pageKey: "budget-vs-actual" }
   ],
   "executive-overview": [
     { label: "Open Alerts Center", href: "/alerts-center", reason: "Triage current risk signals.", pageKey: "alerts-center" },
-    { label: "Open Budget vs Actual", href: "/spending", reason: "Review budget pressure.", pageKey: "budget-vs-actual" },
+    { label: "Open Project Operations", href: "/spending", reason: "Review budget pressure.", pageKey: "budget-vs-actual" },
     { label: "Open Drilling Reports Approvals", href: "/approvals?tab=drilling-reports", reason: "Process drilling backlog.", pageKey: "approvals", sectionId: "approvals-tab-drilling-reports" }
   ],
   "alerts-center": [
@@ -24,16 +24,16 @@ export const COPILOT_NAVIGATION_FALLBACKS: Record<string, CopilotNavigationTarge
   ],
   "data-quality-linkage-center": [
     { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Apply linkage corrections.", pageKey: "data-quality-linkage-center" },
-    { label: "Open Cost Tracking", href: "/spending", reason: "Validate impact after corrections.", pageKey: "cost-tracking" }
+    { label: "Open Project Operations", href: "/spending", reason: "Validate impact after corrections.", pageKey: "cost-tracking" }
   ],
   "budget-vs-actual": [
-    { label: "Open Budget vs Actual", href: "/spending", reason: "Review budget buckets.", pageKey: "budget-vs-actual" },
-    { label: "Open Cost Tracking", href: "/spending", reason: "Inspect spend drivers.", pageKey: "cost-tracking" },
+    { label: "Open Project Operations", href: "/spending", reason: "Review budget buckets.", pageKey: "budget-vs-actual" },
+    { label: "Open Project Operations", href: "/spending", reason: "Inspect spend drivers.", pageKey: "cost-tracking" },
     { label: "Open Alerts Center", href: "/alerts-center", reason: "Review related budget alerts.", pageKey: "alerts-center" }
   ],
   expenses: [
     { label: "Open Expenses", href: "/expenses", reason: "Review cost drivers and expense records.", pageKey: "expenses", sectionId: "expenses-records-section" },
-    { label: "Open Budget vs Actual", href: "/spending", reason: "Check budget pressure related to current spend.", pageKey: "budget-vs-actual" },
+    { label: "Open Project Operations", href: "/spending", reason: "Check budget pressure related to current spend.", pageKey: "budget-vs-actual" },
     { label: "Open Approvals", href: "/approvals", reason: "Clear submitted records affecting expense visibility.", pageKey: "approvals" },
     { label: "Open Linkage Center", href: "/data-quality/linkage-center", reason: "Fix missing rig/project linkage from expense records.", pageKey: "data-quality-linkage-center" }
   ],
@@ -76,7 +76,7 @@ export const COPILOT_NAVIGATION_FALLBACKS: Record<string, CopilotNavigationTarge
   rigs: [
     { label: "Open Rigs", href: "/rigs", reason: "Review rig condition and utilization risk.", pageKey: "rigs", sectionId: "rig-registry-section" },
     { label: "Open Maintenance", href: "/maintenance", reason: "Confirm maintenance demand for attention rigs.", pageKey: "maintenance", sectionId: "maintenance-log-section" },
-    { label: "Open Cost Tracking", href: "/spending", reason: "Check rig cost concentration.", pageKey: "cost-tracking" }
+    { label: "Open Project Operations", href: "/spending", reason: "Check rig cost concentration.", pageKey: "cost-tracking" }
   ],
   profit: [
     { label: "Open Profit", href: "/spending/profit", reason: "Review profitability drivers.", pageKey: "profit", sectionId: "profit-primary-kpi-section" },

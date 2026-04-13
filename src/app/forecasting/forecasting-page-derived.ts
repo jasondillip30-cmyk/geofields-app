@@ -444,9 +444,9 @@ export function buildForecastingCopilotContext(params: {
         sectionId: "profit-primary-kpi-section"
       },
       {
-        label: "Open Cost Tracking",
+        label: "Open Project Operations",
         href: buildHref("/spending"),
-        reason: "Review recognized cost trends behind forecast shifts.",
+        reason: "Review recognized cost trends in the Spending workspace.",
         pageKey: "cost-tracking"
       }
     ],

@@ -87,10 +87,10 @@ export default function DataQualityLinkageCenterPage() {
     const query = params.toString();
     return `/alerts-center${query ? `?${query}` : ""}`;
   }, [filters]);
-  const costTrackingHref = useMemo(() => {
+  const projectOperationsHref = useMemo(() => {
     const params = buildFiltersQuery(filters);
     const query = params.toString();
-    return `/cost-tracking${query ? `?${query}` : ""}`;
+    return `/spending${query ? `?${query}` : ""}`;
   }, [filters]);
   const linkageCenterHref = useMemo(() => {
     const params = buildFiltersQuery(filters);
@@ -791,7 +791,12 @@ export default function DataQualityLinkageCenterPage() {
         })),
       navigationTargets: [
         { label: "Open Alerts Center", href: alertsCenterHref, reason: "Review linkage-related alert pressure.", pageKey: "alerts-center" },
-        { label: "Open Cost Tracking", href: costTrackingHref, reason: "Validate spend context after fixes.", pageKey: "cost-tracking" }
+        {
+          label: "Open Project Operations",
+          href: projectOperationsHref,
+          reason: "Validate spend context after fixes in the Spending workspace.",
+          pageKey: "project-operations"
+        }
       ],
       notes: [
         canCorrect
@@ -802,7 +807,7 @@ export default function DataQualityLinkageCenterPage() {
     [
       alertsCenterHref,
       canCorrect,
-      costTrackingHref,
+      projectOperationsHref,
       filters.clientId,
       filters.from,
       filters.rigId,

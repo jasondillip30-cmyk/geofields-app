@@ -660,7 +660,12 @@ export default function ExecutiveOverviewPage() {
         },
         { label: "Open Alerts Center", href: alertsCenterHref, reason: "Triage highest-priority alerts.", pageKey: "alerts-center" },
         { label: "Open Data Quality Center", href: linkageCenterHref, reason: "Resolve missing linkage issues.", pageKey: "data-quality-linkage-center" },
-        { label: "Open Budget vs Actual", href: budgetVsActualHref, reason: "Review budget pressure.", pageKey: "budget-vs-actual" },
+        {
+          label: "Open Project Operations",
+          href: budgetVsActualHref,
+          reason: "Review budget pressure in the Spending workspace.",
+          pageKey: "budget-vs-actual"
+        },
         {
           label: "Open Drilling Reports Approvals",
           href: buildScopedApprovalsHref(filters, "drilling-reports"),

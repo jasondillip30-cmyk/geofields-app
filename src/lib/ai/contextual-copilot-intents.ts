@@ -225,7 +225,7 @@ export function buildGeneralExplanationAnswer({
   }
   if (question.includes("budget")) {
     return buildExplanationWithAppNote(
-      "A budget is planned spend for a scope (like a rig or project). Budget vs Actual compares recognized spend against that plan to show pressure early.",
+      "A budget is planned spend for a scope (like a rig or project). In Project Operations, budget comparison shows recognized spend against plan so pressure appears early.",
       context,
       summary,
       topFocus
