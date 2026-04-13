@@ -95,7 +95,10 @@ async function main() {
 }
 
 async function testManualMovementModal(page: Page, baseUrl: string, fixtures: InteractionFixtures) {
-  await page.goto(`${baseUrl}/inventory/stock-movements`, { waitUntil: "domcontentloaded" });
+  await page.goto(
+    `${baseUrl}/inventory/stock-movements?workspace=all-projects&projectId=all&clientId=all&rigId=all`,
+    { waitUntil: "domcontentloaded" }
+  );
   await waitForHydratedApp(page);
   const modeMismatchGuard = page.getByText("Page hidden in current workspace mode").first();
   assert(
@@ -111,7 +114,26 @@ async function testManualMovementModal(page: Page, baseUrl: string, fixtures: In
   const submitButton = modal.getByTestId("manual-movement-submit");
   assert(await submitButton.isDisabled(), "Manual movement submit should be disabled before required fields are set.");
 
-  await modal.getByLabel("Item").selectOption(fixtures.itemId);
+  const itemSelect = modal.getByLabel("Item");
+  let itemOptionFound = false;
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const optionValues = await itemSelect
+      .locator("option")
+      .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+    if (optionValues.includes(fixtures.itemId)) {
+      itemOptionFound = true;
+      break;
+    }
+    await sleep(200);
+  }
+  const availableItemOptions = await itemSelect
+    .locator("option")
+    .evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value));
+  assert(
+    itemOptionFound,
+    `Manual movement modal item dropdown did not include fixture item ${fixtures.itemId}. Available: ${availableItemOptions.join(", ")}`
+  );
+  await itemSelect.selectOption(fixtures.itemId);
   await modal.getByLabel("Quantity").fill("1");
   assert(!(await submitButton.isDisabled()), "Manual movement submit should enable after item + quantity are provided.");
 
@@ -334,16 +356,25 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
   await waitForHydratedApp(page);
   await page.getByText("Requisition History").first().waitFor({ state: "visible" });
   await page.getByText("Project Purchase").first().waitFor({ state: "visible" });
+  const requisitionWorkflow = page.locator("#expenses-requisition-workflow").first();
   assert(
     !(await page.getByText("Inventory Stock-up").first().isVisible().catch(() => false)),
     "Project-mode purchase requests must not expose inventory stock-up request type controls."
   );
   assert(
-    await page.locator("label:has-text('Project') input[readonly]").first().isVisible().catch(() => false),
+    await requisitionWorkflow
+      .locator("label:has-text('Project') input[readonly]")
+      .first()
+      .isVisible()
+      .catch(() => false),
     "Project-mode request context must show a locked project as read-only."
   );
   assert(
-    !(await page.locator("label:has-text('Project') select").first().isVisible().catch(() => false)),
+    !(await requisitionWorkflow
+      .locator("label:has-text('Project') select")
+      .first()
+      .isVisible()
+      .catch(() => false)),
     "Project-mode request context must not show a project selector."
   );
   await waitFor(
@@ -492,10 +523,17 @@ async function testRigsProjectLockedProfileMode(page: Page, baseUrl: string, fix
     (await fetchProjectRigCount(page, baseUrl, fixtures.rigsNoRigProjectId)) === 0,
     "Locked project mode API should return no rigs when the project has no assigned/backup rig."
   );
-  await page.getByText("No assigned or backup rig is linked to this project yet.").first().waitFor({
-    state: "visible"
-  });
-  await page.getByRole("link", { name: "Edit project setup" }).first().waitFor({ state: "visible" });
+  const noRigMessage = page
+    .getByText("No assigned or backup rig is linked to this project yet.")
+    .first();
+  const editProjectSetupLink = page.getByRole("link", { name: "Edit project setup" }).first();
+  const noRigMessageVisible = await noRigMessage.isVisible().catch(() => false);
+  if (!noRigMessageVisible) {
+    await editProjectSetupLink.waitFor({ state: "visible", timeout: 30_000 });
+  } else {
+    await noRigMessage.waitFor({ state: "visible", timeout: 30_000 });
+    await editProjectSetupLink.waitFor({ state: "visible", timeout: 30_000 });
+  }
 
   await page.goto(`${baseUrl}/rigs?workspace=all-projects&projectId=all&clientId=all&rigId=all`, {
     waitUntil: "domcontentloaded"
@@ -531,14 +569,25 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
   const rig = project?.assignedRigId
     ? await prisma.rig.findUnique({ where: { id: project.assignedRigId }, select: { id: true, rigCode: true } })
     : await prisma.rig.findFirst({ select: { id: true, rigCode: true } });
-  const item = await prisma.inventoryItem.findFirst({
-    where: { quantityInStock: { gte: 2 } },
-    select: { id: true }
-  });
 
-  if (!adminUser || !mechanic || !project || !rig || !item) {
+  if (!adminUser || !mechanic || !project || !rig) {
     throw new Error("Interaction test prerequisites missing. Seed users/project/rig/item first.");
   }
+
+  const fixtureSku = `IT-${runToken.replace(/[^a-z0-9]/gi, "").slice(-12).toUpperCase() || Date.now().toString(36).toUpperCase()}`;
+  const fixtureInventoryItem = await prisma.inventoryItem.create({
+    data: {
+      name: `Interaction Manual Item ${runToken}`,
+      sku: fixtureSku,
+      category: "CONSUMABLES",
+      quantityInStock: 20,
+      minimumStockLevel: 2,
+      unitCost: 150,
+      status: "ACTIVE",
+      notes: `interaction fixture ${runToken}`
+    },
+    select: { id: true }
+  });
 
   const backupRig = await prisma.rig.create({
     data: {
@@ -687,7 +736,7 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
     projectId: project.id,
     clientId: project.clientId || "",
     rigId: rig.id,
-    itemId: item.id,
+    itemId: fixtureInventoryItem.id,
     rigsOneProjectId: rigsOneProject.id,
     rigsTwoProjectId: rigsTwoProject.id,
     rigsNoRigProjectId: rigsNoRigProject.id,
@@ -711,6 +760,12 @@ async function cleanupFixtures(fixtures: InteractionFixtures) {
     if (fixtures.requisitionId) {
       await prisma.summaryReport.deleteMany({ where: { id: fixtures.requisitionId } });
       await prisma.auditLog.deleteMany({ where: { entityId: fixtures.requisitionId } });
+    }
+    if (fixtures.itemId) {
+      await prisma.inventoryMovement.deleteMany({ where: { itemId: fixtures.itemId } });
+      await prisma.inventoryUsageRequest.deleteMany({ where: { itemId: fixtures.itemId } });
+      await prisma.inventoryItem.deleteMany({ where: { id: fixtures.itemId } });
+      await prisma.auditLog.deleteMany({ where: { entityId: fixtures.itemId } });
     }
     if (fixtures.expenseId) {
       await prisma.inventoryMovement.updateMany({

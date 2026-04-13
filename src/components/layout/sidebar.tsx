@@ -27,6 +27,10 @@ import {
   MODE_VISIBLE_NAV_LABELS,
   MODE_VISIBLE_SETUP_LABELS
 } from "@/lib/workspace-mode";
+import {
+  resolveDevRuntimeResetCommand,
+  SESSION_BOOTSTRAP_LOADING_TIMEOUT_MS
+} from "@/components/layout/session-bootstrap-recovery";
 
 const iconMap: Record<string, typeof LayoutDashboard> = {
   Dashboard: LayoutDashboard,
@@ -85,6 +89,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
   const { filters } = useAnalyticsFilters();
   const [inventoryExpanded, setInventoryExpanded] = useState(false);
   const [setupExpanded, setSetupExpanded] = useState(false);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
   const allowedNavLabels = useMemo(
     () => new Set(MODE_VISIBLE_NAV_LABELS[filters.workspaceMode]),
@@ -197,6 +202,22 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
     window.localStorage.setItem("geofields.setupSidebarExpanded", setupExpanded ? "1" : "0");
   }, [setupExpanded]);
 
+  useEffect(() => {
+    if (!loading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setLoadingTimedOut(true);
+    }, SESSION_BOOTSTRAP_LOADING_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [loading]);
+
+  const recoveryMessage = bootstrapError || (loadingTimedOut ? "Access profile is taking longer than expected." : null);
+  const resetCommand = resolveDevRuntimeResetCommand();
+
   return (
     <aside
       className={cn(
@@ -211,7 +232,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
         </div>
 
         <nav className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-          {loading && (
+          {loading && !recoveryMessage && (
             <div className="space-y-2 px-1 py-1">
               <p className="px-3 py-1 text-sm text-slate-600">Loading menu...</p>
               {Array.from({ length: 6 }).map((_, index) => (
@@ -220,10 +241,13 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
             </div>
           )}
 
-          {!loading && bootstrapError ? (
+          {recoveryMessage ? (
             <div className="mx-1 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900">
               <p className="text-sm font-medium">Menu unavailable</p>
-              <p className="mt-1 text-xs">{bootstrapError}</p>
+              <p className="mt-1 text-xs">{recoveryMessage}</p>
+              <p className="mt-2 text-[11px]">
+                If this persists in local dev, run <code>{resetCommand}</code> and refresh.
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -237,7 +261,7 @@ export function Sidebar({ sidebarHidden }: { sidebarHidden: boolean }) {
           ) : null}
 
           {!loading &&
-            !bootstrapError &&
+            !recoveryMessage &&
             navGroups.map((group) => {
               const groupItems = group.labels
                 .map((label) => visibleNavByLabel.get(label))

@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "predev": "npm run db:doctor",
-    "dev": "next dev",
+    "dev": "node --import tsx scripts/dev-server.ts",
     "dev:clean": "rm -rf .next .next-dev .next-dev-*",
-    "dev:reset": "rm -rf .next .next-dev .next-dev-* .next-build .next-smoke && rm -f tsconfig.tsbuildinfo && npm run dev",
+    "dev:reset": "npm run -s db:doctor && node --import tsx scripts/dev-reset-runtime.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --cache --cache-location .next-build/eslintcache",

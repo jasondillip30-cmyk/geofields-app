@@ -1,10 +1,14 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { canAccess, type Permission } from "@/lib/auth/permissions";
 import { roleLabels } from "@/lib/auth/roles";
 import { useRole } from "@/components/layout/role-provider";
+import {
+  resolveDevRuntimeResetCommand,
+  SESSION_BOOTSTRAP_LOADING_TIMEOUT_MS
+} from "@/components/layout/session-bootstrap-recovery";
 
 export function AccessGate({
   permission,
@@ -18,8 +22,25 @@ export function AccessGate({
   fallback?: ReactNode;
 }) {
   const { role, loading, bootstrapError, refreshSession } = useRole();
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
-  if (loading) {
+  useEffect(() => {
+    if (!loading) {
+      setLoadingTimedOut(false);
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setLoadingTimedOut(true);
+    }, SESSION_BOOTSTRAP_LOADING_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [loading]);
+
+  const recoveryMessage = bootstrapError || (loadingTimedOut ? "Access profile is taking longer than expected." : null);
+  const resetCommand = resolveDevRuntimeResetCommand();
+
+  if (loading && !recoveryMessage) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-6">
         <p className="text-sm font-medium text-ink-700">Loading access profile...</p>
@@ -31,11 +52,14 @@ export function AccessGate({
     );
   }
 
-  if (bootstrapError) {
+  if (recoveryMessage) {
     return (
       <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
         <h2 className="font-display text-lg">Access profile unavailable</h2>
-        <p className="mt-2 text-sm">{bootstrapError}</p>
+        <p className="mt-2 text-sm">{recoveryMessage}</p>
+        <p className="mt-2 text-xs">
+          If this keeps happening in local dev, run <code>{resetCommand}</code> in the app terminal and refresh.
+        </p>
         <button
           type="button"
           onClick={() => {

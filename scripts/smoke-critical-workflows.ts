@@ -342,11 +342,57 @@ async function ensureServerReachable(baseUrl: string) {
     if (response.status >= 500) {
       throw new Error(`Server responded with ${response.status}`);
     }
+
+    await assertCanonicalAuthPathRedirect({
+      baseUrl,
+      rawPath: "/login.",
+      expectedPath: "/login",
+      expectedSearch: "next=%2Fprojects"
+    });
+    await assertCanonicalAuthPathRedirect({
+      baseUrl,
+      rawPath: "/unauthorized.",
+      expectedPath: "/unauthorized",
+      expectedSearch: "reason=smoke"
+    });
   } catch (error) {
     throw new Error(
       `Smoke tests need a running app server at ${baseUrl}. Start it first (for example: npm run dev). (${formatError(error)})`
     );
   }
+}
+
+async function assertCanonicalAuthPathRedirect({
+  baseUrl,
+  rawPath,
+  expectedPath,
+  expectedSearch
+}: {
+  baseUrl: string;
+  rawPath: string;
+  expectedPath: string;
+  expectedSearch: string;
+}) {
+  const response = await fetch(`${baseUrl}${rawPath}?${expectedSearch}`, {
+    method: "GET",
+    redirect: "manual"
+  });
+  assert(
+    response.status === 307 || response.status === 308,
+    `Expected canonical redirect for ${rawPath}, got ${response.status}.`
+  );
+  const location = response.headers.get("location");
+  assert(Boolean(location), `Canonical redirect for ${rawPath} did not include location header.`);
+
+  const normalized = new URL(location || "", baseUrl);
+  assert(
+    normalized.pathname === expectedPath,
+    `Expected ${rawPath} to redirect to ${expectedPath}, got ${normalized.pathname}.`
+  );
+  assert(
+    normalized.search === `?${expectedSearch}`,
+    `Expected ${rawPath} redirect query to remain ${expectedSearch}, got ${normalized.search}.`
+  );
 }
 
 async function loginAndGetCookie(baseUrl: string, email: string, password: string) {

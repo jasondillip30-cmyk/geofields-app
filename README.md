@@ -75,7 +75,13 @@ If local dev ever shows chunk-load errors, endless loading placeholders, or miss
 npm run dev:reset
 ```
 
-Dev artifacts are now isolated per port (`.next-dev-3000`, `.next-dev-3001`, etc.), but you should still avoid running overlapping dev/build commands in the same shell session.
+If you are running on a non-default port, use:
+
+```bash
+PORT=3001 npm run dev:reset
+```
+
+Dev artifacts are isolated per port (`.next-dev-3000`, `.next-dev-3001`, etc.). `dev:reset` only stops the active port process, clears that port's dist dir, and restarts clean.
 
 Open [http://localhost:3000](http://localhost:3000).
 
