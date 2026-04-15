@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
@@ -10,8 +9,6 @@ import { InventoryMovementsWorkspace } from "@/components/inventory/inventory-mo
 import { toIsoDate } from "@/components/inventory/inventory-page-utils";
 import { readApiError } from "@/components/inventory/inventory-page-shared";
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
-import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
 import { useRole } from "@/components/layout/role-provider";
@@ -19,7 +16,7 @@ import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
 import { canAccess } from "@/lib/auth/permissions";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { buildScopedHref } from "@/lib/drilldown";
-import { cn } from "@/lib/utils";
+import { InventoryPageChrome } from "./inventory-page-chrome";
 import { InventoryPageModals } from "./inventory-page-modals";
 import {
   loadInventoryCategorySuggestion,
@@ -514,7 +511,6 @@ function InventoryPageContent() {
     fixInventoryIssue,
     openItemDetail,
     openMovementDetail,
-    openIssueQueueForMovement,
     openIssueWorkflow
   } = createInventoryIssueHandlers({
     issues: issuesResponse.issues,
@@ -653,7 +649,6 @@ function InventoryPageContent() {
     showSuppliers,
     showLocations,
     overview,
-    issuesSummaryTotal: issuesResponse.summary.total,
     movementsLength: movements.length,
     stockAlertRows,
     items,
@@ -672,7 +667,6 @@ function InventoryPageContent() {
     filteredMovements,
     isSingleProjectScope,
     items,
-    issuesResponse.summary.total,
     locations,
     movements.length,
     overview,
@@ -745,104 +739,22 @@ function InventoryPageContent() {
 
   return (
     <AccessGate permission="inventory:view">
-      <div className="gf-page-stack space-y-4 md:space-y-5">
-        {notice && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</div>
-        )}
-        {errorMessage && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
-        )}
-
-        {isSingleProjectScope && isProjectScopedInventoryView ? (
-          <ProjectLockedBanner
-            projectId={filters.projectId}
-            projectName={scopedProject?.name || null}
-          />
-        ) : (
-          <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
-        )}
-
-        <section className="gf-page-header">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              {showMovements ? (
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Inventory</p>
-              ) : null}
-              <h1
-                className={cn(
-                  "font-semibold tracking-tight text-ink-900",
-                  showMovements ? "text-3xl md:text-[2rem]" : "text-2xl md:text-[1.7rem]"
-                )}
-              >
-                {pageTitle}
-              </h1>
-              <p className="mt-1 text-sm text-slate-600">{pageSubtitle}</p>
-            </div>
-            <div className={cn("flex flex-wrap gap-2", showMovements ? "ml-auto justify-end" : "")}>
-              {showOverview ? (
-                <>
-                  {canManage && !isSingleProjectScope ? (
-                    <>
-                      <Link href="/inventory/items?create=1" className="gf-btn-primary px-3 py-1.5 text-xs">
-                        New Item
-                      </Link>
-                      <Link href="/inventory/stock-movements" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                        Record Movement
-                      </Link>
-                    </>
-                  ) : null}
-                  {!isSingleProjectScope ? (
-                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                      Complete Purchase
-                    </Link>
-                  ) : null}
-                </>
-              ) : showMovements ? (
-                <>
-                  {canManage && !isSingleProjectScope ? (
-                    <button
-                      type="button"
-                      onClick={() => setManualMovementModalOpen(true)}
-                      className="gf-btn-primary px-3 py-1.5 text-xs"
-                    >
-                      New Manual Adjustment
-                    </button>
-                  ) : null}
-                  {!isSingleProjectScope ? (
-                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                      Open Purchase Follow-up
-                    </Link>
-                  ) : null}
-                  <Link href="/inventory?section=overview" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Back to Overview
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <Link href="/inventory" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Back to Overview
-                  </Link>
-                  {!isSingleProjectScope ? (
-                    <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                      Open Purchase Follow-up
-                    </Link>
-                  ) : null}
-                </>
-              )}
-            </div>
-          </div>
-          <div className="mt-4 border-t border-slate-200/80" />
-          {isSingleProjectScope && showOverview ? (
-            <div className="mt-3 gf-guided-strip">
-              <p className="gf-guided-strip-title">Today in this project</p>
-              <div className="gf-guided-step-list">
-                <p className="gf-guided-step">1. Check what is available for this project.</p>
-                <p className="gf-guided-step">2. Record usage through normal project workflows.</p>
-                <p className="gf-guided-step">3. Review used quantity and recognized cost.</p>
-              </div>
-            </div>
-          ) : null}
-        </section>
+      <InventoryPageChrome
+        notice={notice}
+        errorMessage={errorMessage}
+        filters={filters}
+        selectedClientLabel={selectedClientLabel}
+        selectedRigLabel={selectedRigLabel}
+        isSingleProjectScope={isSingleProjectScope}
+        isProjectScopedInventoryView={isProjectScopedInventoryView}
+        showMovements={showMovements}
+        pageTitle={pageTitle}
+        pageSubtitle={pageSubtitle}
+        showOverview={showOverview}
+        canManage={canManage}
+        onOpenCreateItem={() => router.push("/inventory/items?create=1")}
+        onOpenManualAdjustment={() => setManualMovementModalOpen(true)}
+      >
 
         <InventoryOverviewSection
           showOverview={showOverview}
@@ -851,7 +763,6 @@ function InventoryPageContent() {
           overview={overview}
           stockAlertRows={stockAlertRows}
           movements={movements}
-          issuesResponse={issuesResponse}
           recognizedProjectCostRows={recognizedProjectCostRows}
         />
 
@@ -1025,7 +936,6 @@ function InventoryPageContent() {
           selectedMovementDetails={selectedMovementDetails}
           canApproveMovement={canApproveMovement}
           refreshMovementDetails={refreshMovementDetails}
-          openIssueQueueForMovement={openIssueQueueForMovement}
           requestUseModalOpen={requestUseModalOpen}
           closeRequestUseModal={closeRequestUseModal}
           submitUseRequest={submitUseRequest}
@@ -1038,7 +948,7 @@ function InventoryPageContent() {
           submittingUseRequest={submittingUseRequest}
           useRequestError={useRequestError}
         />
-      </div>
+      </InventoryPageChrome>
     </AccessGate>
   );
 }

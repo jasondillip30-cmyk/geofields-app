@@ -91,6 +91,14 @@ export interface SpendingStageSegment {
   fillPercent: number;
 }
 
+export interface SpendingDrillingPeriodBucket {
+  bucketKey: string;
+  label: string;
+  totalMeters: number;
+  totalReports: number;
+  totalWorkHours: number;
+}
+
 export interface SpendingHoleStageRow {
   holeNumber: string;
   totalMeters: number;
@@ -103,6 +111,10 @@ export interface SpendingHoleStageRow {
 
 export interface SpendingDrillingSummaryPayload {
   stageConfigured: boolean;
+  timePeriod: {
+    monthly: SpendingDrillingPeriodBucket[];
+    yearly: SpendingDrillingPeriodBucket[];
+  };
   summary: {
     totalMeters: number;
     totalReports: number;
@@ -145,6 +157,10 @@ export const emptySummary: SpendingSummaryPayload = {
 
 export const emptyDrillingSummary: SpendingDrillingSummaryPayload = {
   stageConfigured: false,
+  timePeriod: {
+    monthly: [],
+    yearly: []
+  },
   summary: {
     totalMeters: 0,
     totalReports: 0,

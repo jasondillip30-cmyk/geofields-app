@@ -41,7 +41,7 @@ export default function ClientSetupPage() {
 
 function ClientSetupPageContent() {
   const searchParams = useSearchParams();
-  const queryClientId = searchParams.get("clientId")?.trim() || "";
+  const queryClientId = searchParams.get("editClientId")?.trim() || searchParams.get("clientId")?.trim() || "";
 
   const [clients, setClients] = useState<Client[]>([]);
   const [form, setForm] = useState(emptyForm);

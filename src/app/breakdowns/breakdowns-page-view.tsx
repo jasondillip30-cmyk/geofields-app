@@ -3,7 +3,6 @@
 import type { ComponentProps, Dispatch, SetStateAction } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import {
@@ -94,7 +93,7 @@ export function BreakdownsPageView({
   notice,
   errorMessage,
   isSingleProjectScope,
-  scopeProjectId,
+  scopeProjectId: _scopeProjectId,
   scopedProject,
   effectiveProject,
   effectiveProjectRigOptions,
@@ -157,13 +156,6 @@ export function BreakdownsPageView({
             {errorMessage}
           </div>
         ) : null}
-        {isSingleProjectScope ? (
-          <ProjectLockedBanner
-            projectId={scopeProjectId}
-            projectName={scopedProject?.name || null}
-          />
-        ) : null}
-
         <AccessGate permission="breakdowns:submit">
           <Card
             title="Report breakdown"

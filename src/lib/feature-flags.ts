@@ -13,3 +13,15 @@ export function isAssistantExperienceEnabled() {
 export function isDashboardSmartRecommendationsEnabled() {
   return isFlagEnabled(process.env.NEXT_PUBLIC_ENABLE_DASHBOARD_SMART_RECOMMENDATIONS);
 }
+
+export function isWorkspaceLaunchEnabled() {
+  const value = process.env.NEXT_PUBLIC_ENABLE_WORKSPACE_LAUNCH;
+  if (typeof value === "undefined") {
+    return true;
+  }
+  return isFlagEnabled(value);
+}
+
+export function isForecastingEnabled() {
+  return isFlagEnabled(process.env.NEXT_PUBLIC_ENABLE_FORECASTING);
+}

@@ -7,7 +7,6 @@ import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provi
 import { AccessGate } from "@/components/layout/access-gate";
 import { useRole } from "@/components/layout/role-provider";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
@@ -255,16 +254,14 @@ export default function InventoryExpensesPage() {
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>
         ) : null}
 
-        {isSingleProjectScope ? (
-          <ProjectLockedBanner projectId={filters.projectId} />
-        ) : (
+        {!isSingleProjectScope ? (
           <FilterScopeBanner
             filters={filters}
             clientLabel={selectedClientLabel}
             rigLabel={selectedRigLabel}
             onClearFilters={resetFilters}
           />
-        )}
+        ) : null}
 
         {isSingleProjectScope ? (
           <div className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3 text-sm text-brand-900">
@@ -288,9 +285,6 @@ export default function InventoryExpensesPage() {
                 <>
                   <Link href="/inventory/stock-movements" className="gf-btn-secondary px-3 py-1.5 text-xs">
                     Open Stock Movements
-                  </Link>
-                  <Link href="/inventory/issues" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                    Open Issues
                   </Link>
                 </>
               ) : null}

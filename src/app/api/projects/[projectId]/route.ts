@@ -176,6 +176,92 @@ export async function DELETE(
   return NextResponse.json({ ok: true });
 }
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ projectId: string }> }
+) {
+  const auth = await requireApiPermission(request, "projects:manage");
+  if (!auth.ok) {
+    return auth.response;
+  }
+
+  const { projectId } = await params;
+  const body = await request.json().catch(() => null);
+  const nextClientId = parseNullableString(body?.clientId);
+  const nextRigId = parseNullableString(body?.rigId);
+  const rigSlot = body?.rigSlot === "assigned" || body?.rigSlot === "backup" ? body.rigSlot : null;
+  const hasClientUpdate = typeof nextClientId === "string" && nextClientId.length > 0;
+  const hasRigUpdate = typeof nextRigId === "string" && nextRigId.length > 0 && Boolean(rigSlot);
+
+  if (!hasClientUpdate && !hasRigUpdate) {
+    return NextResponse.json(
+      { message: "Provide clientId and/or rigId with rigSlot to update project links." },
+      { status: 400 }
+    );
+  }
+
+  const existing = await prisma.project.findUnique({ where: { id: projectId } });
+  if (!existing) {
+    return NextResponse.json({ message: "Project not found." }, { status: 404 });
+  }
+
+  if (hasClientUpdate && nextClientId) {
+    const client = await prisma.client.findUnique({ where: { id: nextClientId }, select: { id: true } });
+    if (!client) {
+      return NextResponse.json({ message: "Client not found." }, { status: 404 });
+    }
+  }
+
+  if (hasRigUpdate && nextRigId) {
+    const rig = await prisma.rig.findUnique({ where: { id: nextRigId }, select: { id: true } });
+    if (!rig) {
+      return NextResponse.json({ message: "Rig not found." }, { status: 404 });
+    }
+  }
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const next = await tx.project.update({
+      where: { id: projectId },
+      data: {
+        ...(hasClientUpdate ? { clientId: nextClientId } : {}),
+        ...(hasRigUpdate
+          ? rigSlot === "assigned"
+            ? { assignedRigId: nextRigId }
+            : { backupRigId: nextRigId }
+          : {})
+      }
+    });
+
+    if (hasClientUpdate) {
+      await tx.summaryReport.updateMany({
+        where: {
+          reportType: PROJECT_SETUP_REPORT_TYPE,
+          projectId
+        },
+        data: {
+          clientId: next.clientId
+        }
+      });
+    }
+
+    await recordAuditLog({
+      db: tx,
+      module: "projects",
+      entityType: "project",
+      entityId: projectId,
+      action: "edit",
+      description: `${auth.session.name} updated quick links for Project ${next.name}.`,
+      before: projectAuditSnapshot(existing),
+      after: projectAuditSnapshot(next),
+      actor: auditActorFromSession(auth.session)
+    });
+
+    return next;
+  });
+
+  return NextResponse.json({ data: updated });
+}
+
 function projectAuditSnapshot(project: {
   id: string;
   name: string;
@@ -259,6 +345,17 @@ function parsePositiveNumberOrNull(value: unknown) {
     return null;
   }
   return parsed;
+}
+
+function parseNullableString(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function parseNonNegativeNumber(value: unknown) {

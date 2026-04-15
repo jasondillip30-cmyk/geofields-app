@@ -6,7 +6,6 @@ import { useParams } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -139,8 +138,6 @@ export default function SpendingCategoryDetailPage() {
       }
     >
       <div className="gf-page-stack">
-        {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
-
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">

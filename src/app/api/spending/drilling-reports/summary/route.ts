@@ -10,6 +10,14 @@ import {
   type SpendingStageBandInput
 } from "@/lib/spending-stage-progress";
 
+interface DrillingTimePeriodBucket {
+  bucketKey: string;
+  label: string;
+  totalMeters: number;
+  totalReports: number;
+  totalWorkHours: number;
+}
+
 export async function GET(request: NextRequest) {
   const auth = await requireAnyApiPermission(request, ["finance:view", "drilling:view"]);
   if (!auth.ok) {
@@ -63,6 +71,7 @@ export async function GET(request: NextRequest) {
     prisma.drillReport.findMany({
       where: reportWhere,
       select: {
+        date: true,
         holeNumber: true,
         totalMetersDrilled: true,
         workHours: true,
@@ -105,6 +114,7 @@ export async function GET(request: NextRequest) {
   const totalMeters = reports.reduce((sum, report) => sum + safeNumber(report.totalMetersDrilled), 0);
   const totalWorkHours = reports.reduce((sum, report) => sum + safeNumber(report.workHours), 0);
   const totalReports = reports.length;
+  const timePeriod = buildDrillingTimePeriodBuckets(reports);
   const totalExpenses = canViewFinance
     ? usageMovements.reduce((sum, movement) => sum + safeNumber(movement.totalCost), 0)
     : 0;
@@ -149,6 +159,7 @@ export async function GET(request: NextRequest) {
       from: fromParam,
       to: toParam
     },
+    timePeriod,
     summary: {
       totalMeters: roundMetric(totalMeters),
       totalReports,
@@ -159,6 +170,63 @@ export async function GET(request: NextRequest) {
     stageConfigured,
     metersByHole
   });
+}
+
+function buildDrillingTimePeriodBuckets(
+  reports: Array<{
+    date: Date;
+    totalMetersDrilled: number;
+    workHours: number;
+  }>
+) {
+  const monthlyMap = new Map<string, { totalMeters: number; totalReports: number; totalWorkHours: number }>();
+  const yearlyMap = new Map<string, { totalMeters: number; totalReports: number; totalWorkHours: number }>();
+
+  for (const report of reports) {
+    const monthKey = report.date.toISOString().slice(0, 7);
+    const yearKey = report.date.toISOString().slice(0, 4);
+    const totalMeters = safeNumber(report.totalMetersDrilled);
+    const totalWorkHours = safeNumber(report.workHours);
+
+    const monthEntry = monthlyMap.get(monthKey) || {
+      totalMeters: 0,
+      totalReports: 0,
+      totalWorkHours: 0
+    };
+    monthEntry.totalMeters += totalMeters;
+    monthEntry.totalReports += 1;
+    monthEntry.totalWorkHours += totalWorkHours;
+    monthlyMap.set(monthKey, monthEntry);
+
+    const yearEntry = yearlyMap.get(yearKey) || {
+      totalMeters: 0,
+      totalReports: 0,
+      totalWorkHours: 0
+    };
+    yearEntry.totalMeters += totalMeters;
+    yearEntry.totalReports += 1;
+    yearEntry.totalWorkHours += totalWorkHours;
+    yearlyMap.set(yearKey, yearEntry);
+  }
+
+  const toBucketRows = (
+    source: Map<string, { totalMeters: number; totalReports: number; totalWorkHours: number }>,
+    labelResolver: (bucketKey: string) => string
+  ) =>
+    Array.from(source.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map<DrillingTimePeriodBucket>(([bucketKey, metrics]) => ({
+        bucketKey,
+        label: labelResolver(bucketKey),
+        totalMeters: roundMetric(metrics.totalMeters),
+        totalReports: Math.round(metrics.totalReports),
+        totalWorkHours: roundMetric(metrics.totalWorkHours)
+      }));
+
+  return {
+    monthly: toBucketRows(monthlyMap, formatMonthlyLabel),
+    yearly: toBucketRows(yearlyMap, (bucketKey) => bucketKey)
+  };
 }
 
 function extractProjectStageBands(
@@ -221,4 +289,17 @@ function roundCurrency(value: number) {
 
 function roundPercent(value: number) {
   return Math.round(safeNumber(value) * 100) / 100;
+}
+
+function formatMonthlyLabel(bucketKey: string) {
+  const date = new Date(`${bucketKey}-01T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) {
+    return bucketKey;
+  }
+  const month = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    timeZone: "UTC"
+  }).format(date);
+  const year = date.toISOString().slice(2, 4);
+  return `${month}'${year}`;
 }

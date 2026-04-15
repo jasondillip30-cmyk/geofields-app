@@ -13,11 +13,14 @@ function isPublicPath(pathname: string) {
 }
 
 function normalizeAuthPath(pathname: string) {
-  const match = pathname.match(/^\/(login|unauthorized)\.+(?=\/|$)/i);
+  const match = pathname.match(/^\/(login|unauthorized|workspace-launch)\.+(?=\/|$)/i);
   if (!match) {
     return null;
   }
-  const normalized = pathname.replace(/^\/(login|unauthorized)\.+(?=\/|$)/i, `/${match[1]!.toLowerCase()}`);
+  const normalized = pathname.replace(
+    /^\/(login|unauthorized|workspace-launch)\.+(?=\/|$)/i,
+    `/${match[1]!.toLowerCase()}`
+  );
   return normalized === pathname ? null : normalized;
 }
 

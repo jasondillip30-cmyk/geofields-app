@@ -11,9 +11,9 @@ interface SystemFlowBarProps {
   className?: string;
 }
 
-const stages: Array<{ key: SystemFlowStage; label: string; href: string }> = [
+const stages: Array<{ key: SystemFlowStage; label: string; href?: string }> = [
   { key: "movement", label: "Movement", href: "/inventory/stock-movements" },
-  { key: "issue", label: "Issue", href: "/inventory/issues" },
+  { key: "issue", label: "Issue" },
   { key: "expense", label: "Expense", href: "/inventory/expenses" },
   { key: "profit", label: "Profit", href: "/spending/profit" }
 ];
@@ -26,21 +26,33 @@ export function SystemFlowBar({ current, className }: SystemFlowBarProps) {
         return (
           <span key={stage.key} className="inline-flex items-center gap-1.5">
             {index > 0 ? <span className="text-slate-400">→</span> : null}
-            <Link
-              href={stage.href}
-              className={cn(
-                "rounded-full px-2 py-0.5 transition-colors",
-                isActive
-                  ? "border border-brand-300 bg-brand-50 font-semibold text-brand-900"
-                  : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-              )}
-            >
-              {stage.label}
-            </Link>
+            {stage.href ? (
+              <Link
+                href={stage.href}
+                className={cn(
+                  "rounded-full px-2 py-0.5 transition-colors",
+                  isActive
+                    ? "border border-brand-300 bg-brand-50 font-semibold text-brand-900"
+                    : "text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                )}
+              >
+                {stage.label}
+              </Link>
+            ) : (
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5",
+                  isActive
+                    ? "border border-brand-300 bg-brand-50 font-semibold text-brand-900"
+                    : "text-slate-500"
+                )}
+              >
+                {stage.label}
+              </span>
+            )}
           </span>
         );
       })}
     </nav>
   );
 }
-

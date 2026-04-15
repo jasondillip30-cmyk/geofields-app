@@ -104,9 +104,29 @@ export default function ClientsPage() {
           filters={filters}
           clientLabel={selectedClient?.name || null}
         />
+        {error ? (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>
+        ) : null}
+        {notice ? (
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {notice}
+          </p>
+        ) : null}
 
         {isSingleProjectScope ? (
-          <Card title="Client profile">
+          <Card
+            title="Client profile"
+            action={
+              <AccessGate permission="clients:manage">
+                <Link
+                  href="/clients/setup"
+                  className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
+                >
+                  New
+                </Link>
+              </AccessGate>
+            }
+          >
             {loading ? (
               <p className="text-sm text-ink-600">Loading client profile...</p>
             ) : selectedClient ? (
@@ -127,7 +147,7 @@ export default function ClientsPage() {
                 <div className="flex flex-wrap gap-2">
                   <AccessGate permission="clients:manage">
                     <Link
-                      href={`/clients/setup?clientId=${selectedClient.id}`}
+                      href={`/clients/setup?editClientId=${selectedClient.id}`}
                       className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
                     >
                       Edit client setup
@@ -199,15 +219,6 @@ export default function ClientsPage() {
               </section>
             </AccessGate>
 
-            {error ? (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>
-            ) : null}
-            {notice ? (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                {notice}
-              </p>
-            ) : null}
-
             <Card title="Client Directory">
               {loading ? (
                 <p className="text-sm text-ink-600">Loading clients...</p>
@@ -229,7 +240,7 @@ export default function ClientsPage() {
                     <div key={`actions-${client.id}`} className="flex gap-2">
                       <AccessGate permission="clients:manage">
                         <Link
-                          href={`/clients/setup?clientId=${client.id}`}
+                          href={`/clients/setup?editClientId=${client.id}`}
                           className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
                         >
                           Edit

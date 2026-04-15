@@ -16,8 +16,7 @@ export function MovementDetailModal({
   movement,
   isProjectLocked,
   canApproveMovement,
-  onRefresh,
-  onFlagIssue
+  onRefresh
 }: {
   open: boolean;
   onClose: () => void;
@@ -25,7 +24,6 @@ export function MovementDetailModal({
   isProjectLocked: boolean;
   canApproveMovement: boolean;
   onRefresh: () => Promise<void>;
-  onFlagIssue: (movementId: string) => void;
 }) {
   const [isMounted, setIsMounted] = useState(open);
   const [isVisible, setIsVisible] = useState(open);
@@ -71,7 +69,7 @@ export function MovementDetailModal({
     : [
         { id: 1 as const, title: "Understand", subtitle: "Confirm item movement details." },
         { id: 2 as const, title: "Validate", subtitle: "Check operational context before approval." },
-        { id: 3 as const, title: "Confirm", subtitle: "Approve this movement or flag an issue." }
+        { id: 3 as const, title: "Confirm", subtitle: "Approve this movement." }
       ];
   const linkedMaintenance =
     movement?.linkedUsageRequest?.maintenanceRequest || movement?.maintenanceRequest || null;
@@ -102,7 +100,7 @@ export function MovementDetailModal({
     if (!movement.expense?.id) {
       setDecisionFeedback({
         tone: "error",
-        message: "No linked expense found. Flag this movement so traceability can be restored."
+        message: "No linked expense found. Add the missing expense linkage before approval."
       });
       return;
     }
@@ -375,17 +373,6 @@ export function MovementDetailModal({
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => {
-                            if (movement?.id) {
-                              onFlagIssue(movement.id);
-                            }
-                          }}
-                          className="gf-btn-secondary px-3 py-1.5 text-xs"
-                        >
-                          Flag issue
-                        </button>
-                        <button
-                          type="button"
                           onClick={() => void approveMovement()}
                           disabled={submittingDecision}
                           className="gf-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
@@ -404,4 +391,3 @@ export function MovementDetailModal({
     </div>
   );
 }
-

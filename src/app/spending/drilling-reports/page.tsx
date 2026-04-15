@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { canAccess } from "@/lib/auth/permissions";
@@ -14,7 +14,12 @@ import {
   buildDrillOperationalKpiSummary,
   buildDrillReportDirectCostSummary
 } from "@/lib/drilling-direct-cost-summary";
-import { formatCurrency, formatNumber } from "@/lib/utils";
+import { cn, formatCurrency, formatNumber } from "@/lib/utils";
+import {
+  emptyDrillingSummary,
+  type SpendingDrillingSummaryPayload
+} from "../spending-page-types";
+import { deriveScopedPeriodRange, scaledBarHeight } from "../spending-page-utils";
 
 interface SpendingDrillingReportRow {
   id: string;
@@ -83,6 +88,25 @@ export default function SpendingDrillingReportsPage() {
   const [selectedReport, setSelectedReport] = useState<SpendingDrillingReportDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [timePeriodView, setTimePeriodView] = useState<"monthly" | "yearly">("monthly");
+  const [selectedPeriodKey, setSelectedPeriodKey] = useState("");
+  const [timePeriodOffset, setTimePeriodOffset] = useState(0);
+  const [periodSummary, setPeriodSummary] =
+    useState<SpendingDrillingSummaryPayload>(emptyDrillingSummary);
+  const [periodLoading, setPeriodLoading] = useState(false);
+  const selectedPeriodRange = useMemo(() => {
+    if (!selectedPeriodKey) {
+      return null;
+    }
+    return deriveScopedPeriodRange({
+      periodView: timePeriodView,
+      bucketKey: selectedPeriodKey,
+      baseFrom: filters.from,
+      baseTo: filters.to
+    });
+  }, [filters.from, filters.to, selectedPeriodKey, timePeriodView]);
+  const effectiveFrom = selectedPeriodRange?.from || filters.from;
+  const effectiveTo = selectedPeriodRange?.to || filters.to;
 
   const spendingHref = useMemo(() => {
     const params = new URLSearchParams();
@@ -94,6 +118,24 @@ export default function SpendingDrillingReportsPage() {
     const query = params.toString();
     return query ? `/spending?${query}` : "/spending";
   }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
+  const periodBuckets =
+    timePeriodView === "monthly" ? periodSummary.timePeriod.monthly : periodSummary.timePeriod.yearly;
+  const visibleBucketCount = timePeriodView === "monthly" ? 10 : 6;
+  const maxOffset = Math.max(0, periodBuckets.length - visibleBucketCount);
+  const safeOffset = Math.min(timePeriodOffset, maxOffset);
+  const visibleBuckets = periodBuckets.slice(safeOffset, safeOffset + visibleBucketCount);
+  const periodMaxMeters = periodBuckets.reduce((maxValue, bucket) => Math.max(maxValue, bucket.totalMeters), 0);
+  const canGoPrev = safeOffset > 0;
+  const canGoNext = safeOffset < maxOffset;
+  const selectedPeriodLabel = useMemo(() => {
+    if (!selectedPeriodKey) {
+      return "";
+    }
+    const bucket = [...periodSummary.timePeriod.monthly, ...periodSummary.timePeriod.yearly].find(
+      (entry) => entry.bucketKey === selectedPeriodKey
+    );
+    return bucket?.label || selectedPeriodKey;
+  }, [periodSummary.timePeriod.monthly, periodSummary.timePeriod.yearly, selectedPeriodKey]);
 
   const loadRows = useCallback(async () => {
     if (!isSingleProjectScope) {
@@ -106,8 +148,8 @@ export default function SpendingDrillingReportsPage() {
     try {
       const params = new URLSearchParams();
       params.set("projectId", scopeProjectId);
-      if (filters.from) params.set("from", filters.from);
-      if (filters.to) params.set("to", filters.to);
+      if (effectiveFrom) params.set("from", effectiveFrom);
+      if (effectiveTo) params.set("to", effectiveTo);
       const response = await fetch(`/api/spending/drilling-reports?${params.toString()}`, {
         cache: "no-store"
       });
@@ -126,7 +168,7 @@ export default function SpendingDrillingReportsPage() {
     } finally {
       setLoadingRows(false);
     }
-  }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
+  }, [effectiveFrom, effectiveTo, isSingleProjectScope, scopeProjectId]);
 
   const loadDetail = useCallback(async () => {
     if (!isSingleProjectScope || !selectedReportId) {
@@ -141,8 +183,8 @@ export default function SpendingDrillingReportsPage() {
     try {
       const params = new URLSearchParams();
       params.set("projectId", scopeProjectId);
-      if (filters.from) params.set("from", filters.from);
-      if (filters.to) params.set("to", filters.to);
+      if (effectiveFrom) params.set("from", effectiveFrom);
+      if (effectiveTo) params.set("to", effectiveTo);
       const response = await fetch(
         `/api/spending/drilling-reports/${encodeURIComponent(selectedReportId)}?${params.toString()}`,
         { cache: "no-store" }
@@ -158,7 +200,34 @@ export default function SpendingDrillingReportsPage() {
     } finally {
       setLoadingDetail(false);
     }
-  }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId, selectedReportId]);
+  }, [effectiveFrom, effectiveTo, isSingleProjectScope, scopeProjectId, selectedReportId]);
+
+  const loadPeriodSummary = useCallback(async () => {
+    if (!isSingleProjectScope) {
+      setPeriodSummary(emptyDrillingSummary);
+      setPeriodLoading(false);
+      return;
+    }
+
+    setPeriodLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("projectId", scopeProjectId);
+      if (filters.from) params.set("from", filters.from);
+      if (filters.to) params.set("to", filters.to);
+      const response = await fetch(`/api/spending/drilling-reports/summary?${params.toString()}`, {
+        cache: "no-store"
+      });
+      const payload = response.ok
+        ? ((await response.json()) as SpendingDrillingSummaryPayload)
+        : emptyDrillingSummary;
+      setPeriodSummary(normalizeDrillingSummary(payload));
+    } catch {
+      setPeriodSummary(emptyDrillingSummary);
+    } finally {
+      setPeriodLoading(false);
+    }
+  }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
 
   useEffect(() => {
     void loadRows();
@@ -167,6 +236,24 @@ export default function SpendingDrillingReportsPage() {
   useEffect(() => {
     void loadDetail();
   }, [loadDetail]);
+
+  useEffect(() => {
+    void loadPeriodSummary();
+  }, [loadPeriodSummary]);
+
+  useEffect(() => {
+    const targetOffset = Math.max(0, periodBuckets.length - visibleBucketCount);
+    setTimePeriodOffset(targetOffset);
+  }, [periodBuckets.length, timePeriodView, visibleBucketCount]);
+
+  useEffect(() => {
+    if (!selectedPeriodKey) {
+      return;
+    }
+    if (!periodBuckets.some((bucket) => bucket.bucketKey === selectedPeriodKey)) {
+      setSelectedPeriodKey("");
+    }
+  }, [periodBuckets, selectedPeriodKey]);
 
   const tableRows = useMemo(
     () =>
@@ -209,11 +296,18 @@ export default function SpendingDrillingReportsPage() {
     });
   }, [selectedReport]);
 
+  const handleTimePeriodViewChange = useCallback((nextView: "monthly" | "yearly") => {
+    setTimePeriodView(nextView);
+    setSelectedPeriodKey("");
+  }, []);
+
+  const handleSelectPeriodBucket = useCallback((bucketKey: string) => {
+    setSelectedPeriodKey((current) => (current === bucketKey ? "" : bucketKey));
+  }, []);
+
   return (
     <AccessGate anyOf={["finance:view", "drilling:view"]}>
       <div className="gf-page-stack">
-        {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
-
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
@@ -222,6 +316,116 @@ export default function SpendingDrillingReportsPage() {
           </Card>
         ) : (
           <section className="gf-section space-y-4">
+            <Card>
+              <div className="space-y-4">
+                <div className="border-b border-slate-100 pb-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">TIME PERIOD</p>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="inline-flex items-center rounded-full border border-slate-300 bg-white px-2 py-1">
+                    <select
+                      value={timePeriodView}
+                      onChange={(event) => {
+                        handleTimePeriodViewChange(event.target.value as "monthly" | "yearly");
+                      }}
+                      className="rounded-full border-none bg-transparent px-2 py-0.5 text-base text-ink-900 focus:outline-none"
+                    >
+                      <option value="monthly">Monthly</option>
+                      <option value="yearly">Yearly</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {selectedPeriodRange ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPeriodKey("")}
+                        className="inline-flex items-center rounded-full border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 transition-colors hover:bg-brand-100/70"
+                      >
+                        Reset scope ({selectedPeriodLabel})
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setTimePeriodOffset((current) => Math.max(0, current - 1))}
+                      disabled={!canGoPrev}
+                      className={cn(
+                        "inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition-colors",
+                        canGoPrev ? "hover:bg-slate-50" : "cursor-not-allowed opacity-45"
+                      )}
+                      aria-label="Previous period buckets"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTimePeriodOffset((current) => Math.min(maxOffset, current + 1))}
+                      disabled={!canGoNext}
+                      className={cn(
+                        "inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 transition-colors",
+                        canGoNext ? "hover:bg-slate-50" : "cursor-not-allowed opacity-45"
+                      )}
+                      aria-label="Next period buckets"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+                {periodLoading ? (
+                  <p className="text-sm text-slate-600">Loading drilling time period summary...</p>
+                ) : visibleBuckets.length === 0 ? (
+                  <p className="text-sm text-slate-600">No drilling time period data for this scope.</p>
+                ) : (
+                  <>
+                    <div className="h-28 rounded-xl border border-slate-100 bg-slate-50/45 px-3 py-2">
+                      <div className="flex h-full items-end justify-between gap-2">
+                        {visibleBuckets.map((bucket) => (
+                          <button
+                            key={bucket.bucketKey}
+                            type="button"
+                            onClick={() => handleSelectPeriodBucket(bucket.bucketKey)}
+                            aria-pressed={selectedPeriodKey === bucket.bucketKey}
+                            className={cn(
+                              "flex min-w-0 flex-1 flex-col items-center gap-1.5 rounded-lg px-1 py-1 transition-all duration-200 ease-out",
+                              selectedPeriodKey === bucket.bucketKey
+                                ? "scale-[1.02] bg-brand-50/55 ring-1 ring-brand-300"
+                                : "hover:bg-slate-100/70"
+                            )}
+                          >
+                            <div className="flex h-20 items-end gap-1.5">
+                              <div
+                                className={cn(
+                                  "w-5 rounded transition-all duration-200",
+                                  selectedPeriodKey === bucket.bucketKey ? "bg-brand-500" : "bg-brand-500/35"
+                                )}
+                                style={{
+                                  height: `${scaledBarHeight(bucket.totalMeters, periodMaxMeters)}px`
+                                }}
+                                title={`Meters: ${formatNumber(bucket.totalMeters)}`}
+                              />
+                            </div>
+                            <p
+                              className={cn(
+                                "truncate text-xs transition-colors duration-200",
+                                selectedPeriodKey === bucket.bucketKey ? "font-semibold text-ink-900" : "text-slate-500"
+                              )}
+                            >
+                              {bucket.label}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-2.5 w-2.5 rounded bg-brand-500/45" />
+                        Meters drilled
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            </Card>
+
             <Card
               title="Project Operations / Drilling reports"
               subtitle={
@@ -391,6 +595,38 @@ export default function SpendingDrillingReportsPage() {
       </div>
     </AccessGate>
   );
+}
+
+function normalizeDrillingSummary(payload: SpendingDrillingSummaryPayload | null | undefined) {
+  const nextSummary = payload || emptyDrillingSummary;
+  return {
+    ...emptyDrillingSummary,
+    ...nextSummary,
+    timePeriod: {
+      monthly: Array.isArray(nextSummary.timePeriod?.monthly)
+        ? nextSummary.timePeriod.monthly
+            .map((entry) => ({
+              bucketKey: `${entry.bucketKey || ""}`.trim(),
+              label: `${entry.label || ""}`.trim(),
+              totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
+              totalReports: Number.isFinite(entry.totalReports) ? entry.totalReports : 0,
+              totalWorkHours: Number.isFinite(entry.totalWorkHours) ? entry.totalWorkHours : 0
+            }))
+            .filter((entry) => entry.bucketKey.length > 0)
+        : [],
+      yearly: Array.isArray(nextSummary.timePeriod?.yearly)
+        ? nextSummary.timePeriod.yearly
+            .map((entry) => ({
+              bucketKey: `${entry.bucketKey || ""}`.trim(),
+              label: `${entry.label || ""}`.trim(),
+              totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
+              totalReports: Number.isFinite(entry.totalReports) ? entry.totalReports : 0,
+              totalWorkHours: Number.isFinite(entry.totalWorkHours) ? entry.totalWorkHours : 0
+            }))
+            .filter((entry) => entry.bucketKey.length > 0)
+        : []
+    }
+  };
 }
 
 function DetailRow({ label, value }: { label: string; value: string }) {

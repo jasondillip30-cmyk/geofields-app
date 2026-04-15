@@ -1,199 +1,176 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Filter, PanelLeft, PanelLeftClose, X } from "lucide-react";
+import { CalendarDays, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import { roleLabels } from "@/lib/auth/roles";
-import { canViewApprovalWorkspace } from "@/lib/auth/approval-policy";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
 import { cn } from "@/lib/utils";
-import { WORKSPACE_MODE_LABELS, type WorkspaceMode } from "@/lib/workspace-mode";
+import { WORKSPACE_MODE_LABELS } from "@/lib/workspace-mode";
+import { isWorkspaceLaunchEnabled } from "@/lib/feature-flags";
 
 interface TopbarProps {
   sidebarHidden: boolean;
   onToggleSidebar: () => void;
+  onOpenWorkspaceLaunch?: () => void;
 }
 
 interface PageMeta {
   title: string;
-  subtitle: string;
 }
 
 interface ProjectScopeOption {
   id: string;
   name: string;
   status: string;
+  clientId: string | null;
 }
 
 const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> = [
   {
     test: (pathname) => pathname === "/",
     meta: {
-      title: "Dashboard",
-      subtitle: "Drilling-first operations dashboard: rigs, projects, costs, revenue, and profitability."
+      title: "Dashboard"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/executive-overview"),
     meta: {
-      title: "Executive Overview",
-      subtitle: "High-level management snapshot across recognized finance, operations, and approval risk."
+      title: "Executive Overview"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/alerts-center"),
     meta: {
-      title: "Alerts Center",
-      subtitle: "Manager attention workspace for budget pressure, stale approvals, and linkage issues."
+      title: "Alerts Center"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/data-quality/linkage-center"),
     meta: {
-      title: "Data Quality / Linkage Center",
-      subtitle: "Manager workspace for correcting recognized spend records missing rig, project, or maintenance linkage."
+      title: "Data Quality / Linkage Center"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/clients"),
     meta: {
-      title: "Clients",
-      subtitle: "Client workspaces, profitability context, and project performance."
+      title: "Clients"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/projects"),
     meta: {
-      title: "Projects",
-      subtitle: "Project profitability center across drilling progress, revenue, costs, and rig assignment."
+      title: "Projects"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/drilling-reports"),
     meta: {
-      title: "Drilling Reports",
-      subtitle: "Record daily drilling progress and review what happened on the project."
+      title: "Drilling Reports"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/spending/profit"),
     meta: {
-      title: "Project Operations / Profit",
-      subtitle: "Project-first profit view with margin and trend for the locked project."
+      title: "Project Operations / Profit"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/spending/drilling-reports"),
     meta: {
-      title: "Project Operations / Drilling Reports",
-      subtitle: "Project-first drilling report list and detail inside the Project Operations workspace."
+      title: "Project Operations / Drilling Reports"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/spending"),
     meta: {
-      title: "Project Operations",
-      subtitle: "Project-first workspace for revenue, transactions, and drilling operations."
+      title: "Project Operations"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/expenses"),
     meta: {
-      title: "Purchase Requests",
-      subtitle: "Requisition-to-cost workspace for operational purchases and project-linked spending."
+      title: "Purchase Requests"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/purchasing/receipt-follow-up"),
     meta: {
-      title: "Purchase Receipt Follow-up",
-      subtitle: "Continue approved requisitions into guided receipt capture, review, and posting."
+      title: "Purchase Receipt Follow-up"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/forecasting"),
     meta: {
-      title: "Forecasting",
-      subtitle: "Scenario planning, simulation, and forward-looking projections."
+      title: "Forecasting"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/inventory/receipt-intake"),
     meta: {
-      title: "Purchase Receipt Follow-up",
-      subtitle: "Legacy route: continue approved requisitions into guided receipt capture and posting."
+      title: "Purchase Receipt Follow-up"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/inventory/expenses"),
     meta: {
-      title: "Inventory Expenses",
-      subtitle: "Cost recognition workspace for inventory and operational activity."
+      title: "Inventory Expenses"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/inventory/suppliers"),
     meta: {
-      title: "Vendors",
-      subtitle: "Setup registry for supplier/vendor master data used in purchases and receipts."
+      title: "Vendors"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/inventory/locations"),
     meta: {
-      title: "Locations",
-      subtitle: "Setup registry for inventory storage and transfer locations."
+      title: "Locations"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/inventory"),
     meta: {
-      title: "Inventory",
-      subtitle: "Track what the project can use, what was used, and key stock flow."
+      title: "Inventory"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/rigs"),
     meta: {
-      title: "Rigs",
-      subtitle: "Rig status and profitability visibility across active, idle, maintenance, and breakdown states."
+      title: "Rigs"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/maintenance"),
     meta: {
-      title: "Maintenance",
-      subtitle: "Record maintenance activity and follow rig repair progress."
+      title: "Maintenance"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/breakdowns"),
     meta: {
-      title: "Breakdowns",
-      subtitle: "Report rig breakdowns and track repair follow-up for the project."
+      title: "Breakdowns"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/approvals"),
     meta: {
-      title: "Approvals",
-      subtitle: "Centralized review queue for submitted operational records."
+      title: "Approvals"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/activity-log"),
     meta: {
-      title: "Activity Log",
-      subtitle: "Audit trail and operational traceability across modules."
+      title: "Activity Log"
     }
   },
   {
     test: (pathname) => pathname.startsWith("/employees"),
     meta: {
-      title: "Employees",
-      subtitle: "People directory and workforce assignment visibility."
+      title: "Employees"
     }
   }
 ];
@@ -204,21 +181,8 @@ function resolvePageMeta(pathname: string): PageMeta {
     return matched.meta;
   }
   return {
-    title: "Operations Workspace",
-    subtitle: "GeoFields operational intelligence and workflow execution."
+    title: "Operations Workspace"
   };
-}
-
-function compactTopbarSubtitle(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const firstSentence = trimmed.split(".")[0]?.trim() || trimmed;
-  if (firstSentence.length <= 90) {
-    return firstSentence;
-  }
-  return `${firstSentence.slice(0, 87).trimEnd()}...`;
 }
 
 function resolveProjectStatusChip(status: string | null) {
@@ -273,18 +237,38 @@ function resolveProjectStatusChip(status: string | null) {
   };
 }
 
-export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
+function isInteractiveGestureTarget(target: EventTarget | null) {
+  const element = target as Element | null;
+  if (!element) {
+    return false;
+  }
+  return Boolean(element.closest("input, textarea, select, button, a, [contenteditable='true']"));
+}
+
+function isWorkspaceScrollAtTop() {
+  if (typeof document === "undefined") {
+    return true;
+  }
+  const scrollHost = document.getElementById("gf-app-main-scroll");
+  if (scrollHost) {
+    return scrollHost.scrollTop <= 6;
+  }
+  return window.scrollY <= 6;
+}
+
+export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }: TopbarProps) {
   const pathname = usePathname();
   const { user, logout } = useRole();
-  const { filters, setFilters, setWorkspaceMode, resetFilters } = useAnalyticsFilters();
+  const { filters, setFilters } = useAnalyticsFilters();
   const [projects, setProjects] = useState<ProjectScopeOption[]>([]);
-  const [optionsLoaded, setOptionsLoaded] = useState(false);
-  const [approvalSummary, setApprovalSummary] = useState<{
-    pendingApprovals: number;
-    rejectedThisWeek: number;
-    approvedToday: number;
-  } | null>(null);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [desktopDateFiltersOpen, setDesktopDateFiltersOpen] = useState(false);
+  const topbarRef = useRef<HTMLElement | null>(null);
+  const desktopDateFiltersRef = useRef<HTMLDivElement | null>(null);
+  const lastGlobeScrollTriggerAt = useRef(0);
+  const topbarWheelIntentAccumulator = useRef(0);
+  const topbarWheelIntentResetTimeout = useRef<number | null>(null);
+  const topbarTouchStartY = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -302,10 +286,16 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
 
         setProjects(
           (projectsPayload.data || []).map(
-            (entry: { id: string; name: string; status?: string }) => ({
+            (entry: {
+              id: string;
+              name: string;
+              status?: string;
+              client?: { id?: string };
+            }) => ({
               id: entry.id,
               name: entry.name,
-              status: entry.status || "ACTIVE"
+              status: entry.status || "ACTIVE",
+              clientId: typeof entry.client?.id === "string" ? entry.client.id : null
             })
           )
         );
@@ -316,9 +306,6 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
         setProjects([]);
       } finally {
         window.clearTimeout(timeoutId);
-        if (!cancelled) {
-          setOptionsLoaded(true);
-        }
       }
     }
 
@@ -332,75 +319,8 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
   }, []);
 
   useEffect(() => {
-    if (!optionsLoaded) {
-      return;
-    }
-    if (filters.projectId === "all") {
-      return;
-    }
-    if (projects.some((project) => project.id === filters.projectId)) {
-      return;
-    }
-    setFilters((current) => ({ ...current, projectId: "all" }));
-  }, [filters.projectId, optionsLoaded, projects, setFilters]);
-
-  useEffect(() => {
-    if (!user || !canViewApprovalWorkspace(user.role)) {
-      setApprovalSummary(null);
-      return;
-    }
-
-    let isCancelled = false;
-    let latestRequestId = 0;
-
-    async function loadApprovalSummary() {
-      latestRequestId += 1;
-      const requestId = latestRequestId;
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), 5000);
-
-      try {
-        const response = await fetch("/api/approvals/summary", { cache: "no-store", signal: controller.signal });
-        if (!response.ok) {
-          return;
-        }
-        const payload = await response.json();
-        if (isCancelled || requestId !== latestRequestId) {
-          return;
-        }
-        setApprovalSummary({
-          pendingApprovals: Number(payload.pendingApprovals || 0),
-          rejectedThisWeek: Number(payload.rejectedThisWeek || 0),
-          approvedToday: Number(payload.approvedToday || 0)
-        });
-      } catch {
-        if (!isCancelled && requestId === latestRequestId) {
-          setApprovalSummary(null);
-        }
-      } finally {
-        window.clearTimeout(timeoutId);
-      }
-    }
-
-    function handleLiveUpdate() {
-      void loadApprovalSummary();
-    }
-
-    void loadApprovalSummary();
-    window.addEventListener("focus", handleLiveUpdate);
-    window.addEventListener("gf:profit-updated", handleLiveUpdate);
-    window.addEventListener("gf:revenue-updated", handleLiveUpdate);
-
-    return () => {
-      isCancelled = true;
-      window.removeEventListener("focus", handleLiveUpdate);
-      window.removeEventListener("gf:profit-updated", handleLiveUpdate);
-      window.removeEventListener("gf:revenue-updated", handleLiveUpdate);
-    };
-  }, [user]);
-
-  useEffect(() => {
     setMobileFiltersOpen(false);
+    setDesktopDateFiltersOpen(false);
   }, [pathname]);
 
   useEffect(() => {
@@ -420,19 +340,37 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     };
   }, [mobileFiltersOpen]);
 
-  const hasActiveFilters = useMemo(
-    () =>
-      filters.workspaceMode !== "all-projects" ||
-      filters.projectId !== "all" ||
-      Boolean(filters.from) ||
-      Boolean(filters.to),
-    [filters.from, filters.projectId, filters.to, filters.workspaceMode]
-  );
+  useEffect(() => {
+    if (!desktopDateFiltersOpen || typeof document === "undefined") {
+      return;
+    }
+
+    function handleOutsideClick(event: MouseEvent) {
+      const target = event.target as Node | null;
+      if (!target || !desktopDateFiltersRef.current?.contains(target)) {
+        setDesktopDateFiltersOpen(false);
+      }
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setDesktopDateFiltersOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [desktopDateFiltersOpen]);
+
   const selectedProjectLabel = useMemo(() => {
     if (filters.projectId === "all") {
       return "All projects";
     }
-    return projects.find((project) => project.id === filters.projectId)?.name || "Selected project";
+    return projects.find((project) => project.id === filters.projectId)?.name || filters.projectId;
   }, [filters.projectId, projects]);
   const selectedProjectStatus = useMemo(() => {
     if (filters.workspaceMode !== "project" || filters.projectId === "all") {
@@ -458,26 +396,136 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
     return `Until ${filters.to}`;
   }, [filters.from, filters.to]);
   const isProjectMode = filters.workspaceMode === "project";
-  const workspaceModeOptions: Array<{ value: WorkspaceMode; label: string }> = useMemo(
-    () => [
-      { value: "all-projects", label: "All projects" },
-      { value: "project", label: "Project" },
-      { value: "workshop", label: "Workshop" }
-    ],
-    []
-  );
 
   const pageMeta = useMemo(() => resolvePageMeta(pathname), [pathname]);
-  const compactSubtitle = useMemo(() => compactTopbarSubtitle(pageMeta.subtitle), [pageMeta.subtitle]);
+  const workspaceLaunchEnabled = isWorkspaceLaunchEnabled();
+  const modeChipLabel = useMemo(() => {
+    if (filters.workspaceMode === "workshop") {
+      return "Workshop mode";
+    }
+    if (isProjectMode && filters.projectId !== "all") {
+      return `Project locked: ${selectedProjectLabel}`;
+    }
+    if (isProjectMode) {
+      return "Project mode";
+    }
+    return `${workspaceModeLabel} mode`;
+  }, [filters.workspaceMode, filters.projectId, isProjectMode, selectedProjectLabel, workspaceModeLabel]);
+  const triggerOpenLaunch = useCallback(() => {
+    if (!workspaceLaunchEnabled) {
+      return;
+    }
+    onOpenWorkspaceLaunch?.();
+  }, [onOpenWorkspaceLaunch, workspaceLaunchEnabled]);
+
+  const handleTopbarWheel = useCallback(
+    (event: React.WheelEvent<HTMLElement>) => {
+      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+        return;
+      }
+      if (desktopDateFiltersOpen || mobileFiltersOpen) {
+        return;
+      }
+      if (!isWorkspaceScrollAtTop()) {
+        return;
+      }
+      if (isInteractiveGestureTarget(event.target)) {
+        return;
+      }
+      if (event.deltaY >= 0) {
+        topbarWheelIntentAccumulator.current = 0;
+        if (topbarWheelIntentResetTimeout.current !== null) {
+          window.clearTimeout(topbarWheelIntentResetTimeout.current);
+          topbarWheelIntentResetTimeout.current = null;
+        }
+        return;
+      }
+
+      topbarWheelIntentAccumulator.current += Math.abs(event.deltaY);
+      if (topbarWheelIntentResetTimeout.current !== null) {
+        window.clearTimeout(topbarWheelIntentResetTimeout.current);
+      }
+      topbarWheelIntentResetTimeout.current = window.setTimeout(() => {
+        topbarWheelIntentAccumulator.current = 0;
+        topbarWheelIntentResetTimeout.current = null;
+      }, 220);
+
+      if (topbarWheelIntentAccumulator.current < 110) {
+        return;
+      }
+
+      topbarWheelIntentAccumulator.current = 0;
+      const now = Date.now();
+      if (now - lastGlobeScrollTriggerAt.current < 1200) {
+        return;
+      }
+      lastGlobeScrollTriggerAt.current = now;
+      triggerOpenLaunch();
+    },
+    [desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch, workspaceLaunchEnabled]
+  );
+
+  const handleTopbarTouchStart = useCallback(
+    (event: React.TouchEvent<HTMLElement>) => {
+      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+        return;
+      }
+      topbarTouchStartY.current = event.touches[0]?.clientY ?? null;
+    },
+    [pathname, workspaceLaunchEnabled]
+  );
+
+  const handleTopbarTouchEnd = useCallback(
+    (event: React.TouchEvent<HTMLElement>) => {
+      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+        return;
+      }
+      if (desktopDateFiltersOpen || mobileFiltersOpen) {
+        return;
+      }
+      const startY = topbarTouchStartY.current;
+      topbarTouchStartY.current = null;
+      if (startY === null) {
+        return;
+      }
+      const endY = event.changedTouches[0]?.clientY ?? startY;
+      const swipeDistance = endY - startY;
+      if (swipeDistance < 70 || !isWorkspaceScrollAtTop()) {
+        return;
+      }
+      if (isInteractiveGestureTarget(event.target)) {
+        return;
+      }
+      const now = Date.now();
+      if (now - lastGlobeScrollTriggerAt.current < 1200) {
+        return;
+      }
+      lastGlobeScrollTriggerAt.current = now;
+      triggerOpenLaunch();
+    },
+    [desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch, workspaceLaunchEnabled]
+  );
+
+  useEffect(() => {
+    return () => {
+      if (topbarWheelIntentResetTimeout.current !== null) {
+        window.clearTimeout(topbarWheelIntentResetTimeout.current);
+      }
+    };
+  }, []);
 
   return (
-    <header className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-3 shadow-sm backdrop-blur md:px-6">
-      <div className="space-y-3.5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-brand-700">Project-first workspace</p>
+    <header
+      ref={topbarRef}
+      onWheel={handleTopbarWheel}
+      onTouchStart={handleTopbarTouchStart}
+      onTouchEnd={handleTopbarTouchEnd}
+      className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur md:px-6"
+    >
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight text-ink-900">{pageMeta.title}</h1>
-            <p className="text-sm text-slate-600">{compactSubtitle}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -498,6 +546,15 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               {sidebarHidden ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
               {sidebarHidden ? "Show menu" : "Hide menu"}
             </button>
+            {workspaceLaunchEnabled ? (
+              <button
+                type="button"
+                onClick={triggerOpenLaunch}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50"
+              >
+                Globe view
+              </button>
+            ) : null}
 
             {user && (
               <div className="hidden items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-ink-700 sm:flex">
@@ -526,104 +583,86 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-3">
+        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-2.5">
           <div className="flex items-start justify-between gap-2 lg:hidden">
-            <div className="min-w-0 space-y-1">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Scope</p>
-              <p className="truncate text-sm font-medium text-ink-900">
-                {workspaceModeLabel} · {isProjectMode ? selectedProjectLabel : "Global"}
-              </p>
-              <p className="truncate text-xs text-slate-600">{dateRangeSummary}</p>
+            <div className="min-w-0 space-y-0.5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Date</p>
+              <p className="truncate text-sm font-medium text-ink-900">{dateRangeSummary}</p>
             </div>
             <button
               type="button"
               onClick={() => setMobileFiltersOpen(true)}
               className="gf-btn-secondary px-3 py-2 text-xs"
             >
-              Filters
+              Date
             </button>
           </div>
 
-          <div className="hidden flex-wrap items-center gap-2.5 lg:flex">
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
-              <Filter size={14} />
-              <span className="uppercase tracking-wide text-slate-500">Workspace</span>
-              <select
-                value={filters.workspaceMode}
-                onChange={(event) => setWorkspaceMode(event.target.value as WorkspaceMode)}
-                className="min-w-[150px] rounded-lg border border-slate-200 px-2 py-1 text-xs"
-              >
-                {workspaceModeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
-              <Filter size={14} />
-              <span className="uppercase tracking-wide text-slate-500">Project</span>
-              <select
-                value={isProjectMode ? filters.projectId : "all"}
-                onChange={(event) => {
-                  const nextProjectId = event.target.value;
-                  if (!isProjectMode) {
-                    return;
-                  }
-                  setFilters((current) => ({
-                    ...current,
-                    projectId: nextProjectId,
-                    clientId: nextProjectId === "all" ? current.clientId : "all",
-                    rigId: nextProjectId === "all" ? current.rigId : "all"
-                  }));
-                }}
-                disabled={!isProjectMode}
-                className="min-w-[170px] rounded-lg border border-slate-200 px-2 py-1 text-xs"
-              >
-                <option value="all">All projects</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700">
-              <CalendarDays size={14} />
-              <span className="uppercase tracking-wide text-slate-500">Date</span>
-              <input
-                type="date"
-                value={filters.from}
-                onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                aria-label="From date"
-              />
-              <span className="text-slate-500">to</span>
-              <input
-                type="date"
-                value={filters.to}
-                onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
-                className="rounded-lg border border-slate-200 px-2 py-1 text-xs"
-                aria-label="To date"
-              />
-            </div>
-
-            {hasActiveFilters && (
+          <div className="hidden flex-wrap items-center gap-2 lg:flex">
+            <div className="relative" ref={desktopDateFiltersRef}>
               <button
                 type="button"
-                onClick={resetFilters}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-100"
+                onClick={() => setDesktopDateFiltersOpen((current) => !current)}
+                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                aria-haspopup="dialog"
+                aria-expanded={desktopDateFiltersOpen}
+                aria-label="Open date range filters"
               >
-                Reset scope
+                <CalendarDays size={14} />
+                <span className="uppercase tracking-wide text-slate-500">Date</span>
               </button>
-            )}
+              {desktopDateFiltersOpen ? (
+                <section
+                  role="dialog"
+                  aria-label="Date range filters"
+                  className="absolute right-0 z-30 mt-2 w-[290px] rounded-xl border border-slate-200 bg-white p-3 shadow-[0_12px_30px_rgba(15,23,42,0.15)]"
+                >
+                  <div className="grid gap-2">
+                    <label className="grid gap-1 text-xs font-medium text-ink-700">
+                      <span>From</span>
+                      <input
+                        type="date"
+                        value={filters.from}
+                        onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))}
+                        className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                        aria-label="From date"
+                      />
+                    </label>
+                    <label className="grid gap-1 text-xs font-medium text-ink-700">
+                      <span>To</span>
+                      <input
+                        type="date"
+                        value={filters.to}
+                        onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))}
+                        className="rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+                        aria-label="To date"
+                      />
+                    </label>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFilters((current) => ({ ...current, from: "", to: "" }))}
+                      className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDesktopDateFiltersOpen(false)}
+                      className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+            </div>
 
             {isProjectMode && filters.projectId !== "all" && selectedProjectStatusChip ? (
               <span
                 className={cn(
-                  "ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold",
+                  "ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold",
                   selectedProjectStatusChip.borderClass,
                   selectedProjectStatusChip.surfaceClass,
                   selectedProjectStatusChip.toneClass
@@ -641,54 +680,22 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               </span>
             ) : null}
           </div>
-          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-            {filters.workspaceMode === "workshop" ? (
-              <>
-                <span className="rounded-full border border-slate-300 bg-slate-100 px-2.5 py-0.5 font-semibold text-slate-800">
-                  Workshop mode
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                  Global workshop operations are in focus.
-                </span>
-              </>
-            ) : isProjectMode && filters.projectId !== "all" ? (
-              <>
-                <span className="rounded-full border border-brand-300 bg-brand-100 px-2.5 py-0.5 font-semibold text-brand-900">
-                  Project locked: {selectedProjectLabel}
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                  All actions stay in this project.
-                </span>
-              </>
-            ) : isProjectMode ? (
-              <>
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 font-semibold text-amber-900">
-                  Project mode
-                </span>
-                <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                  Select one project to lock this workspace.
-                </span>
-              </>
-            ) : (
-              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                {workspaceModeLabel} mode
-              </span>
-            )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <span
+              className={cn(
+                "rounded-full px-2.5 py-0.5",
+                filters.workspaceMode === "workshop"
+                  ? "border border-slate-300 bg-slate-100 font-semibold text-slate-800"
+                  : isProjectMode && filters.projectId !== "all"
+                    ? "border border-brand-300 bg-brand-100 font-semibold text-brand-900"
+                    : isProjectMode
+                      ? "border border-amber-200 bg-amber-50 font-semibold text-amber-900"
+                      : "border border-slate-200 bg-white text-slate-700"
+              )}
+            >
+              {modeChipLabel}
+            </span>
           </div>
-
-          {approvalSummary && filters.workspaceMode === "all-projects" && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full border border-amber-200 bg-amber-100 px-2.5 py-0.5 font-semibold text-amber-900">
-                Pending approvals: {approvalSummary.pendingApprovals}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                Rejected this week: {approvalSummary.rejectedThisWeek}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-0.5 text-slate-700">
-                Approved today: {approvalSummary.approvedToday}
-              </span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -701,8 +708,8 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
             aria-label="Close filters"
           />
           <section className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-hidden rounded-t-2xl border-t border-slate-200 bg-white shadow-[0_-16px_34px_rgba(15,23,42,0.26)]">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-              <p className="text-sm font-semibold text-ink-900">Scope filters</p>
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2.5">
+              <p className="text-sm font-semibold text-ink-900">Date range</p>
               <button
                 type="button"
                 onClick={() => setMobileFiltersOpen(false)}
@@ -713,50 +720,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               </button>
             </div>
 
-            <div className="max-h-[calc(88vh-120px)] space-y-3 overflow-y-auto px-4 py-4">
-              <label className="grid gap-1 text-xs font-medium text-ink-700">
-                <span className="uppercase tracking-wide text-slate-500">Workspace</span>
-                <select
-                  value={filters.workspaceMode}
-                  onChange={(event) => setWorkspaceMode(event.target.value as WorkspaceMode)}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                >
-                  {workspaceModeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="grid gap-1 text-xs font-medium text-ink-700">
-                <span className="uppercase tracking-wide text-slate-500">Project</span>
-                <select
-                  value={isProjectMode ? filters.projectId : "all"}
-                  onChange={(event) => {
-                    const nextProjectId = event.target.value;
-                    if (!isProjectMode) {
-                      return;
-                    }
-                    setFilters((current) => ({
-                      ...current,
-                      projectId: nextProjectId,
-                      clientId: nextProjectId === "all" ? current.clientId : "all",
-                      rigId: nextProjectId === "all" ? current.rigId : "all"
-                    }));
-                  }}
-                  disabled={!isProjectMode}
-                  className="rounded-lg border border-slate-200 px-3 py-2 text-sm disabled:opacity-60"
-                >
-                  <option value="all">All projects</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
+            <div className="max-h-[calc(88vh-120px)] space-y-2.5 overflow-y-auto px-4 py-3.5">
               <div className="grid gap-2">
                 <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Date range</p>
                 <label className="grid gap-1 text-xs font-medium text-ink-700">
@@ -782,16 +746,15 @@ export function Topbar({ sidebarHidden, onToggleSidebar }: TopbarProps) {
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
+            <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-4 py-2.5">
               <button
                 type="button"
                 onClick={() => {
-                  resetFilters();
-                  setMobileFiltersOpen(false);
+                  setFilters((current) => ({ ...current, from: "", to: "" }));
                 }}
                 className="gf-btn-secondary px-3 py-2 text-xs"
               >
-                Reset scope
+                Clear
               </button>
               <button
                 type="button"

@@ -162,14 +162,6 @@ export function createInventoryIssueHandlers({
     setMovementDetailDrawerOpen(true);
   }
 
-  function openIssueQueueForMovement(movementId: string) {
-    if (!movementId) {
-      return;
-    }
-    setMovementDetailDrawerOpen(false);
-    routerPush(`/inventory/issues?movementId=${encodeURIComponent(movementId)}`);
-  }
-
   function openIssueWorkflow(issueId: string, initialStep: 1 | 2 | 3 = 1) {
     if (!issueId) {
       return;
@@ -225,7 +217,6 @@ export function createInventoryIssueHandlers({
     fixInventoryIssue,
     openItemDetail,
     openMovementDetail,
-    openIssueQueueForMovement,
     openIssueWorkflow
   };
 }

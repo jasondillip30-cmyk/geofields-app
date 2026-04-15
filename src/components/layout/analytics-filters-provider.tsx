@@ -14,38 +14,32 @@ import {
 } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
-  DEFAULT_WORKSPACE_MODE,
-  normalizeWorkspaceMode,
   type WorkspaceMode
 } from "@/lib/workspace-mode";
+import {
+  ANALYTICS_LAST_PROJECT_ID_STORAGE_KEY,
+  DEFAULT_ANALYTICS_SCOPE_FILTERS,
+  areScopeFiltersEqual,
+  normalizeScopeFilters,
+  parseScopeIntentFromSearchParams,
+  persistScopeFilters,
+  readStoredScopeFilters,
+  type AnalyticsScopeFilters,
+  type AnalyticsScopeIntent
+} from "@/lib/analytics-scope";
 
-export interface AnalyticsFilters {
-  workspaceMode: WorkspaceMode;
-  projectId: string;
-  clientId: string;
-  rigId: string;
-  from: string;
-  to: string;
-}
+export type AnalyticsFilters = AnalyticsScopeFilters;
 
 interface AnalyticsFiltersContextValue {
   filters: AnalyticsFilters;
   setFilters: Dispatch<SetStateAction<AnalyticsFilters>>;
+  applyScope: (intent: AnalyticsScopeIntent) => void;
   setWorkspaceMode: (mode: WorkspaceMode) => void;
   resetFilters: () => void;
+  scopeBootstrapped: boolean;
 }
 
-const STORAGE_KEY = "gf:analytics-filters";
-const LAST_PROJECT_ID_KEY = "gf:analytics-last-project-id";
-
-const defaultFilters: AnalyticsFilters = {
-  workspaceMode: DEFAULT_WORKSPACE_MODE,
-  projectId: "all",
-  clientId: "all",
-  rigId: "all",
-  from: "",
-  to: ""
-};
+const defaultFilters: AnalyticsFilters = DEFAULT_ANALYTICS_SCOPE_FILTERS;
 
 const AnalyticsFiltersContext = createContext<AnalyticsFiltersContextValue | null>(null);
 
@@ -53,145 +47,70 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
   const pathname = usePathname();
   const [filters, setFilters] = useState<AnalyticsFilters>(defaultFilters);
   const [rememberedProjectId, setRememberedProjectId] = useState("");
+  const [scopeBootstrapped, setScopeBootstrapped] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    const rememberedProject = window.sessionStorage.getItem(LAST_PROJECT_ID_KEY) || "";
+    const rememberedProject = window.sessionStorage.getItem(ANALYTICS_LAST_PROJECT_ID_STORAGE_KEY) || "";
     setRememberedProjectId(rememberedProject);
 
-    const raw = window.sessionStorage.getItem(STORAGE_KEY);
-    if (!raw) {
+    const initialSearchParams = new URLSearchParams(window.location.search);
+    const sanitizedInitialSearchParams = sanitizeScopeSearchParams(
+      window.location.pathname,
+      initialSearchParams
+    );
+    const urlIntent = parseScopeIntentFromSearchParams(sanitizedInitialSearchParams);
+    if (urlIntent) {
+      const nextFilters = normalizeScopeFilters(urlIntent, defaultFilters, rememberedProject);
+      setFilters(nextFilters);
+      persistScopeFilters(nextFilters);
+      setScopeBootstrapped(true);
       return;
     }
 
-    try {
-      const parsed = JSON.parse(raw) as Partial<AnalyticsFilters>;
-      const parsedProjectId =
-        typeof parsed.projectId === "string" && parsed.projectId && parsed.projectId !== "all"
-          ? parsed.projectId
-          : "all";
-      const requestedMode = normalizeWorkspaceMode(
-        parsed.workspaceMode,
-        parsedProjectId !== "all" ? "project" : DEFAULT_WORKSPACE_MODE
-      );
-      const mode =
-        requestedMode === "project" && parsedProjectId === "all" && rememberedProject
-          ? "project"
-          : requestedMode;
-      const normalizedProjectId =
-        mode === "project"
-          ? parsedProjectId !== "all"
-            ? parsedProjectId
-            : rememberedProject || "all"
-          : "all";
-      const clientId =
-        mode === "workshop"
-          ? "all"
-          : typeof parsed.clientId === "string" && parsed.clientId
-            ? parsed.clientId
-            : defaultFilters.clientId;
-      const rigId =
-        mode === "workshop"
-          ? "all"
-          : typeof parsed.rigId === "string" && parsed.rigId
-            ? parsed.rigId
-            : defaultFilters.rigId;
-      setFilters({
-        workspaceMode: mode,
-        projectId: normalizedProjectId,
-        clientId,
-        rigId,
-        from: typeof parsed.from === "string" ? parsed.from : defaultFilters.from,
-        to: typeof parsed.to === "string" ? parsed.to : defaultFilters.to
-      });
-    } catch {
-      setFilters(defaultFilters);
+    const storedFilters = readStoredScopeFilters();
+    if (!storedFilters) {
+      setScopeBootstrapped(true);
+      return;
     }
+    setFilters(storedFilters);
+    setScopeBootstrapped(true);
   }, []);
 
-  const syncFiltersFromSearchParams = useCallback((searchParams: URLSearchParams) => {
-    const projectIdParam = searchParams.get("projectId");
-    const clientIdParam = searchParams.get("clientId");
-    const rigIdParam = searchParams.get("rigId");
-    const fromParam = searchParams.get("from");
-    const toParam = searchParams.get("to");
-    const workspaceParam = searchParams.get("workspace");
-    const hasUrlFilter =
-      projectIdParam !== null || clientIdParam !== null || rigIdParam !== null || fromParam !== null || toParam !== null;
-    const hasWorkspaceParam = workspaceParam !== null;
-
-    if (!hasUrlFilter && !hasWorkspaceParam) {
+  const syncFiltersFromSearchParams = useCallback((pathname: string, searchParams: URLSearchParams) => {
+    const sanitizedSearchParams = sanitizeScopeSearchParams(pathname, searchParams);
+    const urlIntent = parseScopeIntentFromSearchParams(sanitizedSearchParams);
+    if (!urlIntent) {
       return;
     }
 
-    const normalizedProjectId =
-      projectIdParam && projectIdParam !== "all" ? projectIdParam : "all";
-    const requestedMode = normalizeWorkspaceMode(
-      workspaceParam,
-      normalizedProjectId !== "all" ? "project" : DEFAULT_WORKSPACE_MODE
-    );
-    const mode =
-      requestedMode === "project" && normalizedProjectId === "all" && rememberedProjectId
-        ? "project"
-        : requestedMode;
-    const restoredProjectId =
-      mode === "project"
-        ? normalizedProjectId !== "all"
-          ? normalizedProjectId
-          : rememberedProjectId || "all"
-        : "all";
-    const nextClientId =
-      mode === "workshop"
-        ? "all"
-        : clientIdParam && clientIdParam !== "all"
-          ? clientIdParam
-          : "all";
-    const nextRigId =
-      mode === "workshop"
-        ? "all"
-        : rigIdParam && rigIdParam !== "all"
-          ? rigIdParam
-          : "all";
-    const nextFilters: AnalyticsFilters =
-      restoredProjectId !== "all"
-        ? {
-            workspaceMode: mode,
-            projectId: restoredProjectId,
-            clientId: "all",
-            rigId: "all",
-            from: fromParam || "",
-            to: toParam || ""
-          }
-        : {
-            workspaceMode: mode,
-            projectId: "all",
-            clientId: nextClientId,
-            rigId: nextRigId,
-            from: fromParam || "",
-            to: toParam || ""
-          };
-
     setFilters((current) =>
-      current.workspaceMode === nextFilters.workspaceMode &&
-      current.projectId === nextFilters.projectId &&
-      current.clientId === nextFilters.clientId &&
-      current.rigId === nextFilters.rigId &&
-      current.from === nextFilters.from &&
-      current.to === nextFilters.to
-        ? current
-        : nextFilters
+      (() => {
+        const nextFilters = normalizeScopeFilters(urlIntent, current, rememberedProjectId);
+        return areScopeFiltersEqual(current, nextFilters) ? current : nextFilters;
+      })()
     );
   }, [rememberedProjectId]);
 
+  const applyScope = useCallback(
+    (intent: AnalyticsScopeIntent) => {
+      setFilters((current) => {
+        const nextFilters = normalizeScopeFilters(intent, current, rememberedProjectId);
+        return areScopeFiltersEqual(current, nextFilters) ? current : nextFilters;
+      });
+    },
+    [rememberedProjectId]
+  );
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
 
-    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(filters));
+    persistScopeFilters(filters);
   }, [filters]);
 
   useEffect(() => {
@@ -199,10 +118,10 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
       return;
     }
     if (!rememberedProjectId) {
-      window.sessionStorage.removeItem(LAST_PROJECT_ID_KEY);
+      window.sessionStorage.removeItem(ANALYTICS_LAST_PROJECT_ID_STORAGE_KEY);
       return;
     }
-    window.sessionStorage.setItem(LAST_PROJECT_ID_KEY, rememberedProjectId);
+    window.sessionStorage.setItem(ANALYTICS_LAST_PROJECT_ID_STORAGE_KEY, rememberedProjectId);
   }, [rememberedProjectId]);
 
   useEffect(() => {
@@ -255,61 +174,38 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
 
   const setWorkspaceMode = useCallback(
     (mode: WorkspaceMode) => {
-      if (mode !== "project" && filters.projectId !== "all") {
-        setRememberedProjectId(filters.projectId);
-      }
       setFilters((current) => {
-        if (current.workspaceMode === mode) {
+        const nextFilters = normalizeScopeFilters({ workspaceMode: mode }, current, rememberedProjectId);
+        if (areScopeFiltersEqual(current, nextFilters)) {
           return current;
         }
-
-        if (mode === "workshop") {
-          return {
-            ...current,
-            workspaceMode: "workshop",
-            projectId: "all",
-            clientId: "all",
-            rigId: "all"
-          };
-        }
-
-        if (mode === "all-projects") {
-          return {
-            ...current,
-            workspaceMode: "all-projects",
-            projectId: "all"
-          };
-        }
-
-        const restoredProjectId =
-          current.projectId !== "all" ? current.projectId : rememberedProjectId || "all";
-        return {
-          ...current,
-          workspaceMode: "project",
-          projectId: restoredProjectId,
-          clientId: restoredProjectId !== "all" ? "all" : current.clientId,
-          rigId: restoredProjectId !== "all" ? "all" : current.rigId
-        };
+        return nextFilters;
       });
     },
-    [filters.projectId, rememberedProjectId]
+    [rememberedProjectId]
   );
 
   const value = useMemo<AnalyticsFiltersContextValue>(
     () => ({
       filters,
       setFilters,
+      applyScope,
       setWorkspaceMode,
-      resetFilters: () => setFilters(defaultFilters)
+      resetFilters: () => setFilters(defaultFilters),
+      scopeBootstrapped
     }),
-    [filters, setWorkspaceMode]
+    [applyScope, filters, scopeBootstrapped, setWorkspaceMode]
   );
 
   return (
     <AnalyticsFiltersContext.Provider value={value}>
       {children}
       <Suspense fallback={null}>
-        <UrlFiltersSync pathname={pathname} onSync={syncFiltersFromSearchParams} />
+        <UrlFiltersSync
+          pathname={pathname}
+          onSync={syncFiltersFromSearchParams}
+          disabled={!scopeBootstrapped}
+        />
       </Suspense>
     </AnalyticsFiltersContext.Provider>
   );
@@ -326,16 +222,41 @@ export function useAnalyticsFilters() {
 
 function UrlFiltersSync({
   pathname,
-  onSync
+  onSync,
+  disabled
 }: {
   pathname: string;
-  onSync: (searchParams: URLSearchParams) => void;
+  onSync: (pathname: string, searchParams: URLSearchParams) => void;
+  disabled?: boolean;
 }) {
   const searchParams = useSearchParams();
 
   useEffect(() => {
-    onSync(new URLSearchParams(searchParams.toString()));
-  }, [onSync, pathname, searchParams]);
+    if (disabled) {
+      return;
+    }
+    onSync(pathname, new URLSearchParams(searchParams.toString()));
+  }, [disabled, onSync, pathname, searchParams]);
 
   return null;
+}
+
+const SETUP_SCOPE_GUARD_PREFIXES = ["/clients/setup", "/rigs/setup", "/projects/setup"] as const;
+
+function sanitizeScopeSearchParams(pathname: string, searchParams: URLSearchParams) {
+  if (!shouldIgnoreEntityScopeParams(pathname)) {
+    return searchParams;
+  }
+
+  const sanitized = new URLSearchParams(searchParams.toString());
+  sanitized.delete("projectId");
+  sanitized.delete("clientId");
+  sanitized.delete("rigId");
+  return sanitized;
+}
+
+function shouldIgnoreEntityScopeParams(pathname: string) {
+  return SETUP_SCOPE_GUARD_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
 }

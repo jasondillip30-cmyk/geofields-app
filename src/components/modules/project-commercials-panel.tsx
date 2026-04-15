@@ -137,7 +137,7 @@ export function ProjectCommercialsPanel({
           </p>
         </div>
         <Link
-          href={`/projects/setup?projectId=${projectId}`}
+          href={`/projects/setup?editProjectId=${projectId}`}
           className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-ink-700 hover:bg-slate-50"
         >
           Edit commercial terms

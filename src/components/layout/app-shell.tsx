@@ -2,15 +2,16 @@
 
 import { Suspense, useEffect, useState, type ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { AiCopilotProvider } from "@/components/layout/ai-copilot-context";
 import { AnalyticsFiltersProvider } from "@/components/layout/analytics-filters-provider";
 import { ChunkLoadRecovery } from "@/components/layout/chunk-load-recovery";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+import { WorkspaceLaunchLayer } from "@/components/layout/workspace-launch-layer";
 import { WorkspaceModeRouteGuard } from "@/components/layout/workspace-mode-route-guard";
-import { isAssistantExperienceEnabled } from "@/lib/feature-flags";
+import { isAssistantExperienceEnabled, isWorkspaceLaunchEnabled } from "@/lib/feature-flags";
 
 const SIDEBAR_HIDDEN_STORAGE_KEY = "gf:sidebar-hidden";
 const GlobalAiCopilot = dynamic(
@@ -27,9 +28,13 @@ const CopilotActionContextToast = dynamic(
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [workspaceLaunchOpen, setWorkspaceLaunchOpen] = useState(false);
   const assistantExperienceEnabled = isAssistantExperienceEnabled();
+  const workspaceLaunchEnabled = isWorkspaceLaunchEnabled();
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -93,6 +98,19 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, [mobileSidebarOpen]);
 
+  useEffect(() => {
+    if (!workspaceLaunchEnabled) {
+      return;
+    }
+    if (searchParams.get("launch") === "1") {
+      setWorkspaceLaunchOpen(true);
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("launch");
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
+  }, [pathname, router, searchParams, workspaceLaunchEnabled]);
+
   const handleSidebarToggle = () => {
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
       setSidebarHidden((current) => !current);
@@ -106,6 +124,12 @@ export function AppShell({ children }: { children: ReactNode }) {
       <AnalyticsFiltersProvider>
         <AiCopilotProvider>
           <ChunkLoadRecovery />
+          {workspaceLaunchEnabled ? (
+            <WorkspaceLaunchLayer
+              open={workspaceLaunchOpen}
+              onRequestClose={() => setWorkspaceLaunchOpen(false)}
+            />
+          ) : null}
           {mobileSidebarOpen ? (
             <button
               type="button"
@@ -123,8 +147,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               />
             </Suspense>
             <div className="flex min-h-screen min-w-0 flex-1 flex-col lg:min-h-0 lg:overflow-hidden">
-              <Topbar sidebarHidden={sidebarHidden} onToggleSidebar={handleSidebarToggle} />
-              <main className="flex-1 min-w-0 overflow-x-hidden px-4 py-5 md:px-6 md:py-6 lg:overflow-y-auto lg:px-7 lg:py-7">
+              <Topbar
+                sidebarHidden={sidebarHidden}
+                onToggleSidebar={handleSidebarToggle}
+                onOpenWorkspaceLaunch={() => setWorkspaceLaunchOpen(true)}
+              />
+              <main
+                id="gf-app-main-scroll"
+                className="flex-1 min-w-0 overflow-x-hidden px-4 py-5 md:px-6 md:py-6 lg:overflow-y-auto lg:px-7 lg:py-7"
+              >
                 <div className="mx-auto w-full min-w-0 max-w-[1720px] [&>*]:min-w-0">
                   <WorkspaceModeRouteGuard>{children}</WorkspaceModeRouteGuard>
                 </div>

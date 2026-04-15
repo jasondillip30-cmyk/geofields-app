@@ -43,7 +43,8 @@ export default function ProjectSetupPage() {
 
 function ProjectSetupPageContent() {
   const searchParams = useSearchParams();
-  const queryProjectId = searchParams.get("projectId")?.trim() || "";
+  const queryProjectId =
+    searchParams.get("editProjectId")?.trim() || searchParams.get("projectId")?.trim() || "";
 
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);

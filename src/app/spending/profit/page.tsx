@@ -9,7 +9,6 @@ import type { ComponentType } from "react";
 import { AccessGate } from "@/components/layout/access-gate";
 import { AnalyticsEmptyState } from "@/components/layout/analytics-empty-state";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card, MetricCard } from "@/components/ui/card";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 
@@ -215,8 +214,6 @@ export default function SpendingProfitPage() {
       }
     >
       <div className="gf-page-stack">
-        {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
-
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">

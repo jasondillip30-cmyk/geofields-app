@@ -45,7 +45,7 @@ export default async function ClientWorkspacePage({
           <div className="flex flex-wrap items-center gap-2">
             <AccessGate permission="clients:manage">
               <Link
-                href={`/clients/setup?clientId=${client.id}`}
+                href={`/clients/setup?editClientId=${client.id}`}
                 className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
               >
                 Edit client setup

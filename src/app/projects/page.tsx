@@ -262,9 +262,29 @@ export default function ProjectsPage() {
           clientLabel={selectedClientName}
           rigLabel={selectedRigName}
         />
+        {error ? (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>
+        ) : null}
+        {notice ? (
+          <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            {notice}
+          </p>
+        ) : null}
 
         {isSingleProjectScope ? (
-          <Card title="Project profile">
+          <Card
+            title="Project profile"
+            action={
+              <AccessGate permission="projects:manage">
+                <Link
+                  href="/projects/setup"
+                  className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
+                >
+                  New
+                </Link>
+              </AccessGate>
+            }
+          >
             {loading ? (
               <p className="text-sm text-ink-600">Loading project profile...</p>
             ) : selectedProject ? (
@@ -289,7 +309,7 @@ export default function ProjectsPage() {
                 <div className="flex flex-wrap gap-2">
                   <AccessGate permission="projects:manage">
                     <Link
-                      href={`/projects/setup?projectId=${selectedProject.id}`}
+                      href={`/projects/setup?editProjectId=${selectedProject.id}`}
                       className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
                     >
                       Edit project setup
@@ -360,17 +380,6 @@ export default function ProjectsPage() {
               </section>
             </AccessGate>
 
-            {error ? (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-                {error}
-              </p>
-            ) : null}
-            {notice ? (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                {notice}
-              </p>
-            ) : null}
-
             <Card title="Project Register">
               {loading ? (
                 <p className="text-sm text-ink-600">Loading projects...</p>
@@ -416,7 +425,7 @@ export default function ProjectsPage() {
                       </Link>
                       <AccessGate permission="projects:manage">
                         <Link
-                          href={`/projects/setup?projectId=${row.project.id}`}
+                          href={`/projects/setup?editProjectId=${row.project.id}`}
                           className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
                         >
                           Edit

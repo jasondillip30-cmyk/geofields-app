@@ -48,20 +48,17 @@ export const COPILOT_NAVIGATION_FALLBACKS: Record<string, CopilotNavigationTarge
   ],
   "inventory-overview": [
     { label: "Open Inventory Items", href: "/inventory/items", reason: "Review inventory item health.", pageKey: "inventory-items", sectionId: "inventory-items-section" },
-    { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace stock changes.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
-    { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Resolve data quality risks.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" }
+    { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace stock changes.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" }
   ],
   "inventory-items": [
     { label: "Open Inventory Items", href: "/inventory/items", reason: "Manage inventory items.", pageKey: "inventory-items", sectionId: "inventory-items-section" },
-    { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Review linked movements.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
-    { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Clean inventory data issues.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" }
+    { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Review linked movements.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" }
   ],
   "inventory-stock-movements": [
     { label: "Open Stock Movements", href: "/inventory/stock-movements", reason: "Trace movement records.", pageKey: "inventory-stock-movements", sectionId: "inventory-movements-section" },
     { label: "Open Inventory Items", href: "/inventory/items", reason: "Inspect affected items.", pageKey: "inventory-items", sectionId: "inventory-items-section" }
   ],
   "inventory-issues": [
-    { label: "Open Inventory Issues", href: "/inventory/issues", reason: "Resolve quality issues.", pageKey: "inventory-issues", sectionId: "inventory-issues-section" },
     { label: "Open Data Quality Center", href: "/data-quality/linkage-center", reason: "Fix cross-module linkage risks.", pageKey: "data-quality-linkage-center" }
   ],
   "inventory-receipt-intake": [

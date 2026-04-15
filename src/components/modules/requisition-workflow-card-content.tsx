@@ -3,22 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import { Card } from "@/components/ui/card";
 import {
   isRequisitionAwaitingReceipt,
   isRequisitionPendingApproval,
   isRequisitionPostedComplete
 } from "@/lib/requisition-lifecycle";
 import { formatCurrency } from "@/lib/utils";
-import {
-  RequisitionHistorySection,
-  RequisitionStepOneSection,
-  RequisitionStepFourSection,
-  RequisitionStepProgress,
-  RequisitionStepTwoSection,
-  RequisitionStepThreeSection,
-  RequisitionWizardFooterActions
-} from "./requisition-workflow-sections";
 import {
   buildReceiptIntakeHref,
   buildRequisitionRowSummary,
@@ -54,6 +44,7 @@ import {
   buildRequisitionHistorySearchParams,
   validateRequisitionWizardStep
 } from "./requisition-workflow-state-utils";
+import { RequisitionWorkflowLayout } from "./requisition-workflow-layout";
 
 
 export function RequisitionWorkflowCard({
@@ -912,150 +903,86 @@ export function RequisitionWorkflowCard({
   });
 
   return (
-    <section id="expenses-requisition-workflow" className="space-y-4">
-      {notice && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200/90 bg-emerald-50/70 px-3.5 py-2.5 text-sm text-emerald-900 shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-2 w-2 rounded-full bg-emerald-500" aria-hidden />
-            <p className="font-medium">{notice}</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setNotice(null)}
-            className="shrink-0 rounded-md px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-100"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-      {error && (
-        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
-          {error}
-        </div>
-      )}
-
-      <Card title={requestCardTitle}>
-        <RequisitionStepProgress wizardStep={wizardStep} />
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-          }}
-          className="space-y-3"
-        >
-          {wizardStep === 1 && (
-            <RequisitionStepOneSection
-              form={form}
-              setForm={setForm}
-              lockedRequestTypeCard={lockedRequestTypeCard}
-              showMaintenanceTypeOption={showMaintenanceTypeOption}
-              allowProjectPurchaseOption={allowProjectPurchaseOption}
-              allowInventoryStockUpOption={allowInventoryStockUpOption}
-            />
-          )}
-
-          {wizardStep === 2 && (
-            <RequisitionStepTwoSection
-              form={form}
-              setForm={setForm}
-              rigs={rigs}
-              projects={projects}
-              hasBreakdownEntryContext={hasBreakdownEntryContext}
-              breakdownOptions={breakdownOptions}
-              maintenanceOptions={maintenanceOptions}
-              maintenanceLoading={maintenanceLoading}
-              locationOptions={locationOptions}
-              lockProjectContext={isProjectLocked}
-              lockedProjectName={lockedProject?.name || "Locked project"}
-              derivedClientName={derivedClientName}
-              derivedRigName={derivedRigName}
-              onVendorFocus={() => setVendorFocused(true)}
-              closeVendorSuggestions={closeVendorSuggestions}
-              handleVendorNameKeyDown={handleVendorNameKeyDown}
-              showVendorSuggestions={showVendorSuggestions}
-              vendorSuggestionLoading={vendorSuggestionLoading}
-              creatingVendor={creatingVendor}
-              vendorSuggestions={vendorSuggestions}
-              activeVendorSuggestionIndex={activeVendorSuggestionIndex}
-              setActiveVendorSuggestionIndex={setActiveVendorSuggestionIndex}
-              applyVendorSuggestion={applyVendorSuggestion}
-              showCreateVendorOption={showCreateVendorOption}
-              createVendorFromInput={createVendorFromInput}
-            />
-          )}
-
-          {wizardStep === 3 && (
-            <RequisitionStepThreeSection
-              form={form}
-              setForm={setForm}
-              onItemNameFocus={() => setItemNameFocused(true)}
-              closeItemSuggestions={closeItemSuggestions}
-              handleItemNameKeyDown={handleItemNameKeyDown}
-              showItemSuggestions={showItemSuggestions}
-              inventorySuggestionLoading={inventorySuggestionLoading}
-              inventorySuggestions={inventorySuggestions}
-              activeSuggestionIndex={activeSuggestionIndex}
-              setActiveSuggestionIndex={setActiveSuggestionIndex}
-              applyInventorySuggestion={applyInventorySuggestion}
-              unitOptions={unitOptions}
-              estimatedTotal={estimatedTotal}
-              categoryOptions={categoryOptions}
-              setupLoading={setupLoading}
-              applyCategorySelection={applyCategorySelection}
-              onSubcategoryFocus={() => setSubcategoryFocused(true)}
-              closeSubcategorySuggestions={closeSubcategorySuggestions}
-              handleSubcategoryKeyDown={handleSubcategoryKeyDown}
-              showSubcategorySuggestions={showSubcategorySuggestions}
-              filteredSubcategorySuggestions={filteredSubcategorySuggestions}
-              activeSubcategorySuggestionIndex={activeSubcategorySuggestionIndex}
-              setActiveSubcategorySuggestionIndex={setActiveSubcategorySuggestionIndex}
-              applySubcategorySuggestion={applySubcategorySuggestion}
-              showCreateSubcategoryOption={showCreateSubcategoryOption}
-              createSubcategoryFromInput={createSubcategoryFromInput}
-              creatingSubcategory={creatingSubcategory}
-            />
-          )}
-
-          {wizardStep === 4 && (
-            <RequisitionStepFourSection
-              form={form}
-              rigs={rigs}
-              projects={projects}
-              selectedLocationName={selectedLocationName}
-              derivedClientName={derivedClientName}
-              derivedRigName={derivedRigName}
-              breakdownOptions={breakdownOptions}
-              maintenanceOptions={maintenanceOptions}
-              estimatedTotal={estimatedTotal}
-            />
-          )}
-
-          <RequisitionWizardFooterActions
-            wizardStep={wizardStep}
-            minimumWizardStep={minimumWizardStep}
-            currentStepError={currentStepError}
-            saving={saving}
-            onBack={backWizard}
-            onContinue={continueWizard}
-            onSubmit={() => {
-              void createRequisition();
-            }}
-          />
-        </form>
-      </Card>
-
-      {!hasStartedRequest && (
-        <RequisitionHistorySection
-          loading={loading}
-          rowsCount={rows.length}
-          pendingCount={pendingCount}
-          approvedReadyCount={approvedReadyCount}
-          completedCount={completedCount}
-          statusFilter={statusFilter}
-          setStatusFilter={setStatusFilter}
-          requisitionRows={requisitionRows}
-        />
-      )}
-    </section>
+    <RequisitionWorkflowLayout
+      notice={notice}
+      onDismissNotice={() => setNotice(null)}
+      error={error}
+      requestCardTitle={requestCardTitle}
+      wizardStep={wizardStep}
+      minimumWizardStep={minimumWizardStep}
+      currentStepError={currentStepError}
+      saving={saving}
+      onBack={backWizard}
+      onContinue={continueWizard}
+      onSubmit={() => {
+        void createRequisition();
+      }}
+      form={form}
+      setForm={setForm}
+      lockedRequestTypeCard={lockedRequestTypeCard}
+      showMaintenanceTypeOption={showMaintenanceTypeOption}
+      allowProjectPurchaseOption={allowProjectPurchaseOption}
+      allowInventoryStockUpOption={allowInventoryStockUpOption}
+      rigs={rigs}
+      projects={projects}
+      hasBreakdownEntryContext={hasBreakdownEntryContext}
+      breakdownOptions={breakdownOptions}
+      maintenanceOptions={maintenanceOptions}
+      maintenanceLoading={maintenanceLoading}
+      locationOptions={locationOptions}
+      lockProjectContext={isProjectLocked}
+      lockedProjectName={lockedProject?.name || "Locked project"}
+      derivedClientName={derivedClientName}
+      derivedRigName={derivedRigName}
+      selectedLocationName={selectedLocationName}
+      estimatedTotal={estimatedTotal}
+      setupLoading={setupLoading}
+      categoryOptions={categoryOptions}
+      unitOptions={unitOptions}
+      hasStartedRequest={hasStartedRequest}
+      loading={loading}
+      rows={rows}
+      pendingCount={pendingCount}
+      approvedReadyCount={approvedReadyCount}
+      completedCount={completedCount}
+      statusFilter={statusFilter}
+      setStatusFilter={setStatusFilter}
+      requisitionRows={requisitionRows}
+      autocomplete={{
+        activeSuggestionIndex,
+        activeSubcategorySuggestionIndex,
+        activeVendorSuggestionIndex,
+        applyCategorySelection,
+        applyInventorySuggestion,
+        applySubcategorySuggestion,
+        applyVendorSuggestion,
+        closeItemSuggestions,
+        closeSubcategorySuggestions,
+        closeVendorSuggestions,
+        createSubcategoryFromInput,
+        createVendorFromInput,
+        creatingSubcategory,
+        creatingVendor,
+        filteredSubcategorySuggestions,
+        handleItemNameKeyDown,
+        handleSubcategoryKeyDown,
+        handleVendorNameKeyDown,
+        inventorySuggestionLoading,
+        inventorySuggestions,
+        setActiveSubcategorySuggestionIndex,
+        setActiveSuggestionIndex,
+        setActiveVendorSuggestionIndex,
+        setItemNameFocused,
+        setSubcategoryFocused,
+        setVendorFocused,
+        showCreateSubcategoryOption,
+        showCreateVendorOption,
+        showItemSuggestions,
+        showSubcategorySuggestions,
+        showVendorSuggestions,
+        vendorSuggestionLoading,
+        vendorSuggestions
+      }}
+    />
   );
 }

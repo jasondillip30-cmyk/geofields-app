@@ -3,20 +3,29 @@ import { spawn, spawnSync } from "node:child_process";
 import { normalizeTrackedTsconfigIncludes } from "./tsconfig-next-include-normalizer";
 
 const DEFAULT_PORT = 3000;
+const DEFAULT_HOST = "127.0.0.1";
 const GRACEFUL_KILL_TIMEOUT_MS = 5_000;
 const PORT_RELEASE_TIMEOUT_MS = 6_000;
 const PORT_RELEASE_POLL_INTERVAL_MS = 140;
+const HEALTH_PROBE_TIMEOUT_MS = 2_200;
 
 async function main() {
   const port = resolvePort(process.env.PORT);
+  const host = resolveHost(process.env.HOST);
   const distDir = resolveDistDir(port);
+  const legacyPortDistDir = `.next-dev-${port}`;
   normalizeTrackedTsconfigIncludes(process.cwd());
 
+  console.log(`[dev:reset] target host: ${host}`);
   console.log(`[dev:reset] target port: ${port}`);
   console.log(`[dev:reset] target dist dir: ${distDir}`);
 
   const pids = findPortPids(port);
   if (pids.length > 0) {
+    const healthyBeforeReset = await probeServerHealth(port, host);
+    console.log(
+      `[dev:reset] existing listener health on :${port}: ${healthyBeforeReset ? "responsive" : "unresponsive"}`
+    );
     console.log(`[dev:reset] stopping process(es) on :${port}: ${pids.join(", ")}`);
     await terminatePids(pids);
     const released = await waitForPortRelease(port, PORT_RELEASE_TIMEOUT_MS);
@@ -24,7 +33,8 @@ async function main() {
       const remaining = findPortPids(port);
       throw new Error(
         `[dev:reset] port :${port} is still busy after shutdown (${remaining.join(", ") || "unknown"}). ` +
-          `Run \`kill -9 ${remaining.join(" ")}\` or pick another port, then retry.`
+          `Run \`kill -9 ${remaining.join(" ")}\` or pick another port, then retry.\n` +
+          formatListenerDiagnostics(port)
       );
     }
   } else {
@@ -33,8 +43,13 @@ async function main() {
 
   await rm(distDir, { recursive: true, force: true });
   console.log(`[dev:reset] removed ${distDir}`);
+  if (legacyPortDistDir !== distDir) {
+    await rm(legacyPortDistDir, { recursive: true, force: true });
+    console.log(`[dev:reset] removed ${legacyPortDistDir}`);
+  }
 
   await startDevServerWithRetry({
+    host,
     port,
     distDir,
     maxAttempts: 2
@@ -49,12 +64,20 @@ function resolvePort(raw: string | undefined) {
   return Math.trunc(parsed);
 }
 
-function resolveDistDir(port: number) {
+function resolveHost(raw: string | undefined) {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return DEFAULT_HOST;
+  }
+  return trimmed;
+}
+
+function resolveDistDir(_port: number) {
   const configured = process.env.NEXT_DIST_DIR?.trim();
   if (configured) {
     return configured;
   }
-  return `.next-dev-${port}`;
+  return ".next";
 }
 
 function findPortPids(port: number) {
@@ -122,12 +145,13 @@ function isAlive(pid: number) {
   }
 }
 
-function startDevServer(port: number, distDir: string) {
-  console.log(`[dev:reset] starting fresh dev server on :${port}`);
-  const child = spawn("next", ["dev", "-p", String(port)], {
+function startDevServer(host: string, port: number, distDir: string) {
+  console.log(`[dev:reset] starting fresh dev server on ${host}:${port}`);
+  const child = spawn("next", ["dev", "-H", host, "-p", String(port)], {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      HOST: host,
       PORT: String(port),
       NEXT_DIST_DIR: distDir
     },
@@ -191,10 +215,12 @@ function startDevServer(port: number, distDir: string) {
 }
 
 async function startDevServerWithRetry({
+  host,
   port,
   distDir,
   maxAttempts
 }: {
+  host: string;
   port: number;
   distDir: string;
   maxAttempts: number;
@@ -203,7 +229,7 @@ async function startDevServerWithRetry({
   while (attempt < maxAttempts) {
     attempt += 1;
     try {
-      await startDevServer(port, distDir);
+      await startDevServer(host, port, distDir);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -228,12 +254,64 @@ async function startDevServerWithRetry({
       if (!released) {
         const remaining = findPortPids(port);
         throw new Error(
-          `[dev:reset] retry blocked: port :${port} still busy by ${remaining.join(", ") || "unknown"}`
+          `[dev:reset] retry blocked: port :${port} still busy by ${remaining.join(", ") || "unknown"}\n` +
+            formatListenerDiagnostics(port)
         );
       }
       await sleep(200);
     }
   }
+}
+
+function formatListenerDiagnostics(port: number) {
+  const details = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], {
+    cwd: process.cwd(),
+    encoding: "utf8"
+  });
+  const stdout = details.stdout?.trim();
+  if (!stdout) {
+    return "[dev:reset] listener diagnostics unavailable (no lsof output)";
+  }
+  return `[dev:reset] listener diagnostics:\n${stdout}`;
+}
+
+function resolveProbeHosts(host: string) {
+  const hosts = [host, "127.0.0.1", "localhost"];
+  return [...new Set(hosts)];
+}
+
+async function probeServerHealth(port: number, host: string) {
+  const probeUrls = resolveProbeHosts(host).map(
+    (entry) => `http://${entry}:${port}/api/auth/session`
+  );
+  for (const url of probeUrls) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        redirect: "manual",
+        signal: controller.signal
+      });
+      if (
+        response.ok ||
+        response.status === 401 ||
+        response.status === 403 ||
+        response.status === 404 ||
+        response.status === 307 ||
+        response.status === 308
+      ) {
+        return true;
+      }
+    } catch {
+      // try next endpoint
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return false;
 }
 
 function sleep(ms: number) {

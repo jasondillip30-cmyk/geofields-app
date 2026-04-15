@@ -53,7 +53,7 @@ export default function RigSetupPage() {
 
 function RigSetupPageContent() {
   const searchParams = useSearchParams();
-  const queryRigId = searchParams.get("rigId")?.trim() || "";
+  const queryRigId = searchParams.get("editRigId")?.trim() || searchParams.get("rigId")?.trim() || "";
 
   const [rigs, setRigs] = useState<RigRecord[]>([]);
   const [form, setForm] = useState(emptyForm);

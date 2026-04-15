@@ -38,7 +38,7 @@ export default async function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`${manrope.variable} ${spaceGrotesk.variable} antialiased`}>
+      <body suppressHydrationWarning className={`${manrope.variable} ${spaceGrotesk.variable} antialiased`}>
         <RoleProvider initialUser={initialUser}>
           <RootFrame>{children}</RootFrame>
         </RoleProvider>

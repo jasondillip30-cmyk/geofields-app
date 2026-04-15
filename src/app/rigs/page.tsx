@@ -477,7 +477,19 @@ export default function RigsPage() {
         <FilterScopeBanner filters={filters} rigLabel={selectedRigLabel} />
 
         {isSingleProjectScope ? (
-          <Card title="Rig profiles">
+          <Card
+            title="Rig profiles"
+            action={
+              <AccessGate permission="rigs:manage">
+                <Link
+                  href="/rigs/setup"
+                  className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
+                >
+                  New
+                </Link>
+              </AccessGate>
+            }
+          >
             {loading ? (
               <p className="text-sm text-ink-600">Loading project rigs...</p>
             ) : visibleRigs.length === 0 ? (
@@ -487,7 +499,7 @@ export default function RigsPage() {
                 </p>
                 <AccessGate permission="projects:manage">
                   <Link
-                    href={`/projects/setup?projectId=${scopeProjectId}`}
+                    href={`/projects/setup?editProjectId=${scopeProjectId}`}
                     className="inline-flex rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
                   >
                     Edit project setup
@@ -528,7 +540,7 @@ export default function RigsPage() {
                       <div className="mt-3 flex flex-wrap gap-2">
                         <AccessGate permission="rigs:manage">
                           <Link
-                            href={`/rigs/setup?rigId=${rig.id}`}
+                            href={`/rigs/setup?editRigId=${rig.id}`}
                             className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 hover:bg-brand-100"
                           >
                             Edit rig setup
@@ -645,7 +657,7 @@ export default function RigsPage() {
                       <div key={`actions-${rig.id}`} className="flex gap-2">
                         <AccessGate permission="rigs:manage">
                           <Link
-                            href={`/rigs/setup?rigId=${rig.id}`}
+                            href={`/rigs/setup?editRigId=${rig.id}`}
                             className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
                           >
                             Edit

@@ -24,6 +24,7 @@ const routePermissionMap: Array<{ prefix: string; permission: Permission }> = [
   { prefix: "/maintenance", permission: "maintenance:view" },
   { prefix: "/mechanics", permission: "mechanics:view" },
   { prefix: "/reports", permission: "reports:view" },
+  { prefix: "/workspace-launch", permission: "rigs:view" },
   { prefix: "/", permission: "dashboard:view" }
 ];
 

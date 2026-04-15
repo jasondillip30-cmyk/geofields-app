@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { Card } from "@/components/ui/card";
 import { canAccess } from "@/lib/auth/permissions";
 import { cn, formatCurrency, formatPercent } from "@/lib/utils";
@@ -15,6 +14,7 @@ import {
   emptyDrillingSummary,
   emptySummary,
   emptyTransactions,
+  type SpendingDrillingPeriodBucket,
   type SpendingDrillingSummaryPayload,
   type SpendingHoleStageRow,
   type SpendingSummaryPayload,
@@ -23,6 +23,7 @@ import {
   type SpendingTransactionsPayload
 } from "./spending-page-types";
 import {
+  deriveScopedPeriodRange,
   readApiError,
   toDateIso
 } from "./spending-page-utils";
@@ -52,8 +53,13 @@ type SpendingWorkspaceView = "overview" | "transactions" | "drilling-reports";
 
 export default function SpendingPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { role } = useRole();
-  const { filters, resetFilters, setFilters } = useAnalyticsFilters();
+  const { filters, resetFilters, setFilters, applyScope } = useAnalyticsFilters();
+  const workspaceQuery = (searchParams.get("workspace") || "").trim().toLowerCase();
+  const projectIdQuery = (searchParams.get("projectId") || "").trim();
+  const fromQuery = searchParams.get("from");
+  const toQuery = searchParams.get("to");
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
   const canViewFinance = Boolean(role && canAccess(role, "finance:view"));
@@ -63,10 +69,14 @@ export default function SpendingPage() {
   const [workspaceView, setWorkspaceView] = useState<SpendingWorkspaceView>("overview");
   const [activeView, setActiveView] = useState<"expenses" | "revenue">("expenses");
   const [timePeriodView, setTimePeriodView] = useState<"monthly" | "yearly">("monthly");
+  const [selectedPeriodKey, setSelectedPeriodKey] = useState("");
   const [timePeriodOffset, setTimePeriodOffset] = useState(0);
+  const [drillingTimePeriodOffset, setDrillingTimePeriodOffset] = useState(0);
   const [summary, setSummary] = useState<SpendingSummaryPayload>(emptySummary);
+  const [baseSummary, setBaseSummary] = useState<SpendingSummaryPayload>(emptySummary);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [focusedLoading, setFocusedLoading] = useState(false);
 
   const [transactions, setTransactions] = useState<SpendingTransactionsPayload>(emptyTransactions);
   const [transactionsLoading, setTransactionsLoading] = useState(false);
@@ -83,13 +93,31 @@ export default function SpendingPage() {
   const [transactionNotice, setTransactionNotice] = useState<string | null>(null);
   const [drillingSummary, setDrillingSummary] =
     useState<SpendingDrillingSummaryPayload>(emptyDrillingSummary);
+  const [baseDrillingSummary, setBaseDrillingSummary] =
+    useState<SpendingDrillingSummaryPayload>(emptyDrillingSummary);
   const [drillingLoading, setDrillingLoading] = useState(false);
   const [drillingRefreshing, setDrillingRefreshing] = useState(false);
+  const [focusedDrillingLoading, setFocusedDrillingLoading] = useState(false);
   const [selectedStageHole, setSelectedStageHole] = useState<SpendingHoleStageRow | null>(null);
   const [drillingEntryOpen, setDrillingEntryOpen] = useState(false);
   const [drillingEntryNotice, setDrillingEntryNotice] = useState<string | null>(null);
   const [requestedWorkspaceView, setRequestedWorkspaceView] =
     useState<SpendingWorkspaceView | null>(null);
+
+  useEffect(() => {
+    if (workspaceQuery !== "project" || !projectIdQuery || projectIdQuery === "all") {
+      return;
+    }
+
+    applyScope({
+      workspaceMode: "project",
+      projectId: projectIdQuery,
+      clientId: "all",
+      rigId: "all",
+      from: fromQuery ?? "",
+      to: toQuery ?? ""
+    });
+  }, [applyScope, fromQuery, projectIdQuery, toQuery, workspaceQuery]);
 
   const hasData = useMemo(
     () =>
@@ -135,44 +163,23 @@ export default function SpendingPage() {
     };
   }, []);
 
-  const loadSummary = useCallback(
-    async (silent = false) => {
+  const requestSummary = useCallback(
+    async (range?: { from?: string; to?: string }) => {
       if (!canViewFinance || !isSingleProjectScope) {
-        setSummary(emptySummary);
-        setLoading(false);
-        setRefreshing(false);
-        return;
+        return emptySummary;
       }
+      const params = new URLSearchParams();
+      params.set("projectId", scopeProjectId);
+      if (range?.from) params.set("from", range.from);
+      if (range?.to) params.set("to", range.to);
 
-      if (silent) {
-        setRefreshing(true);
-      } else {
-        setLoading(true);
-      }
-
-      try {
-        const params = new URLSearchParams();
-        params.set("projectId", scopeProjectId);
-        if (filters.from) params.set("from", filters.from);
-        if (filters.to) params.set("to", filters.to);
-        const response = await fetch(`/api/spending/summary?${params.toString()}`, {
-          cache: "no-store"
-        });
-        const payload = response.ok ? ((await response.json()) as SpendingSummaryPayload) : emptySummary;
-        const nextSummary = payload || emptySummary;
-        setSummary({
-          ...emptySummary,
-          ...nextSummary,
-          revenueRateCard: nextSummary.revenueRateCard || emptySummary.revenueRateCard
-        });
-      } catch {
-        setSummary(emptySummary);
-      } finally {
-        setLoading(false);
-        setRefreshing(false);
-      }
+      const response = await fetch(`/api/spending/summary?${params.toString()}`, {
+        cache: "no-store"
+      });
+      const payload = response.ok ? ((await response.json()) as SpendingSummaryPayload) : emptySummary;
+      return normalizeSummaryPayload(payload);
     },
-    [canViewFinance, filters.from, filters.to, isSingleProjectScope, scopeProjectId]
+    [canViewFinance, isSingleProjectScope, scopeProjectId]
   );
 
   const loadTransactions = useCallback(
@@ -230,9 +237,103 @@ export default function SpendingPage() {
     ]
   );
 
-  const loadDrillingSummary = useCallback(
+  const requestDrillingSummary = useCallback(
+    async (range?: { from?: string; to?: string }) => {
+      if (!isSingleProjectScope) {
+        return emptyDrillingSummary;
+      }
+
+      const params = new URLSearchParams();
+      params.set("projectId", scopeProjectId);
+      if (range?.from) params.set("from", range.from);
+      if (range?.to) params.set("to", range.to);
+
+      const response = await fetch(`/api/spending/drilling-reports/summary?${params.toString()}`, {
+        cache: "no-store"
+      });
+      const payload = response.ok
+        ? ((await response.json()) as SpendingDrillingSummaryPayload)
+        : emptyDrillingSummary;
+      return normalizeDrillingSummaryPayload(payload);
+    },
+    [isSingleProjectScope, scopeProjectId]
+  );
+
+  const selectedPeriodRange = useMemo(() => {
+    if (!selectedPeriodKey) {
+      return null;
+    }
+    return deriveScopedPeriodRange({
+      periodView: timePeriodView,
+      bucketKey: selectedPeriodKey,
+      baseFrom: filters.from,
+      baseTo: filters.to
+    });
+  }, [filters.from, filters.to, selectedPeriodKey, timePeriodView]);
+
+  const loadBaseSummary = useCallback(
+    async (silent = false) => {
+      if (!canViewFinance || !isSingleProjectScope) {
+        setBaseSummary(emptySummary);
+        setSummary(emptySummary);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      if (silent) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
+
+      try {
+        const nextSummary = await requestSummary({
+          from: filters.from,
+          to: filters.to
+        });
+        setBaseSummary(nextSummary);
+      } catch {
+        setBaseSummary(emptySummary);
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [canViewFinance, filters.from, filters.to, isSingleProjectScope, requestSummary]
+  );
+
+  const loadFocusedSummary = useCallback(
+    async (range: { from: string; to: string }, silent = false) => {
+      if (!canViewFinance || !isSingleProjectScope) {
+        setSummary(emptySummary);
+        setFocusedLoading(false);
+        return;
+      }
+
+      if (silent) {
+        setRefreshing(true);
+      } else {
+        setFocusedLoading(true);
+      }
+
+      try {
+        const nextSummary = await requestSummary(range);
+        setSummary(nextSummary);
+      } catch {
+        setSummary(emptySummary);
+      } finally {
+        setFocusedLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [canViewFinance, isSingleProjectScope, requestSummary]
+  );
+
+  const loadBaseDrillingSummary = useCallback(
     async (silent = false) => {
       if (!isSingleProjectScope) {
+        setBaseDrillingSummary(emptyDrillingSummary);
         setDrillingSummary(emptyDrillingSummary);
         setDrillingLoading(false);
         setDrillingRefreshing(false);
@@ -246,54 +347,46 @@ export default function SpendingPage() {
       }
 
       try {
-        const params = new URLSearchParams();
-        params.set("projectId", scopeProjectId);
-        if (filters.from) params.set("from", filters.from);
-        if (filters.to) params.set("to", filters.to);
-        const response = await fetch(`/api/spending/drilling-reports/summary?${params.toString()}`, {
-          cache: "no-store"
+        const nextSummary = await requestDrillingSummary({
+          from: filters.from,
+          to: filters.to
         });
-        const payload = response.ok
-          ? ((await response.json()) as SpendingDrillingSummaryPayload)
-          : emptyDrillingSummary;
-        setDrillingSummary({
-          stageConfigured: Boolean(payload.stageConfigured),
-          summary: payload.summary || emptyDrillingSummary.summary,
-          metersByHole: Array.isArray(payload.metersByHole)
-            ? payload.metersByHole.map((entry) => ({
-                holeNumber: entry.holeNumber,
-                totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
-                percentOfMeters: Number.isFinite(entry.percentOfMeters) ? entry.percentOfMeters : 0,
-                currentDepth: Number.isFinite(entry.currentDepth) ? entry.currentDepth : 0,
-                currentStageLabel: entry.currentStageLabel || null,
-                stageConfigured: Boolean(entry.stageConfigured),
-                stageSegments: Array.isArray(entry.stageSegments)
-                  ? entry.stageSegments
-                      .map((segment) => ({
-                        label: `${segment.label || ""}`.trim(),
-                        startM: Number(segment.startM),
-                        endM: Number(segment.endM),
-                        fillPercent: Number(segment.fillPercent)
-                      }))
-                      .filter(
-                        (segment) =>
-                          segment.label.length > 0 &&
-                          Number.isFinite(segment.startM) &&
-                          Number.isFinite(segment.endM) &&
-                          Number.isFinite(segment.fillPercent)
-                      )
-                  : []
-              }))
-            : []
-        });
+        setBaseDrillingSummary(nextSummary);
       } catch {
-        setDrillingSummary(emptyDrillingSummary);
+        setBaseDrillingSummary(emptyDrillingSummary);
       } finally {
         setDrillingLoading(false);
         setDrillingRefreshing(false);
       }
     },
-    [filters.from, filters.to, isSingleProjectScope, scopeProjectId]
+    [filters.from, filters.to, isSingleProjectScope, requestDrillingSummary]
+  );
+
+  const loadFocusedDrillingSummary = useCallback(
+    async (range: { from: string; to: string }, silent = false) => {
+      if (!isSingleProjectScope) {
+        setDrillingSummary(emptyDrillingSummary);
+        setFocusedDrillingLoading(false);
+        return;
+      }
+
+      if (silent) {
+        setDrillingRefreshing(true);
+      } else {
+        setFocusedDrillingLoading(true);
+      }
+
+      try {
+        const nextSummary = await requestDrillingSummary(range);
+        setDrillingSummary(nextSummary);
+      } catch {
+        setDrillingSummary(emptyDrillingSummary);
+      } finally {
+        setFocusedDrillingLoading(false);
+        setDrillingRefreshing(false);
+      }
+    },
+    [isSingleProjectScope, requestDrillingSummary]
   );
 
   useEffect(() => {
@@ -319,8 +412,8 @@ export default function SpendingPage() {
   }, [canViewDrilling, canViewFinance, requestedWorkspaceView]);
 
   useEffect(() => {
-    void loadSummary();
-  }, [loadSummary]);
+    void loadBaseSummary();
+  }, [loadBaseSummary]);
 
   useEffect(() => {
     if (workspaceView !== "transactions") {
@@ -330,19 +423,47 @@ export default function SpendingPage() {
   }, [loadTransactions, workspaceView]);
 
   useEffect(() => {
-    if (workspaceView !== "drilling-reports") {
-      setSelectedStageHole(null);
+    void loadBaseDrillingSummary();
+  }, [loadBaseDrillingSummary]);
+
+  useEffect(() => {
+    if (!selectedPeriodRange) {
+      setSummary(baseSummary);
+      setFocusedLoading(false);
       return;
     }
-    void loadDrillingSummary();
-  }, [loadDrillingSummary, workspaceView]);
+    if (!canViewFinance) {
+      setSummary(emptySummary);
+      return;
+    }
+    void loadFocusedSummary(selectedPeriodRange);
+  }, [baseSummary, canViewFinance, loadFocusedSummary, selectedPeriodRange]);
+
+  useEffect(() => {
+    if (!selectedPeriodRange) {
+      setDrillingSummary(baseDrillingSummary);
+      setFocusedDrillingLoading(false);
+      return;
+    }
+    void loadFocusedDrillingSummary(selectedPeriodRange);
+  }, [baseDrillingSummary, loadFocusedDrillingSummary, selectedPeriodRange]);
+
+  useEffect(() => {
+    if (workspaceView !== "drilling-reports") {
+      setSelectedStageHole(null);
+    }
+  }, [workspaceView]);
 
   useEffect(() => {
     if (isSingleProjectScope) {
       return;
     }
+    setSummary(emptySummary);
+    setBaseSummary(emptySummary);
     setTransactions(emptyTransactions);
+    setBaseDrillingSummary(emptyDrillingSummary);
     setDrillingSummary(emptyDrillingSummary);
+    setSelectedPeriodKey("");
     setSelectedTransaction(null);
     setTransactionPanelOpen(false);
     setTransactionEditMode(false);
@@ -367,6 +488,15 @@ export default function SpendingPage() {
     },
     [setFilters]
   );
+
+  const handleTimePeriodViewChange = useCallback((nextView: "monthly" | "yearly") => {
+    setTimePeriodView(nextView);
+    setSelectedPeriodKey("");
+  }, []);
+
+  const handleSelectPeriodBucket = useCallback((bucketKey: string) => {
+    setSelectedPeriodKey((current) => (current === bucketKey ? "" : bucketKey));
+  }, []);
 
   const expenseRows = useMemo(
     () =>
@@ -491,7 +621,7 @@ export default function SpendingPage() {
     activeView === "expenses" ? summary.expenseByCategory.length > 0 : summary.incomeByHole.length > 0;
   const centerTotal = activeView === "expenses" ? summary.totals.expenses : summary.totals.income;
   const periodBuckets =
-    timePeriodView === "monthly" ? summary.timePeriod.monthly : summary.timePeriod.yearly;
+    timePeriodView === "monthly" ? baseSummary.timePeriod.monthly : baseSummary.timePeriod.yearly;
   const visibleBucketCount = timePeriodView === "monthly" ? 10 : 6;
   const maxOffset = Math.max(0, periodBuckets.length - visibleBucketCount);
   const safeOffset = Math.min(timePeriodOffset, maxOffset);
@@ -501,15 +631,80 @@ export default function SpendingPage() {
   }, 0);
   const canGoPrev = safeOffset > 0;
   const canGoNext = safeOffset < maxOffset;
+  const drillingPeriodBuckets =
+    timePeriodView === "monthly"
+      ? baseDrillingSummary.timePeriod.monthly
+      : baseDrillingSummary.timePeriod.yearly;
+  const drillingVisibleBucketCount = timePeriodView === "monthly" ? 10 : 6;
+  const drillingMaxOffset = Math.max(0, drillingPeriodBuckets.length - drillingVisibleBucketCount);
+  const safeDrillingOffset = Math.min(drillingTimePeriodOffset, drillingMaxOffset);
+  const visibleDrillingBuckets = drillingPeriodBuckets.slice(
+    safeDrillingOffset,
+    safeDrillingOffset + drillingVisibleBucketCount
+  );
+  const drillingPeriodMaxMeters = drillingPeriodBuckets.reduce((maxValue, entry) => {
+    return Math.max(maxValue, entry.totalMeters);
+  }, 0);
+  const canGoPrevDrilling = safeDrillingOffset > 0;
+  const canGoNextDrilling = safeDrillingOffset < drillingMaxOffset;
   const hasDrillingData =
     drillingSummary.summary.totalMeters > 0 ||
     drillingSummary.summary.totalReports > 0 ||
     drillingSummary.metersByHole.length > 0;
+  const selectedPeriodLabel = useMemo(() => {
+    if (!selectedPeriodKey) {
+      return "";
+    }
+    const combinedBuckets: SpendingDrillingPeriodBucket[] = [
+      ...baseDrillingSummary.timePeriod.monthly,
+      ...baseDrillingSummary.timePeriod.yearly
+    ];
+    const fromDrilling = combinedBuckets.find((bucket) => bucket.bucketKey === selectedPeriodKey);
+    if (fromDrilling) {
+      return fromDrilling.label;
+    }
+    const fromSummary = [...baseSummary.timePeriod.monthly, ...baseSummary.timePeriod.yearly].find(
+      (bucket) => bucket.bucketKey === selectedPeriodKey
+    );
+    return fromSummary?.label || selectedPeriodKey;
+  }, [baseDrillingSummary.timePeriod.monthly, baseDrillingSummary.timePeriod.yearly, baseSummary.timePeriod.monthly, baseSummary.timePeriod.yearly, selectedPeriodKey]);
+  const summaryLoading = selectedPeriodRange ? focusedLoading : loading;
+  const drillingDataLoading = selectedPeriodRange ? focusedDrillingLoading : drillingLoading;
 
   useEffect(() => {
     const targetOffset = Math.max(0, periodBuckets.length - visibleBucketCount);
     setTimePeriodOffset(targetOffset);
   }, [periodBuckets.length, timePeriodView, visibleBucketCount]);
+
+  useEffect(() => {
+    const targetOffset = Math.max(0, drillingPeriodBuckets.length - drillingVisibleBucketCount);
+    setDrillingTimePeriodOffset(targetOffset);
+  }, [drillingPeriodBuckets.length, drillingVisibleBucketCount, timePeriodView]);
+
+  useEffect(() => {
+    if (!selectedPeriodKey) {
+      return;
+    }
+    const existsInSummary = periodBuckets.some((bucket) => bucket.bucketKey === selectedPeriodKey);
+    const existsInDrilling = drillingPeriodBuckets.some((bucket) => bucket.bucketKey === selectedPeriodKey);
+    if (!existsInSummary && !existsInDrilling) {
+      setSelectedPeriodKey("");
+    }
+  }, [drillingPeriodBuckets, periodBuckets, selectedPeriodKey]);
+
+  const handleOverviewRefresh = useCallback(() => {
+    void loadBaseSummary(true);
+    if (selectedPeriodRange) {
+      void loadFocusedSummary(selectedPeriodRange, true);
+    }
+  }, [loadBaseSummary, loadFocusedSummary, selectedPeriodRange]);
+
+  const handleDrillingRefresh = useCallback(() => {
+    void loadBaseDrillingSummary(true);
+    if (selectedPeriodRange) {
+      void loadFocusedDrillingSummary(selectedPeriodRange, true);
+    }
+  }, [loadBaseDrillingSummary, loadFocusedDrillingSummary, selectedPeriodRange]);
 
   const openExpenseCategoryDrilldown = useCallback(
     (category: string) => {
@@ -573,11 +768,24 @@ export default function SpendingPage() {
 
   const handleDrillingEntrySaved = useCallback(() => {
     setDrillingEntryNotice("Report saved.");
-    void loadDrillingSummary(true);
-    if (canViewFinance) {
-      void loadSummary(true);
+    void loadBaseDrillingSummary(true);
+    if (selectedPeriodRange) {
+      void loadFocusedDrillingSummary(selectedPeriodRange, true);
     }
-  }, [canViewFinance, loadDrillingSummary, loadSummary]);
+    if (canViewFinance) {
+      void loadBaseSummary(true);
+      if (selectedPeriodRange) {
+        void loadFocusedSummary(selectedPeriodRange, true);
+      }
+    }
+  }, [
+    canViewFinance,
+    loadBaseDrillingSummary,
+    loadBaseSummary,
+    loadFocusedDrillingSummary,
+    loadFocusedSummary,
+    selectedPeriodRange
+  ]);
 
   const openTransactionPanel = useCallback((row: SpendingTransactionRow) => {
     setSelectedTransaction(row);
@@ -673,8 +881,6 @@ export default function SpendingPage() {
   return (
     <AccessGate anyOf={["finance:view", "drilling:view"]}>
       <div className="gf-page-stack">
-        {isSingleProjectScope ? <ProjectLockedBanner projectId={scopeProjectId} /> : null}
-
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
@@ -735,7 +941,8 @@ export default function SpendingPage() {
 
             {canViewFinance && workspaceView === "overview" ? (
               <SpendingOverviewWorkspace
-                loading={loading}
+                loading={summaryLoading}
+                periodLoading={loading}
                 refreshing={refreshing}
                 summary={summary}
                 hasData={hasData}
@@ -750,13 +957,18 @@ export default function SpendingPage() {
                 revenueShare={revenueShare}
                 expenseShare={expenseShare}
                 timePeriodView={timePeriodView}
+                selectedPeriodKey={selectedPeriodKey}
+                selectedPeriodLabel={selectedPeriodLabel}
+                isPeriodScoped={Boolean(selectedPeriodRange)}
                 visibleBuckets={visibleBuckets}
                 periodMaxValue={periodMaxValue}
                 canGoPrev={canGoPrev}
                 canGoNext={canGoNext}
-                onRefresh={() => void loadSummary(true)}
+                onRefresh={handleOverviewRefresh}
                 onActiveViewChange={setActiveView}
-                onTimePeriodViewChange={setTimePeriodView}
+                onTimePeriodViewChange={handleTimePeriodViewChange}
+                onSelectPeriodBucket={handleSelectPeriodBucket}
+                onResetPeriodScope={() => setSelectedPeriodKey("")}
                 onPrevPeriod={() => setTimePeriodOffset((current) => Math.max(0, current - 1))}
                 onNextPeriod={() => setTimePeriodOffset((current) => Math.min(maxOffset, current + 1))}
                 onClearFilters={resetFilters}
@@ -782,12 +994,26 @@ export default function SpendingPage() {
               <SpendingDrillingWorkspace
                 canCreateReport={canCreateDrillingReport}
                 showFinanceMetrics={canViewFinance}
-                drillingLoading={drillingLoading}
+                drillingLoading={drillingDataLoading}
+                periodLoading={drillingLoading}
                 drillingRefreshing={drillingRefreshing}
+                timePeriodView={timePeriodView}
+                selectedPeriodKey={selectedPeriodKey}
+                selectedPeriodLabel={selectedPeriodLabel}
+                isPeriodScoped={Boolean(selectedPeriodRange)}
+                visiblePeriodBuckets={visibleDrillingBuckets}
+                periodMaxMeters={drillingPeriodMaxMeters}
+                canGoPrevPeriod={canGoPrevDrilling}
+                canGoNextPeriod={canGoNextDrilling}
                 drillingSummary={drillingSummary}
                 hasDrillingData={hasDrillingData}
                 drillingRows={drillingRows}
-                onRefresh={() => void loadDrillingSummary(true)}
+                onRefresh={handleDrillingRefresh}
+                onTimePeriodViewChange={handleTimePeriodViewChange}
+                onSelectPeriodBucket={handleSelectPeriodBucket}
+                onResetPeriodScope={() => setSelectedPeriodKey("")}
+                onPrevPeriod={() => setDrillingTimePeriodOffset((current) => Math.max(0, current - 1))}
+                onNextPeriod={() => setDrillingTimePeriodOffset((current) => Math.min(drillingMaxOffset, current + 1))}
                 onCreateReport={openDrillingEntryModal}
                 onOpenReportsList={openSpendingDrillingReports}
               />
@@ -823,4 +1049,71 @@ export default function SpendingPage() {
       />
     </AccessGate>
   );
+}
+
+function normalizeSummaryPayload(payload: SpendingSummaryPayload | null | undefined) {
+  const nextSummary = payload || emptySummary;
+  return {
+    ...emptySummary,
+    ...nextSummary,
+    revenueRateCard: nextSummary.revenueRateCard || emptySummary.revenueRateCard
+  };
+}
+
+function normalizeDrillingSummaryPayload(payload: SpendingDrillingSummaryPayload | null | undefined) {
+  const nextSummary = payload || emptyDrillingSummary;
+  return {
+    stageConfigured: Boolean(nextSummary.stageConfigured),
+    timePeriod: {
+      monthly: Array.isArray(nextSummary.timePeriod?.monthly)
+        ? nextSummary.timePeriod.monthly
+            .map((entry) => ({
+              bucketKey: `${entry.bucketKey || ""}`.trim(),
+              label: `${entry.label || ""}`.trim(),
+              totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
+              totalReports: Number.isFinite(entry.totalReports) ? entry.totalReports : 0,
+              totalWorkHours: Number.isFinite(entry.totalWorkHours) ? entry.totalWorkHours : 0
+            }))
+            .filter((entry) => entry.bucketKey.length > 0)
+        : [],
+      yearly: Array.isArray(nextSummary.timePeriod?.yearly)
+        ? nextSummary.timePeriod.yearly
+            .map((entry) => ({
+              bucketKey: `${entry.bucketKey || ""}`.trim(),
+              label: `${entry.label || ""}`.trim(),
+              totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
+              totalReports: Number.isFinite(entry.totalReports) ? entry.totalReports : 0,
+              totalWorkHours: Number.isFinite(entry.totalWorkHours) ? entry.totalWorkHours : 0
+            }))
+            .filter((entry) => entry.bucketKey.length > 0)
+        : []
+    },
+    summary: nextSummary.summary || emptyDrillingSummary.summary,
+    metersByHole: Array.isArray(nextSummary.metersByHole)
+      ? nextSummary.metersByHole.map((entry) => ({
+          holeNumber: entry.holeNumber,
+          totalMeters: Number.isFinite(entry.totalMeters) ? entry.totalMeters : 0,
+          percentOfMeters: Number.isFinite(entry.percentOfMeters) ? entry.percentOfMeters : 0,
+          currentDepth: Number.isFinite(entry.currentDepth) ? entry.currentDepth : 0,
+          currentStageLabel: entry.currentStageLabel || null,
+          stageConfigured: Boolean(entry.stageConfigured),
+          stageSegments: Array.isArray(entry.stageSegments)
+            ? entry.stageSegments
+                .map((segment) => ({
+                  label: `${segment.label || ""}`.trim(),
+                  startM: Number(segment.startM),
+                  endM: Number(segment.endM),
+                  fillPercent: Number(segment.fillPercent)
+                }))
+                .filter(
+                  (segment) =>
+                    segment.label.length > 0 &&
+                    Number.isFinite(segment.startM) &&
+                    Number.isFinite(segment.endM) &&
+                    Number.isFinite(segment.fillPercent)
+                )
+            : []
+        }))
+      : []
+  };
 }

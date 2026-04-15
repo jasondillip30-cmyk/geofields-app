@@ -79,7 +79,7 @@ export default async function ProjectWorkspacePage({
             </Link>
             <AccessGate permission="projects:manage">
               <Link
-                href={`/projects/setup?projectId=${project.id}`}
+                href={`/projects/setup?editProjectId=${project.id}`}
                 className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
               >
                 Edit project setup

@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
 import { WorkflowAssistPanel } from "@/components/layout/workflow-assist-panel";
@@ -854,16 +853,14 @@ export default function DrillingReportsPage() {
           selectedProjectBillingSummary={selectedProjectBillingSummary}
         />
 
-        {isSingleProjectScope ? (
-          <ProjectLockedBanner projectId={scopedProjectId} projectName={selectedProject?.name || null} />
-        ) : (
+        {!isSingleProjectScope ? (
           <FilterScopeBanner
             filters={filters}
             projectLabel={selectedProject?.name}
             clientLabel={selectedClientName}
             rigLabel={selectedRigLabel}
           />
-        )}
+        ) : null}
 
         <DrillingReportsProjectSummarySection
           selectedProject={selectedProject}

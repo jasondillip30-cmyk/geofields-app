@@ -89,6 +89,10 @@ async function main() {
       await testRigsProjectLockedProfileMode(page, baseUrl, fixtures!);
     });
 
+    await runStep("workspace launch marker lock + swipe roundtrip", async () => {
+      await testWorkspaceLaunchRoundTrip(page, baseUrl);
+    });
+
     console.log("[interaction] all interaction workflow checks passed.");
   } finally {
     if (context) {
@@ -555,6 +559,126 @@ async function testRigsProjectLockedProfileMode(page: Page, baseUrl: string, fix
   await waitForHydratedApp(page);
   await page.getByText("Rig Registry").first().waitFor({ state: "visible" });
   await page.getByText("Rig focus").first().waitFor({ state: "visible" });
+}
+
+async function testWorkspaceLaunchRoundTrip(page: Page, baseUrl: string) {
+  await page.goto(
+    `${baseUrl}/rigs?workspace=all-projects&projectId=all&clientId=all&rigId=all&launch=1`,
+    { waitUntil: "domcontentloaded" }
+  );
+  await waitForHydratedApp(page);
+
+  const launchLayer = page.getByTestId("workspace-launch-layer");
+  await launchLayer.waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByText("Choose your operations view").first().waitFor({ state: "visible", timeout: 30_000 });
+  const unlabeledMarkerButtons = await launchLayer
+    .locator("button[data-marker-id]")
+    .evaluateAll((nodes) =>
+      nodes.filter((node) => !((node as HTMLButtonElement).innerText || "").trim()).length
+    );
+  assert(
+    unlabeledMarkerButtons === 0,
+    "Globe overlay should not render unlabeled project marker buttons."
+  );
+
+  const firstProjectMarker = launchLayer.locator("button[data-marker-id]:not([disabled])").first();
+  await firstProjectMarker.waitFor({ state: "visible", timeout: 30_000 });
+  const markerProjectId = await firstProjectMarker.getAttribute("data-marker-id");
+  const markerProjectName = await firstProjectMarker.getAttribute("data-marker-name");
+  assert(Boolean(markerProjectId), "Workspace launch marker must expose data-marker-id for scope locking.");
+  assert(Boolean(markerProjectName), "Workspace launch marker must expose full project name metadata.");
+
+  const markerBeforeExpand = launchLayer.locator(`button[data-marker-id="${markerProjectId}"]`);
+  const shortLabel = (await markerBeforeExpand.innerText()).trim();
+  assert(shortLabel.length > 0, "Collapsed marker must render a short label.");
+  await page.evaluate((markerId) => {
+    if (!markerId) {
+      return;
+    }
+    const marker = document.querySelector(
+      `button[data-marker-id="${markerId}"]:not([disabled])`
+    ) as HTMLButtonElement | null;
+    marker?.click();
+  }, markerProjectId);
+
+  await page.waitForFunction(
+    (markerId) => {
+      const marker = document.querySelector(`button[data-marker-id="${markerId}"]`);
+      return marker?.getAttribute("data-marker-expanded") === "true";
+    },
+    markerProjectId,
+    { timeout: 8_000 }
+  );
+  assert(
+    page.url().includes("launch=1"),
+    "First marker click should only expand full name, not navigate."
+  );
+  const expandedLabel = (await markerBeforeExpand.innerText()).trim();
+  assert(
+    expandedLabel.toLowerCase() === (markerProjectName || "").toLowerCase(),
+    "Expanded marker should display the full project name."
+  );
+
+  await page.evaluate((markerId) => {
+    if (!markerId) {
+      return;
+    }
+    const marker = document.querySelector(
+      `button[data-marker-id="${markerId}"]:not([disabled])`
+    ) as HTMLButtonElement | null;
+    marker?.click();
+  }, markerProjectId);
+
+  await waitFor(
+    () => page.url().includes("/spending?"),
+    30_000,
+    "Second marker click did not navigate to /spending."
+  );
+  await waitForHydratedApp(page);
+  const markerUrl = new URL(page.url());
+  assert(
+    markerUrl.searchParams.get("workspace") === "project",
+    "Marker click must force project workspace mode."
+  );
+  assert(
+    markerUrl.searchParams.get("projectId") === markerProjectId,
+    "Marker click must lock to the exact clicked project."
+  );
+  assert(
+    !(await page.getByText("Select one project to continue.").first().isVisible().catch(() => false)),
+    "Project marker navigation must not land in all-projects prompt state."
+  );
+
+  await page.evaluate(() => {
+    const host = document.getElementById("gf-app-main-scroll");
+    if (host) {
+      host.scrollTop = 0;
+      return;
+    }
+    window.scrollTo(0, 0);
+  });
+  const topbar = page.locator("header").first();
+  await topbar.hover();
+  await page.mouse.wheel(0, -130);
+  await page.mouse.wheel(0, -130);
+  await launchLayer.waitFor({ state: "visible", timeout: 30_000 });
+  await page.getByText("Choose your operations view").first().waitFor({ state: "visible", timeout: 30_000 });
+
+  await launchLayer.hover();
+  for (let step = 0; step < 8; step += 1) {
+    await page.mouse.wheel(0, 220);
+    await page.waitForTimeout(25);
+  }
+  await waitFor(
+    () => !page.url().includes("launch=1") && !page.url().includes("/spending?workspace=project"),
+    20_000,
+    "Swipe-up unlock from launch layer did not transition to all-projects destination."
+  );
+  const unlockedUrl = new URL(page.url());
+  assert(
+    unlockedUrl.searchParams.get("workspace") === "all-projects",
+    "Launch swipe-up must set all-projects workspace mode."
+  );
 }
 
 async function fetchProjectRigCount(page: Page, baseUrl: string, projectId: string) {

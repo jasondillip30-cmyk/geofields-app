@@ -5,7 +5,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
-import { ProjectLockedBanner } from "@/components/layout/project-locked-banner";
 import { useRole } from "@/components/layout/role-provider";
 import { Card } from "@/components/ui/card";
 import { MaintenanceHistorySection } from "@/app/maintenance/maintenance-history-section";
@@ -859,13 +858,6 @@ function MaintenanceWorkspace() {
           {errorMessage}
         </div>
       )}
-      {isSingleProjectScope ? (
-        <ProjectLockedBanner
-          projectId={scopeProjectId}
-          projectName={scopedProject?.name || null}
-        />
-      ) : null}
-
       <MaintenanceReportWizardCard
         shouldSkipRigSelectionStep={shouldSkipRigSelectionStep}
         visibleWizardSteps={visibleWizardSteps}

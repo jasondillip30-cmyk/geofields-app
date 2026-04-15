@@ -19,6 +19,7 @@ interface CompanyDashboardTrendSectionProps {
   pushWithFilters: (path: string, overrides?: Record<string, string | null | undefined>) => void;
   rigForecastRows: Array<Array<string | number>>;
   forecastInsight: string;
+  forecastingEnabled: boolean;
 }
 
 export function CompanyDashboardTrendSection({
@@ -30,13 +31,18 @@ export function CompanyDashboardTrendSection({
   handleLast90Days,
   pushWithFilters,
   rigForecastRows,
-  forecastInsight
+  forecastInsight,
+  forecastingEnabled
 }: CompanyDashboardTrendSectionProps) {
   return (
     <section className="gf-section">
       <SectionHeader
         title="Trend Analytics"
-        description="Revenue, profit, rig activity, and forecast visuals for executive drill-down."
+        description={
+          forecastingEnabled
+            ? "Revenue, profit, rig activity, and forecast visuals for executive drill-down."
+            : "Revenue, profit, and rig activity visuals for executive drill-down."
+        }
       />
       <div className="gf-chart-grid">
       <Card
@@ -131,52 +137,54 @@ export function CompanyDashboardTrendSection({
         )}
       </Card>
 
-      <Card
-        title="Actual vs Forecast Profit"
-        subtitle="Historical cumulative profit vs projected next 30 days"
-        className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/forecasting");
-        }}
-        clickLabel="Open forecasting details"
-      >
-        {loading ? (
-          <p className="text-sm text-ink-600">Loading profit forecast...</p>
-        ) : summary.profitForecast.actualVsForecastProfit.length === 0 ? (
-          <DashboardEmptyState
-            message="Not enough data to build a forecast for selected filters."
-            onClearFilters={handleClearFilters}
-            onLast30Days={handleLast30Days}
-            onLast90Days={handleLast90Days}
-            isFiltered={hasScopeFilters}
-          />
-        ) : (
-          <>
-            <ActualVsForecastChart
-              data={summary.profitForecast.actualVsForecastProfit}
-              xKey="label"
-              actualKey="actualProfit"
-              forecastKey="forecastProfit"
-              clickHint="Click to open forecasting"
-              onBackgroundClick={() => {
-                pushWithFilters("/forecasting");
-              }}
-              onElementClick={(entry) => {
-                const range = getBucketDateRange(entry.bucketStart);
-                if (!range) {
-                  pushWithFilters("/forecasting");
-                  return;
-                }
-                pushWithFilters("/forecasting", {
-                  from: range.from,
-                  to: range.to
-                });
-              }}
+      {forecastingEnabled ? (
+        <Card
+          title="Actual vs Forecast Profit"
+          subtitle="Historical cumulative profit vs projected next 30 days"
+          className="transition-shadow hover:shadow-md"
+          onClick={() => {
+            pushWithFilters("/forecasting");
+          }}
+          clickLabel="Open forecasting details"
+        >
+          {loading ? (
+            <p className="text-sm text-ink-600">Loading profit forecast...</p>
+          ) : summary.profitForecast.actualVsForecastProfit.length === 0 ? (
+            <DashboardEmptyState
+              message="Not enough data to build a forecast for selected filters."
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
             />
-            <p className="mt-3 text-xs text-ink-600">{forecastInsight}</p>
-          </>
-        )}
-      </Card>
+          ) : (
+            <>
+              <ActualVsForecastChart
+                data={summary.profitForecast.actualVsForecastProfit}
+                xKey="label"
+                actualKey="actualProfit"
+                forecastKey="forecastProfit"
+                clickHint="Click to open forecasting"
+                onBackgroundClick={() => {
+                  pushWithFilters("/forecasting");
+                }}
+                onElementClick={(entry) => {
+                  const range = getBucketDateRange(entry.bucketStart);
+                  if (!range) {
+                    pushWithFilters("/forecasting");
+                    return;
+                  }
+                  pushWithFilters("/forecasting", {
+                    from: range.from,
+                    to: range.to
+                  });
+                }}
+              />
+              <p className="mt-3 text-xs text-ink-600">{forecastInsight}</p>
+            </>
+          )}
+        </Card>
+      ) : null}
 
       <Card
         title="Revenue by Client"
@@ -372,28 +380,30 @@ export function CompanyDashboardTrendSection({
         )}
       </Card>
 
-      <Card
-        title="Profit Forecast by Rig (Next 30 Days)"
-        subtitle="Projected rig profitability based on current trend."
-        className="xl:col-span-2"
-      >
-        {loading ? (
-          <p className="text-sm text-ink-600">Loading rig forecast...</p>
-        ) : summary.profitForecast.forecastByRig.length === 0 ? (
-          <DashboardEmptyState
-            message="No rig-level profit forecast available for selected filters."
-            onClearFilters={handleClearFilters}
-            onLast30Days={handleLast30Days}
-            onLast90Days={handleLast90Days}
-            isFiltered={hasScopeFilters}
-          />
-        ) : (
-          <DataTable
-            columns={["Rig", "Current Profit", "Avg Daily Profit", "Forecast Profit (30 Days)"]}
-            rows={rigForecastRows}
-          />
-        )}
-      </Card>
+      {forecastingEnabled ? (
+        <Card
+          title="Profit Forecast by Rig (Next 30 Days)"
+          subtitle="Projected rig profitability based on current trend."
+          className="xl:col-span-2"
+        >
+          {loading ? (
+            <p className="text-sm text-ink-600">Loading rig forecast...</p>
+          ) : summary.profitForecast.forecastByRig.length === 0 ? (
+            <DashboardEmptyState
+              message="No rig-level profit forecast available for selected filters."
+              onClearFilters={handleClearFilters}
+              onLast30Days={handleLast30Days}
+              onLast90Days={handleLast90Days}
+              isFiltered={hasScopeFilters}
+            />
+          ) : (
+            <DataTable
+              columns={["Rig", "Current Profit", "Avg Daily Profit", "Forecast Profit (30 Days)"]}
+              rows={rigForecastRows}
+            />
+          )}
+        </Card>
+      ) : null}
       </div>
     </section>
   );

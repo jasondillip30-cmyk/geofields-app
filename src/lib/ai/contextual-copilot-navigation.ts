@@ -13,8 +13,7 @@ import {
   buildGeneralExplanationAnswer,
   buildSmallTalkAnswer,
   normalizeUserQuestion,
-  resolveGeoFieldsDecisionCommand,
-  type GeoFieldsDecisionCommand
+  resolveGeoFieldsDecisionCommand
 } from "@/lib/ai/contextual-copilot-intents";
 import {
   compactSummaryLine,
@@ -33,8 +32,7 @@ import {
 import {
   clamp,
   dedupeNavigationTargets as dedupeNavigationTargetsByPrecision,
-  findMetricValue,
-  focusSeverityRank
+  findMetricValue
 } from "@/lib/ai/contextual-copilot-ranking";
 import { COPILOT_NAVIGATION_FALLBACKS } from "@/lib/ai/contextual-copilot-navigation-fallbacks";
 import {
@@ -49,6 +47,17 @@ import {
   resolveDecisionPlanItems
 } from "@/lib/ai/contextual-copilot-response";
 import { buildGeoFieldsCommandAnswer } from "@/lib/ai/contextual-copilot-geo-command";
+import {
+  findFocusByIssueType,
+  findFocusByKeywords,
+  resolveFocusByCommand
+} from "@/lib/ai/contextual-copilot-focus-selection";
+import {
+  applyRoleFocusMetadata,
+  rankFocusItems,
+  rankFocusItemsForDecisionGuidance
+} from "@/lib/ai/contextual-copilot-role-focus";
+import { isForecastingEnabled } from "@/lib/feature-flags";
 
 type CopilotRoleSegment = "MANAGEMENT" | "OFFICE" | "MECHANIC" | "OPERATIONS" | "GENERAL";
 
@@ -66,7 +75,7 @@ export function resolveNavigationTargets({
   context: CopilotPageContext;
   focusItems: CopilotFocusItem[];
 }) {
-  const explicitTargets = dedupeNavigationTargets(context.navigationTargets || []);
+  const explicitTargets = dedupeNavigationTargets(filterForecastingTargets(context.navigationTargets || []));
   const focusTargets = dedupeNavigationTargets(
     focusItems
       .filter((item) => Boolean(item.href))
@@ -81,12 +90,24 @@ export function resolveNavigationTargets({
         pageKey: item.targetPageKey || inferPageKeyFromHref(item.href)
       }))
   );
+  const filteredFocusTargets = filterForecastingTargets(focusTargets);
+  const fallbackTargets = filterForecastingTargets(COPILOT_NAVIGATION_FALLBACKS[context.pageKey] || []);
 
   if (explicitTargets.length > 0) {
-    return dedupeNavigationTargets([...explicitTargets, ...focusTargets]).slice(0, 6);
+    return dedupeNavigationTargets([...explicitTargets, ...filteredFocusTargets]).slice(0, 6);
   }
 
-  return dedupeNavigationTargets([...(COPILOT_NAVIGATION_FALLBACKS[context.pageKey] || []), ...focusTargets]).slice(0, 6);
+  return dedupeNavigationTargets([...fallbackTargets, ...filteredFocusTargets]).slice(0, 6);
+}
+
+function filterForecastingTargets(targets: CopilotNavigationTarget[]) {
+  if (isForecastingEnabled()) {
+    return targets;
+  }
+  return targets.filter((target) => {
+    const href = target.href || "";
+    return !href.startsWith("/forecasting");
+  });
 }
 
 
@@ -107,64 +128,6 @@ export function prioritizeFocusItemsForQuestion({
   }
   const remainder = focusItems.filter((item) => item.id !== matched.id);
   return [matched, ...remainder];
-}
-
-export function resolveFocusByCommand({
-  command,
-  focusItems
-}: {
-  command: GeoFieldsDecisionCommand;
-  focusItems: CopilotFocusItem[];
-}) {
-  if (command === "TOP_REVENUE_RIG") {
-    return (
-      findFocusByIssueType(focusItems, ["REVENUE_OPPORTUNITY"]) ||
-      findFocusByKeywords(focusItems, ["top revenue rig", "revenue opportunity", "highest revenue rig"])
-    );
-  }
-  if (command === "HIGHEST_EXPENSE_RIG") {
-    return (
-      findFocusByKeywords(focusItems, ["highest expense rig", "highest cost rig"]) ||
-      findFocusByIssueType(focusItems, ["RIG_SPEND", "COST_DRIVER"])
-    );
-  }
-  if (command === "RIGS_NEEDING_ATTENTION") {
-    return (
-      findFocusByIssueType(focusItems, ["RIG_RISK", "RIG_UTILIZATION", "MAINTENANCE"]) ||
-      findFocusByKeywords(focusItems, ["rig condition risk", "underutilized rig", "rig"])
-    );
-  }
-  if (command === "PENDING_MAINTENANCE_RISKS" || command === "TOP_MAINTENANCE_ISSUE") {
-    return (
-      findFocusByIssueType(focusItems, ["MAINTENANCE"]) ||
-      findFocusByKeywords(focusItems, ["maintenance", "waiting for parts", "repair"])
-    );
-  }
-  if (command === "BIGGEST_PROFITABILITY_ISSUE") {
-    return (
-      findFocusByIssueType(focusItems, ["PROFITABILITY"]) ||
-      findFocusByKeywords(focusItems, ["profitability concern", "high spend", "low revenue", "margin"])
-    );
-  }
-  if (command === "DATA_GAPS_HURTING_REPORTS") {
-    return (
-      findFocusByIssueType(focusItems, ["LINKAGE", "NO_BUDGET"]) ||
-      findFocusByKeywords(focusItems, ["missing linkage", "data gap", "unassigned"])
-    );
-  }
-  if (command === "TOP_RIG_RISK") {
-    return (
-      findFocusByIssueType(focusItems, ["RIG_RISK", "RIG_UTILIZATION", "MAINTENANCE"]) ||
-      findFocusByKeywords(focusItems, ["rig condition risk", "top rig risk", "rig"])
-    );
-  }
-  if (command === "BIGGEST_APPROVAL_ISSUE") {
-    return (
-      findFocusByIssueType(focusItems, ["APPROVAL_BACKLOG"]) ||
-      findFocusByKeywords(focusItems, ["approval", "pending", "submitted"])
-    );
-  }
-  return focusItems[0] || null;
 }
 
 function resolveViewPrefix(context: CopilotPageContext) {
@@ -621,19 +584,6 @@ export function dedupeFocusCandidatesByRecord(items: CopilotFocusItem[]) {
   return deduped;
 }
 
-export function findFocusByIssueType(items: CopilotFocusItem[], issueTypes: string[]) {
-  const normalizedTargets = issueTypes.map((type) => normalizeIssueType(type));
-  return items.find((item) => normalizedTargets.includes(normalizeIssueType(item.issueType)));
-}
-
-export function findFocusByKeywords(items: CopilotFocusItem[], keywords: string[]) {
-  const normalizedKeywords = keywords.map((entry) => entry.toLowerCase());
-  return items.find((item) => {
-    const haystack = `${item.label} ${item.reason}`.toLowerCase();
-    return normalizedKeywords.some((keyword) => haystack.includes(keyword));
-  });
-}
-
 export function dedupeInsightCardsByKind(cards: CopilotInsightCard[]) {
   const seen = new Set<CopilotInsightCardKind>();
   const deduped: CopilotInsightCard[] = [];
@@ -908,159 +858,15 @@ function resolveFocusRecordKey(item: CopilotFocusItem) {
   return `${item.targetPageKey || "page"}::label::${normalizeKey(item.label)}`;
 }
 
-export function applyRoleFocusMetadata(items: CopilotFocusItem[], roleProfile: CopilotRoleProfile) {
-  return items.map((item) => ({
-    ...item,
-    actionLabel: item.actionLabel || resolveRoleActionLabel(roleProfile, item),
-    inspectHint: item.inspectHint || resolveRoleInspectHint(roleProfile, item)
-  }));
-}
-
-function resolveRoleActionLabel(roleProfile: CopilotRoleProfile, item: CopilotFocusItem) {
-  const issueType = normalizeIssueType(item.issueType);
-  const haystack = `${item.label} ${item.reason}`.toLowerCase();
-
-  if (roleProfile.segment === "MANAGEMENT") {
-    if (issueType === "APPROVAL_BACKLOG") return "Review approval";
-    if (issueType === "MAINTENANCE" || issueType === "RIG_RISK") return "Review maintenance";
-    if (issueType === "PROFITABILITY" || issueType === "COST_DRIVER") return "Inspect profitability";
-    if (issueType === "LINKAGE") return "Review linkage impact";
-    return "Inspect risk";
-  }
-
-  if (roleProfile.segment === "OFFICE") {
-    if (issueType === "APPROVAL_BACKLOG") return "Review approval";
-    if (issueType === "LINKAGE") return "Inspect linkage";
-    if (/receipt|invoice|submission/.test(haystack)) return "Review receipt";
-    if (/inventory|stock|movement/.test(haystack)) return "Inspect inventory issue";
-    return "Complete record";
-  }
-
-  if (roleProfile.segment === "MECHANIC") {
-    if (issueType === "MAINTENANCE") return "Review maintenance";
-    if (issueType === "RIG_RISK" || /rig/.test(haystack)) return "Inspect rig";
-    if (/parts|stock|filter|belt|hose|repair/.test(haystack)) return "Review parts need";
-    return "Inspect downtime issue";
-  }
-
-  if (roleProfile.segment === "OPERATIONS") {
-    if (/report|drilling|submission/.test(haystack)) return "Complete report";
-    if (/entry|meters|production/.test(haystack)) return "Review drilling entry";
-    if (/project/.test(haystack)) return "Inspect project update";
-    return "Review rig assignment";
-  }
-
-  return "Open record";
-}
-
-function resolveRoleInspectHint(roleProfile: CopilotRoleProfile, item: CopilotFocusItem) {
-  const issueType = normalizeIssueType(item.issueType);
-  if (roleProfile.segment === "MECHANIC") {
-    if (issueType === "MAINTENANCE") {
-      return "Inspect urgency, downtime, and parts dependency before escalating.";
-    }
-    if (issueType === "RIG_RISK") {
-      return "Inspect rig condition trend and recent repair history.";
-    }
-  }
-  if (roleProfile.segment === "OFFICE" && issueType === "LINKAGE") {
-    return "Inspect missing rig/project/maintenance fields and complete the record.";
-  }
-  if (roleProfile.segment === "OPERATIONS" && issueType === "APPROVAL_BACKLOG") {
-    return "Inspect report completeness and missing production values before submission follow-up.";
-  }
-  if (roleProfile.segment === "MANAGEMENT" && issueType === "PROFITABILITY") {
-    return "Inspect spend versus revenue concentration before deciding next containment action.";
-  }
-  return item.inspectHint || undefined;
-}
-
-function roleIssuePriorityBoost({
-  item,
-  roleProfile
-}: {
-  item: CopilotFocusItem;
-  roleProfile: CopilotRoleProfile | null;
-}) {
-  if (!roleProfile || roleProfile.segment === "GENERAL") {
-    return 0;
-  }
-
-  const issueType = normalizeIssueType(item.issueType);
-  const haystack = `${item.label} ${item.reason}`.toLowerCase();
-  let boost = 0;
-
-  if (roleProfile.segment === "MANAGEMENT") {
-    if (["BUDGET_PRESSURE", "PROFITABILITY", "APPROVAL_BACKLOG", "MAINTENANCE", "LINKAGE", "COST_DRIVER", "RIG_SPEND", "PROJECT_SPEND"].includes(issueType)) {
-      boost += 24;
-    }
-    if (/client|project|profit|margin|overspent|bottleneck/.test(haystack)) {
-      boost += 8;
-    }
-  } else if (roleProfile.segment === "OFFICE") {
-    if (["APPROVAL_BACKLOG", "LINKAGE", "COST_DRIVER", "RIG_SPEND", "PROJECT_SPEND", "NO_BUDGET"].includes(issueType)) {
-      boost += 24;
-    }
-    if (/receipt|expense|inventory|stock|completion|missing/.test(haystack)) {
-      boost += 9;
-    }
-  } else if (roleProfile.segment === "MECHANIC") {
-    if (["MAINTENANCE", "RIG_RISK", "RIG_SPEND"].includes(issueType)) {
-      boost += 28;
-    }
-    if (/breakdown|repair|parts|downtime|rig|workshop/.test(haystack)) {
-      boost += 10;
-    }
-    if (["PROFITABILITY", "REVENUE_OPPORTUNITY", "COST_DRIVER", "PROJECT_SPEND", "BUDGET_PRESSURE"].includes(issueType)) {
-      boost -= 22;
-    }
-  } else if (roleProfile.segment === "OPERATIONS") {
-    if (["APPROVAL_BACKLOG", "RIG_RISK", "LINKAGE"].includes(issueType)) {
-      boost += 22;
-    }
-    if (/report|drilling|submission|production|assignment|project update|delayed/.test(haystack)) {
-      boost += 12;
-    }
-    if (["PROFITABILITY", "BUDGET_PRESSURE", "REVENUE_OPPORTUNITY"].includes(issueType)) {
-      boost -= 14;
-    }
-  }
-
-  return boost;
-}
-
-export function rankFocusItems(items: CopilotFocusItem[], roleProfile: CopilotRoleProfile | null = null) {
-  return [...items].sort((a, b) => {
-    const roleScoreDiff =
-      roleIssuePriorityBoost({ item: b, roleProfile }) - roleIssuePriorityBoost({ item: a, roleProfile });
-    if (roleScoreDiff !== 0) {
-      return roleScoreDiff;
-    }
-    const severityDiff = focusSeverityRank(a.severity) - focusSeverityRank(b.severity);
-    if (severityDiff !== 0) {
-      return severityDiff;
-    }
-    const amountA = a.amount ?? 0;
-    const amountB = b.amount ?? 0;
-    if (amountB !== amountA) {
-      return amountB - amountA;
-    }
-    return a.label.localeCompare(b.label);
-  });
-}
-
-export function rankFocusItemsForDecisionGuidance(
-  items: CopilotFocusItem[],
-  roleProfile:
-    | {
-        segment: "MANAGEMENT" | "OFFICE" | "MECHANIC" | "OPERATIONS" | "GENERAL";
-      }
-    | null
-    | undefined
-) {
-  return rankFocusItems(items, (roleProfile as CopilotRoleProfile | null) || null);
-}
-
 function dedupeNavigationTargets(targets: CopilotNavigationTarget[]) {
   return dedupeNavigationTargetsByPrecision(targets, resolveTargetPrecision);
 }
+
+export {
+  applyRoleFocusMetadata,
+  findFocusByIssueType,
+  findFocusByKeywords,
+  rankFocusItems,
+  rankFocusItemsForDecisionGuidance,
+  resolveFocusByCommand
+};

@@ -57,7 +57,6 @@ export function InventoryPageModals({
   selectedMovementDetails,
   canApproveMovement,
   refreshMovementDetails,
-  openIssueQueueForMovement,
   requestUseModalOpen,
   closeRequestUseModal,
   submitUseRequest,
@@ -110,7 +109,6 @@ export function InventoryPageModals({
   selectedMovementDetails: InventoryMovementRow | null;
   canApproveMovement: boolean;
   refreshMovementDetails: () => Promise<void>;
-  openIssueQueueForMovement: (movementId: string) => void;
   requestUseModalOpen: boolean;
   closeRequestUseModal: () => void;
   submitUseRequest: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -176,7 +174,6 @@ export function InventoryPageModals({
         isProjectLocked={isSingleProjectScope}
         canApproveMovement={canApproveMovement}
         onRefresh={refreshMovementDetails}
-        onFlagIssue={openIssueQueueForMovement}
       />
 
       <RequestUseModal

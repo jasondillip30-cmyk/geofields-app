@@ -5,7 +5,6 @@ import {
   toIsoDate
 } from "@/components/inventory/inventory-page-utils";
 import {
-  IssueSeverityBadge,
   StockSeverityBadge
 } from "@/components/inventory/inventory-page-shared";
 import { Card, MetricCard } from "@/components/ui/card";
@@ -14,7 +13,6 @@ import { formatMovementType } from "@/lib/inventory";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
 import type {
-  InventoryIssuesResponse,
   InventoryMovementRow,
   InventoryOverviewResponse
 } from "./inventory-page-types";
@@ -26,7 +24,6 @@ export function InventoryOverviewSection({
   overview,
   stockAlertRows,
   movements,
-  issuesResponse,
   recognizedProjectCostRows
 }: {
   showOverview: boolean;
@@ -42,7 +39,6 @@ export function InventoryOverviewSection({
     severity: "LOW" | "CRITICAL";
   }>;
   movements: InventoryMovementRow[];
-  issuesResponse: InventoryIssuesResponse;
   recognizedProjectCostRows: InventoryMovementRow[];
 }) {
   if (!showOverview) {
@@ -86,7 +82,7 @@ export function InventoryOverviewSection({
                 Activity scope
               </p>
               <p className="mt-1 text-sm text-brand-900">
-                Movement and issue activity follows your current filters.
+                Movement activity follows your current filters.
               </p>
             </div>
           </>
@@ -273,31 +269,7 @@ export function InventoryOverviewSection({
               />
             )}
           </Card>
-        ) : (
-          <Card
-            className="min-w-0"
-            title="Recent Inventory Issues"
-            subtitle="Top-priority data quality issues to resolve."
-          >
-            {issuesResponse.issues.length === 0 ? (
-              <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                No major inventory inconsistencies detected in current scope.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {issuesResponse.issues.slice(0, 6).map((issue) => (
-                  <div key={`overview-issue-${issue.id}`} className="rounded border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <IssueSeverityBadge severity={issue.severity} />
-                      <p className="text-sm font-semibold text-ink-900">{issue.title}</p>
-                    </div>
-                    <p className="mt-1 text-xs text-slate-700">{issue.message}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        )}
+        ) : null}
       </section>
     </>
   );

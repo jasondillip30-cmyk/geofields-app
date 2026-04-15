@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 
 import { Card, MetricCard } from "@/components/ui/card";
@@ -16,10 +17,8 @@ import {
   getScopedKpiHelper,
   getScopedKpiValue
 } from "@/components/layout/analytics-empty-state";
-import { isDashboardSmartRecommendationsEnabled } from "@/lib/feature-flags";
+import { isDashboardSmartRecommendationsEnabled, isForecastingEnabled } from "@/lib/feature-flags";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { CompanyDashboardRecommendationsCard } from "./company-dashboard-recommendations-card";
-import { CompanyDashboardTrendSection } from "./company-dashboard-trend-section";
 import {
   buildDevFallbackSummary,
   DashboardEmptyState,
@@ -34,6 +33,31 @@ import {
   toIsoDate
 } from "./company-dashboard-helpers";
 import { emptySummary, type DashboardSummary, type RecommendationItem } from "./company-dashboard-types";
+
+const CompanyDashboardRecommendationsCard = dynamic(
+  () =>
+    import("./company-dashboard-recommendations-card").then(
+      (module) => module.CompanyDashboardRecommendationsCard
+    ),
+  {
+    loading: () => (
+      <Card title="Recommendations">
+        <p className="text-sm text-ink-600">Loading recommendations...</p>
+      </Card>
+    )
+  }
+);
+
+const CompanyDashboardTrendSection = dynamic(
+  () => import("./company-dashboard-trend-section").then((module) => module.CompanyDashboardTrendSection),
+  {
+    loading: () => (
+      <Card title="Trend Analytics">
+        <p className="text-sm text-ink-600">Loading trend analytics...</p>
+      </Card>
+    )
+  }
+);
 
 export function CompanyDashboard() {
   const router = useRouter();
@@ -53,6 +77,7 @@ export function CompanyDashboard() {
     rigs: new Map()
   });
   const smartRecommendationsEnabled = isDashboardSmartRecommendationsEnabled();
+  const forecastingEnabled = isForecastingEnabled();
   const inFlightFilterKeyRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const hasLoadedSummaryRef = useRef(false);
@@ -385,8 +410,10 @@ export function CompanyDashboard() {
       const recommendationRigId = recommendationRigName ? rigIdByName.get(recommendationRigName.toLowerCase()) || null : null;
       const rigOverrides = recommendationRigId ? { rigId: recommendationRigId } : undefined;
 
-      let takeActionHref = buildHref("/forecasting", rigOverrides);
-      let viewDetailsHref = buildHref("/spending/profit", rigOverrides);
+      const forecastingHref = buildHref("/forecasting", rigOverrides);
+      const profitHref = buildHref("/spending/profit", rigOverrides);
+      let takeActionHref = forecastingEnabled ? forecastingHref : profitHref;
+      let viewDetailsHref = forecastingEnabled ? profitHref : buildHref("/expenses", rigOverrides);
 
       if (has("inventory", "stock", "supplier", "parts", "warehouse")) {
         takeActionHref = buildHref("/inventory", rigOverrides);
@@ -396,22 +423,22 @@ export function CompanyDashboard() {
         viewDetailsHref = buildHref("/approvals");
       } else if (has("rig action", "reassign", "standby", "downtime")) {
         takeActionHref = buildHref("/maintenance", rigOverrides);
-        viewDetailsHref = buildHref("/forecasting", rigOverrides);
+        viewDetailsHref = forecastingEnabled ? forecastingHref : buildHref("/rigs", rigOverrides);
       } else if (has("forecast", "projected", "utilization")) {
-        takeActionHref = buildHref("/forecasting", rigOverrides);
-        viewDetailsHref = buildHref("/spending/profit", rigOverrides);
+        takeActionHref = forecastingEnabled ? forecastingHref : profitHref;
+        viewDetailsHref = profitHref;
       } else if (has("revenue", "billable", "contract")) {
         takeActionHref = buildHref("/spending", rigOverrides);
-        viewDetailsHref = buildHref("/spending/profit", rigOverrides);
+        viewDetailsHref = profitHref;
       } else if (has("cost", "expense", "fuel", "salary", "maintenance", "spend")) {
         takeActionHref = buildHref("/expenses", rigOverrides);
-        viewDetailsHref = buildHref("/spending/profit", rigOverrides);
+        viewDetailsHref = profitHref;
       } else if (has("loss", "profit")) {
-        takeActionHref = buildHref("/spending/profit", rigOverrides);
+        takeActionHref = profitHref;
         viewDetailsHref = buildHref("/expenses", rigOverrides);
       } else if (has("rig")) {
         takeActionHref = buildHref("/rigs", rigOverrides);
-        viewDetailsHref = buildHref("/forecasting", rigOverrides);
+        viewDetailsHref = forecastingEnabled ? forecastingHref : buildHref("/rigs", rigOverrides);
       }
 
       if (takeActionHref === viewDetailsHref) {
@@ -423,7 +450,7 @@ export function CompanyDashboard() {
         viewDetailsHref
       };
     },
-    [buildHref, rigIdByName]
+    [buildHref, forecastingEnabled, rigIdByName]
   );
   useEffect(() => {
     if (recommendationsToggleTouched) {
@@ -670,63 +697,65 @@ export function CompanyDashboard() {
             </div>
           </section>
 
-          <section className="gf-section">
-            <SectionHeader
-              title="Leaders and Forecast"
-              description="Top performers and short-horizon forecast signals."
-            />
-            <div className="gf-kpi-grid-secondary">
-              <MetricCard
-                label="Best Client"
-                value={getScopedKpiValue(summary.snapshot?.bestPerformingClient || "N/A", isFilteredEmpty)}
-                href={hasBestClientTarget ? buildHref(`/clients/${bestClientId || ""}`, { clientId: bestClientId }) : undefined}
-                disabled={!hasBestClientTarget}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+          {forecastingEnabled ? (
+            <section className="gf-section">
+              <SectionHeader
+                title="Leaders and Forecast"
+                description="Top performers and short-horizon forecast signals."
               />
-              <MetricCard
-                label="Best Rig"
-                value={getScopedKpiValue(summary.snapshot?.bestPerformingRig || "N/A", isFilteredEmpty)}
-                href={hasBestRigTarget ? buildHref(`/rigs/${bestRigId || ""}`, { rigId: bestRigId }) : undefined}
-                disabled={!hasBestRigTarget}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
-                label="Top Revenue Rig"
-                value={getScopedKpiValue(summary.snapshot?.topRevenueRig || "N/A", isFilteredEmpty)}
-                href={hasTopRevenueRigTarget ? buildHref("/spending", { rigId: topRevenueRigId }) : undefined}
-                disabled={!hasTopRevenueRigTarget}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
-                label="Forecasted Profit (7 Days)"
-                value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext7Profit ?? 0), isFilteredEmpty)}
-                tone={forecast7Tone}
-                href={buildHref("/forecasting")}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
-                label="Forecasted Profit (30 Days)"
-                value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext30Profit ?? 0), isFilteredEmpty)}
-                tone={forecast30Tone}
-                href={buildHref("/forecasting")}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
-                label="Top Forecast Rig (30 Days)"
-                value={getScopedKpiValue(summary.profitForecast?.topForecastRig || "N/A", isFilteredEmpty)}
-                href={hasTopForecastRigTarget ? buildHref("/forecasting", { rigId: topForecastRigId }) : buildHref("/forecasting")}
-                disabled={!hasTopForecastRigTarget}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
-                label="Rejected This Week"
-                value={getScopedKpiValue(String(summary.snapshot?.rejectedThisWeek ?? 0), isFilteredEmpty)}
-                tone={(summary.snapshot?.rejectedThisWeek ?? 0) > 0 ? "danger" : "good"}
-                href={buildHref("/activity-log", { action: "reject", from: startOfCurrentWeekIso(), to: todayIso() })}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-            </div>
-          </section>
+              <div className="gf-kpi-grid-secondary">
+                <MetricCard
+                  label="Best Client"
+                  value={getScopedKpiValue(summary.snapshot?.bestPerformingClient || "N/A", isFilteredEmpty)}
+                  href={hasBestClientTarget ? buildHref(`/clients/${bestClientId || ""}`, { clientId: bestClientId }) : undefined}
+                  disabled={!hasBestClientTarget}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Best Rig"
+                  value={getScopedKpiValue(summary.snapshot?.bestPerformingRig || "N/A", isFilteredEmpty)}
+                  href={hasBestRigTarget ? buildHref(`/rigs/${bestRigId || ""}`, { rigId: bestRigId }) : undefined}
+                  disabled={!hasBestRigTarget}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Top Revenue Rig"
+                  value={getScopedKpiValue(summary.snapshot?.topRevenueRig || "N/A", isFilteredEmpty)}
+                  href={hasTopRevenueRigTarget ? buildHref("/spending", { rigId: topRevenueRigId }) : undefined}
+                  disabled={!hasTopRevenueRigTarget}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Forecasted Profit (7 Days)"
+                  value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext7Profit ?? 0), isFilteredEmpty)}
+                  tone={forecast7Tone}
+                  href={buildHref("/forecasting")}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Forecasted Profit (30 Days)"
+                  value={getScopedKpiValue(formatCurrency(summary.profitForecast?.forecastNext30Profit ?? 0), isFilteredEmpty)}
+                  tone={forecast30Tone}
+                  href={buildHref("/forecasting")}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Top Forecast Rig (30 Days)"
+                  value={getScopedKpiValue(summary.profitForecast?.topForecastRig || "N/A", isFilteredEmpty)}
+                  href={hasTopForecastRigTarget ? buildHref("/forecasting", { rigId: topForecastRigId }) : buildHref("/forecasting")}
+                  disabled={!hasTopForecastRigTarget}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+                <MetricCard
+                  label="Rejected This Week"
+                  value={getScopedKpiValue(String(summary.snapshot?.rejectedThisWeek ?? 0), isFilteredEmpty)}
+                  tone={(summary.snapshot?.rejectedThisWeek ?? 0) > 0 ? "danger" : "good"}
+                  href={buildHref("/activity-log", { action: "reject", from: startOfCurrentWeekIso(), to: todayIso() })}
+                  change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+                />
+              </div>
+            </section>
+          ) : null}
         </>
       )}
 
@@ -734,7 +763,11 @@ export function CompanyDashboard() {
         <section className="gf-section">
           <SectionHeader
             title="Smart Recommendations"
-            description="Prioritized actions generated from live performance, cost, and forecast signals."
+            description={
+              forecastingEnabled
+                ? "Prioritized actions generated from live performance, cost, and forecast signals."
+                : "Prioritized actions generated from live performance, cost, and operations signals."
+            }
           />
           <CompanyDashboardRecommendationsCard
             loading={loading}
@@ -762,6 +795,7 @@ export function CompanyDashboard() {
         pushWithFilters={pushWithFilters}
         rigForecastRows={rigForecastRows}
         forecastInsight={forecastInsight}
+        forecastingEnabled={forecastingEnabled}
       />
 
       <section className="gf-section">

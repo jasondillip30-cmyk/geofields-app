@@ -34,7 +34,8 @@ export const inventoryNavChildren: NavChildItem[] = [
   { href: "/inventory", label: "Inventory Overview", permission: "inventory:view" },
   { href: "/inventory/items", label: "Items", permission: "inventory:view" },
   { href: "/inventory/stock-movements", label: "Stock Movements", permission: "inventory:view" },
-  { href: "/inventory/issues", label: "Issues", permission: "inventory:view" }
+  { href: "/inventory/suppliers", label: "Vendors", permission: "inventory:view" },
+  { href: "/inventory/locations", label: "Locations", permission: "inventory:view" }
 ];
 
 export const setupNavChildren: NavChildItem[] = [

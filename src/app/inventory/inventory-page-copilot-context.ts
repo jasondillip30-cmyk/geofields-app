@@ -33,7 +33,6 @@ type BuildInventoryCopilotContextParams = {
   showSuppliers: boolean;
   showLocations: boolean;
   overview: InventoryOverviewResponse;
-  issuesSummaryTotal: number;
   movementsLength: number;
   stockAlertRows: Array<{
     id: string;
@@ -65,7 +64,6 @@ export function buildInventoryCopilotContext({
   showSuppliers,
   showLocations,
   overview,
-  issuesSummaryTotal,
   movementsLength,
   stockAlertRows,
   items,
@@ -106,7 +104,6 @@ export function buildInventoryCopilotContext({
         { key: "inventoryValue", label: "Inventory Value", value: overview.overview.totalInventoryValue },
         { key: "lowStock", label: "Low Stock", value: overview.overview.lowStockCount },
         { key: "outOfStock", label: "Out of Stock", value: overview.overview.outOfStockCount },
-        { key: "inventoryIssues", label: "Inventory Issues", value: issuesSummaryTotal },
         { key: "movements", label: "Recent Movements", value: movementsLength }
       ];
 
@@ -182,10 +179,7 @@ export function buildInventoryCopilotContext({
         issue: issue.title,
         severity: issue.severity,
         type: issue.type,
-        suggestion: issue.suggestion,
-        href: buildHref("/inventory/issues"),
-        sectionId: "inventory-issues-section",
-        targetPageKey: "inventory-issues"
+        suggestion: issue.suggestion
       }))
     });
   }
@@ -241,23 +235,6 @@ export function buildInventoryCopilotContext({
           sectionId: "inventory-low-stock-section",
           targetPageKey: "inventory-overview"
         }))
-      : []),
-    ...(!isSingleProjectScope
-      ? filteredIssues
-          .filter((issue) => issue.severity === "HIGH" || issue.severity === "MEDIUM")
-          .slice(0, 3)
-          .map((issue) => ({
-            id: issue.id,
-            label: issue.title,
-            reason: issue.message,
-            severity: issue.severity === "HIGH" ? ("HIGH" as const) : ("MEDIUM" as const),
-            amount: null,
-            href: buildHref("/inventory/issues"),
-            issueType: issue.type,
-            sectionId: "inventory-issues-section",
-            targetPageKey: "inventory-issues",
-            confidence: issue.confidence && issue.confidence !== "NONE" ? issue.confidence : null
-          }))
       : []),
     ...filteredMovements
       .filter((movement) => movement.movementType === "OUT" && (movement.totalCost || 0) > 0)
@@ -326,13 +303,6 @@ export function buildInventoryCopilotContext({
               href: buildHref("/purchasing/receipt-follow-up"),
               reason: "Process receipts and link evidence.",
               pageKey: "inventory-receipt-intake"
-            },
-            {
-              label: "Open Inventory Issues",
-              href: buildHref("/inventory/issues"),
-              reason: "Resolve inventory data-quality risks.",
-              pageKey: "inventory-issues",
-              sectionId: "inventory-issues-section"
             }
           ]
         : [])

@@ -15,7 +15,6 @@ export const MODE_VISIBLE_NAV_LABELS: Record<WorkspaceMode, string[]> = {
     "Clients",
     "Employees",
     "Rigs",
-    "Project Operations",
     "Activity Log"
   ],
   project: [
