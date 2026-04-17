@@ -6,7 +6,9 @@ import { InventoryIssueWorkflowModal } from "@/components/inventory/inventory-is
 import { InventoryManualMovementModal } from "@/components/inventory/inventory-manual-movement-modal";
 import { ItemDetailModal } from "@/components/inventory/modals/item-detail-modal";
 import { MovementDetailModal } from "@/components/inventory/modals/movement-detail-modal";
+import { RequestUseBatchModal } from "@/components/inventory/modals/request-use-batch-modal";
 import { RequestUseModal } from "@/components/inventory/modals/request-use-modal";
+import { UsageRequestBatchDetailModal } from "@/components/inventory/modals/usage-request-batch-detail-modal";
 import type { IssueOperationalContext } from "@/components/inventory/inventory-page-utils";
 
 import type {
@@ -17,6 +19,7 @@ import type {
   InventoryLocation,
   InventoryMovementRow,
   InventorySupplier,
+  InventoryUsageBatchRow,
   MaintenanceContextOption,
   MovementFormState,
   UseRequestFormState
@@ -60,6 +63,13 @@ export function InventoryPageModals({
   requestUseModalOpen,
   closeRequestUseModal,
   submitUseRequest,
+  requestUseBatchModalOpen,
+  closeRequestUseBatchModal,
+  onUsageBatchSubmitted,
+  openRequestUseBatchModal,
+  usageBatchDetailModalOpen,
+  closeUsageBatchDetailModal,
+  selectedUsageBatch,
   continueToPurchaseRequest,
   useRequestForm,
   setUseRequestForm,
@@ -112,6 +122,13 @@ export function InventoryPageModals({
   requestUseModalOpen: boolean;
   closeRequestUseModal: () => void;
   submitUseRequest: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  requestUseBatchModalOpen: boolean;
+  closeRequestUseBatchModal: () => void;
+  onUsageBatchSubmitted: () => Promise<void>;
+  openRequestUseBatchModal: () => void;
+  usageBatchDetailModalOpen: boolean;
+  closeUsageBatchDetailModal: () => void;
+  selectedUsageBatch: InventoryUsageBatchRow | null;
   continueToPurchaseRequest: () => void;
   useRequestForm: UseRequestFormState;
   setUseRequestForm: Dispatch<SetStateAction<UseRequestFormState>>;
@@ -148,6 +165,7 @@ export function InventoryPageModals({
         canManage={canManage}
         isProjectLocked={isSingleProjectScope}
         onRequestUse={openRequestUseModal}
+        onRequestBatch={openRequestUseBatchModal}
         onToggleStatus={onToggleItemStatus}
       />
 
@@ -192,6 +210,26 @@ export function InventoryPageModals({
         item={selectedItemDetails?.data || null}
         submitting={submittingUseRequest}
         errorMessage={useRequestError}
+      />
+
+      <RequestUseBatchModal
+        open={requestUseBatchModalOpen}
+        onClose={closeRequestUseBatchModal}
+        onSubmitted={onUsageBatchSubmitted}
+        projects={projects}
+        rigs={rigs}
+        lockedProject={isSingleProjectScope ? scopedProject : null}
+        maintenanceRequests={openMaintenanceRequests}
+        breakdownReports={openBreakdownReports}
+        locations={locations}
+        preselectedItem={selectedItemDetails?.data || null}
+      />
+
+      <UsageRequestBatchDetailModal
+        open={usageBatchDetailModalOpen}
+        onClose={closeUsageBatchDetailModal}
+        batch={selectedUsageBatch}
+        onOpenMovement={openMovementDetail}
       />
     </>
   );

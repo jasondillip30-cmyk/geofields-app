@@ -8,6 +8,7 @@ import { formatCurrency, formatNumber } from "@/lib/utils";
 import type {
   ApprovalTab,
   DrillingApprovalRow,
+  InventoryUsageBatchApprovalRow,
   InventoryUsageApprovalRow,
   ReceiptSubmissionApprovalRow,
   RequisitionApprovalRow
@@ -20,6 +21,7 @@ import {
   formatReceiptSubmissionDate,
   formatRequisitionContext,
   formatRequisitionType,
+  getInventoryBatchPendingDate,
   getDrillingPendingDate,
   getInventoryPendingDate,
   getPendingAgeMeta,
@@ -62,11 +64,13 @@ export interface ApprovalsWorkspaceCardProps {
   requisitionNotes: Record<string, string>;
   drillingNotes: Record<string, string>;
   sortedDrillingRows: DrillingApprovalRow[];
+  sortedInventoryBatchRows: InventoryUsageBatchApprovalRow[];
   sortedInventoryRows: InventoryUsageApprovalRow[];
   sortedReceiptSubmissionRows: ReceiptSubmissionApprovalRow[];
   sortedRequisitionRows: RequisitionApprovalRow[];
   onDrillingNoteChange: (rowId: string, value: string) => void;
   onDrillingStatus: (rowId: string, action: "approve" | "reject") => void;
+  onOpenInventoryBatchReview: (batchId: string) => void;
   onInventoryNoteChange: (rowId: string, value: string) => void;
   onInventoryStatus: (rowId: string, action: "approve" | "reject") => void;
   onRequisitionNoteChange: (rowId: string, value: string) => void;
@@ -91,11 +95,13 @@ export function ApprovalsWorkspaceCard({
   requisitionNotes,
   drillingNotes,
   sortedDrillingRows,
+  sortedInventoryBatchRows,
   sortedInventoryRows,
   sortedReceiptSubmissionRows,
   sortedRequisitionRows,
   onDrillingNoteChange,
   onDrillingStatus,
+  onOpenInventoryBatchReview,
   onInventoryNoteChange,
   onInventoryStatus,
   onRequisitionNoteChange,
@@ -470,7 +476,7 @@ export function ApprovalsWorkspaceCard({
           )
         ) : loading ? (
           <p className="text-sm text-ink-600">Loading inventory usage requests...</p>
-        ) : sortedInventoryRows.length === 0 ? (
+        ) : sortedInventoryRows.length === 0 && sortedInventoryBatchRows.length === 0 ? (
           <p className="text-sm text-ink-600">No pending inventory usage requests for current filters.</p>
         ) : (
           <div
@@ -486,88 +492,173 @@ export function ApprovalsWorkspaceCard({
                 View only: approval actions are available to ADMIN and MANAGER roles.
               </div>
             ) : null}
-            <div className="max-h-[620px] overflow-auto">
-              <DataTable
-                compact
-                columns={[
-                  "Date",
-                  "Requested For",
-                  "Item",
-                  "Qty",
-                  "Pending Age",
-                  "Requester",
-                  "Project",
-                  "Rig/Location",
-                  "Maintenance",
-                  "Reason",
-                  "Status",
-                  "Comment",
-                  "Actions"
-                ]}
-                rows={sortedInventoryRows.map((row) => {
-                  const pendingMeta = getPendingAgeMeta(getInventoryPendingDate(row));
-                  return [
-                    new Date(row.createdAt).toISOString().slice(0, 10),
-                    row.requestedForDate ? new Date(row.requestedForDate).toISOString().slice(0, 10) : "-",
-                    row.item.name,
-                    <span key={`${row.id}-qty`} className="inline-block w-full text-right">
-                      {formatNumber(row.quantity)}
-                    </span>,
-                    pendingMeta ? <StatusBadge key={`${row.id}-pending`} label={pendingMeta.label} tone={pendingMeta.badgeTone} /> : "-",
-                    row.requestedBy?.fullName || "-",
-                    row.project?.name || "-",
-                    row.rig?.rigCode || row.location?.name || "-",
-                    row.maintenanceRequest?.requestCode || "-",
-                    <span key={`${row.id}-reason`} className="inline-block max-w-[300px]">
-                      {row.reason}
-                    </span>,
-                    <div key={`${row.id}-status`} className="flex flex-wrap items-center gap-1">
-                      <StatusBadge
-                        label={row.status === "PENDING" ? "Pending" : "Submitted"}
-                        tone={row.status === "PENDING" ? "amber" : "blue"}
-                      />
-                      {inventoryRowWarnings[row.id] ? <StatusBadge label={inventoryRowWarnings[row.id]} tone="red" /> : null}
-                    </div>,
-                    <input
-                      key={`${row.id}-comment`}
-                      type="text"
-                      value={inventoryNotes[row.id] || ""}
-                      onChange={(event) => onInventoryNoteChange(row.id, event.target.value)}
-                      placeholder="Optional note"
-                      className="w-52 rounded-md border border-slate-200 px-2 py-1 text-xs"
-                    />,
-                    <div key={`${row.id}-actions`} className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={!canManageInventoryApprovals || actingRowId === row.id}
-                        onClick={() => onInventoryStatus(row.id, "approve")}
-                        className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        disabled={!canManageInventoryApprovals || actingRowId === row.id}
-                        onClick={() => onInventoryStatus(row.id, "reject")}
-                        className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  ];
-                })}
-                rowIds={sortedInventoryRows.map((row) => `ai-focus-${makeApprovalFocusRowId("inventory", row.id)}`)}
-                rowClassNames={sortedInventoryRows.map((row) => {
-                  const pendingMeta = getPendingAgeMeta(getInventoryPendingDate(row));
-                  if (focusedRowId === makeApprovalFocusRowId("inventory", row.id)) {
-                    return "bg-indigo-50 ring-1 ring-inset ring-indigo-200";
-                  }
-                  if (inventoryRowWarnings[row.id]) {
-                    return "bg-amber-50/55";
-                  }
-                  return pendingMeta?.rowClass || "";
-                })}
-              />
+            <div className="max-h-[620px] overflow-auto space-y-3 p-3">
+              <div className="rounded-lg border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Single-item usage requests
+                  </h4>
+                </div>
+                {sortedInventoryRows.length === 0 ? (
+                  <p className="px-3 py-3 text-sm text-ink-600">
+                    No pending single-item usage requests for current filters.
+                  </p>
+                ) : (
+                  <DataTable
+                    compact
+                    columns={[
+                      "Date",
+                      "Requested For",
+                      "Item",
+                      "Qty",
+                      "Pending Age",
+                      "Requester",
+                      "Project",
+                      "Rig/Location",
+                      "Maintenance",
+                      "Reason",
+                      "Status",
+                      "Comment",
+                      "Actions"
+                    ]}
+                    rows={sortedInventoryRows.map((row) => {
+                      const pendingMeta = getPendingAgeMeta(getInventoryPendingDate(row));
+                      return [
+                        new Date(row.createdAt).toISOString().slice(0, 10),
+                        row.requestedForDate ? new Date(row.requestedForDate).toISOString().slice(0, 10) : "-",
+                        row.item.name,
+                        <span key={`${row.id}-qty`} className="inline-block w-full text-right">
+                          {formatNumber(row.quantity)}
+                        </span>,
+                        pendingMeta ? <StatusBadge key={`${row.id}-pending`} label={pendingMeta.label} tone={pendingMeta.badgeTone} /> : "-",
+                        row.requestedBy?.fullName || "-",
+                        row.project?.name || "-",
+                        row.rig?.rigCode || row.location?.name || "-",
+                        row.maintenanceRequest?.requestCode || "-",
+                        <span key={`${row.id}-reason`} className="inline-block max-w-[300px]">
+                          {row.reason}
+                        </span>,
+                        <div key={`${row.id}-status`} className="flex flex-wrap items-center gap-1">
+                          <StatusBadge
+                            label={row.status === "PENDING" ? "Pending" : "Submitted"}
+                            tone={row.status === "PENDING" ? "amber" : "blue"}
+                          />
+                          {inventoryRowWarnings[row.id] ? <StatusBadge label={inventoryRowWarnings[row.id]} tone="red" /> : null}
+                        </div>,
+                        <input
+                          key={`${row.id}-comment`}
+                          type="text"
+                          value={inventoryNotes[row.id] || ""}
+                          onChange={(event) => onInventoryNoteChange(row.id, event.target.value)}
+                          placeholder="Optional note"
+                          className="w-52 rounded-md border border-slate-200 px-2 py-1 text-xs"
+                        />,
+                        <div key={`${row.id}-actions`} className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={!canManageInventoryApprovals || actingRowId === row.id}
+                            onClick={() => onInventoryStatus(row.id, "approve")}
+                            className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={!canManageInventoryApprovals || actingRowId === row.id}
+                            onClick={() => onInventoryStatus(row.id, "reject")}
+                            className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      ];
+                    })}
+                    rowIds={sortedInventoryRows.map((row) => `ai-focus-${makeApprovalFocusRowId("inventory", row.id)}`)}
+                    rowClassNames={sortedInventoryRows.map((row) => {
+                      const pendingMeta = getPendingAgeMeta(getInventoryPendingDate(row));
+                      if (focusedRowId === makeApprovalFocusRowId("inventory", row.id)) {
+                        return "bg-indigo-50 ring-1 ring-inset ring-indigo-200";
+                      }
+                      if (inventoryRowWarnings[row.id]) {
+                        return "bg-amber-50/55";
+                      }
+                      return pendingMeta?.rowClass || "";
+                    })}
+                  />
+                )}
+              </div>
+
+              <div className="rounded-lg border border-slate-200 bg-white">
+                <div className="border-b border-slate-200 bg-slate-50 px-3 py-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Batch usage requests
+                  </h4>
+                </div>
+                {sortedInventoryBatchRows.length === 0 ? (
+                  <p className="px-3 py-3 text-sm text-ink-600">
+                    No pending batch usage requests for current filters.
+                  </p>
+                ) : (
+                  <DataTable
+                    compact
+                    columns={[
+                      "Submitted",
+                      "Batch",
+                      "Lines",
+                      "Pending Age",
+                      "Requester",
+                      "Project",
+                      "Rig/Location",
+                      "Status",
+                      "Review"
+                    ]}
+                    rows={sortedInventoryBatchRows.map((row) => {
+                      const pendingMeta = getPendingAgeMeta(getInventoryBatchPendingDate(row));
+                      return [
+                        new Date(row.createdAt).toISOString().slice(0, 10),
+                        row.batchCode,
+                        `${formatNumber(row.summary.lineCount)} lines • Qty ${formatNumber(row.summary.totalQuantity)}`,
+                        pendingMeta ? (
+                          <StatusBadge
+                            key={`${row.id}-pending`}
+                            label={pendingMeta.label}
+                            tone={pendingMeta.badgeTone}
+                          />
+                        ) : (
+                          "-"
+                        ),
+                        row.requestedBy?.fullName || "-",
+                        row.project?.name || "-",
+                        row.rig?.rigCode || row.location?.name || "-",
+                        <StatusBadge
+                          key={`${row.id}-status`}
+                          label={row.status === "PENDING" ? "Pending" : "Submitted"}
+                          tone={row.status === "PENDING" ? "amber" : "blue"}
+                        />,
+                        <button
+                          key={`${row.id}-review`}
+                          type="button"
+                          disabled={!canManageInventoryApprovals || actingRowId === row.id}
+                          onClick={() => onOpenInventoryBatchReview(row.id)}
+                          className="rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Review batch
+                        </button>
+                      ];
+                    })}
+                    rowIds={sortedInventoryBatchRows.map(
+                      (row) => `ai-focus-${makeApprovalFocusRowId("inventory", row.id)}`
+                    )}
+                    rowClassNames={sortedInventoryBatchRows.map((row) => {
+                      const pendingMeta = getPendingAgeMeta(getInventoryBatchPendingDate(row));
+                      if (focusedRowId === makeApprovalFocusRowId("inventory", row.id)) {
+                        return "bg-indigo-50 ring-1 ring-inset ring-indigo-200";
+                      }
+                      return pendingMeta?.rowClass || "";
+                    })}
+                  />
+                )}
+              </div>
             </div>
           </div>
         )}

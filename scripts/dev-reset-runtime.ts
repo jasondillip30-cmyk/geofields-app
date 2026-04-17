@@ -14,6 +14,7 @@ async function main() {
   const host = resolveHost(process.env.HOST);
   const distDir = resolveDistDir(port);
   const legacyPortDistDir = `.next-dev-${port}`;
+  const legacySharedDistDir = ".next";
   normalizeTrackedTsconfigIncludes(process.cwd());
 
   console.log(`[dev:reset] target host: ${host}`);
@@ -47,6 +48,10 @@ async function main() {
     await rm(legacyPortDistDir, { recursive: true, force: true });
     console.log(`[dev:reset] removed ${legacyPortDistDir}`);
   }
+  if (legacySharedDistDir !== distDir) {
+    await rm(legacySharedDistDir, { recursive: true, force: true });
+    console.log(`[dev:reset] removed ${legacySharedDistDir}`);
+  }
 
   await startDevServerWithRetry({
     host,
@@ -72,12 +77,12 @@ function resolveHost(raw: string | undefined) {
   return trimmed;
 }
 
-function resolveDistDir(_port: number) {
+function resolveDistDir(port: number) {
   const configured = process.env.NEXT_DIST_DIR?.trim();
   if (configured) {
     return configured;
   }
-  return ".next";
+  return `.next-dev-${port}`;
 }
 
 function findPortPids(port: number) {

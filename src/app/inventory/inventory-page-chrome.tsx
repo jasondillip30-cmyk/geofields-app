@@ -22,6 +22,7 @@ interface InventoryPageChromeProps {
   canManage: boolean;
   onOpenCreateItem: () => void;
   onOpenManualAdjustment: () => void;
+  onOpenRequestBatch: () => void;
   children: ReactNode;
 }
 
@@ -40,6 +41,7 @@ export function InventoryPageChrome({
   canManage,
   onOpenCreateItem,
   onOpenManualAdjustment,
+  onOpenRequestBatch,
   children
 }: InventoryPageChromeProps) {
   return (
@@ -97,6 +99,13 @@ export function InventoryPageChrome({
                     Complete Purchase
                   </Link>
                 ) : null}
+                <button
+                  type="button"
+                  onClick={onOpenRequestBatch}
+                  className="gf-btn-primary px-3 py-1.5 text-xs"
+                >
+                  Request Batch
+                </button>
               </>
             ) : showMovements ? (
               <>

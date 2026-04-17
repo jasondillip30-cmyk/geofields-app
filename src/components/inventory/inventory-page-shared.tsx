@@ -94,16 +94,30 @@ export function StockSeverityBadge({ severity }: { severity: "CRITICAL" | "LOW" 
   );
 }
 
-export function UsageRequestStatusBadge({ status }: { status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED" }) {
+export function UsageRequestStatusBadge({
+  status
+}: {
+  status:
+    | "SUBMITTED"
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "PARTIALLY_APPROVED";
+}) {
   const toneClass =
     status === "APPROVED"
       ? "border-emerald-300 bg-emerald-100 text-emerald-800"
       : status === "REJECTED"
         ? "border-red-300 bg-red-100 text-red-800"
+        : status === "PARTIALLY_APPROVED"
+          ? "border-amber-300 bg-amber-100 text-amber-800"
         : status === "PENDING"
           ? "border-amber-300 bg-amber-100 text-amber-800"
           : "border-blue-300 bg-blue-100 text-blue-800";
-  const label = status.charAt(0) + status.slice(1).toLowerCase();
+  const label =
+    status === "PARTIALLY_APPROVED"
+      ? "Partially Approved"
+      : status.charAt(0) + status.slice(1).toLowerCase();
 
   return (
     <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${toneClass}`}>

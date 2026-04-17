@@ -124,7 +124,7 @@ export default function SpendingCategoryDetailPage() {
   }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
 
   return (
-    <AccessGate
+    <AccessGate denyBehavior="redirect"
       permission="finance:view"
       fallback={
         <Card title="Finance permission required">

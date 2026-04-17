@@ -591,6 +591,7 @@ async function testWorkspaceLaunchRoundTrip(page: Page, baseUrl: string) {
   const markerBeforeExpand = launchLayer.locator(`button[data-marker-id="${markerProjectId}"]`);
   const shortLabel = (await markerBeforeExpand.innerText()).trim();
   assert(shortLabel.length > 0, "Collapsed marker must render a short label.");
+  const urlBeforeExpandClick = page.url();
   await page.evaluate((markerId) => {
     if (!markerId) {
       return;
@@ -610,8 +611,8 @@ async function testWorkspaceLaunchRoundTrip(page: Page, baseUrl: string) {
     { timeout: 8_000 }
   );
   assert(
-    page.url().includes("launch=1"),
-    "First marker click should only expand full name, not navigate."
+    page.url() === urlBeforeExpandClick || !page.url().includes("/spending?"),
+    "First marker click should only expand full name, not navigate to project operations."
   );
   const expandedLabel = (await markerBeforeExpand.innerText()).trim();
   assert(
@@ -663,11 +664,63 @@ async function testWorkspaceLaunchRoundTrip(page: Page, baseUrl: string) {
   await page.mouse.wheel(0, -130);
   await launchLayer.waitFor({ state: "visible", timeout: 30_000 });
   await page.getByText("Choose your operations view").first().waitFor({ state: "visible", timeout: 30_000 });
+  await launchLayer.getByTestId("workspace-launch-swipe-handle").waitFor({ state: "visible", timeout: 30_000 });
 
-  await launchLayer.hover();
-  for (let step = 0; step < 8; step += 1) {
-    await page.mouse.wheel(0, 220);
-    await page.waitForTimeout(25);
+  const launchLayerBox = await launchLayer.boundingBox();
+  assert(Boolean(launchLayerBox), "Workspace launch layer bounds unavailable for gesture verification.");
+  const viewport = page.viewportSize();
+  const isMobileViewport = (viewport?.width || 0) < 1024;
+
+  if (launchLayerBox && isMobileViewport) {
+    await page.mouse.move(launchLayerBox.x + launchLayerBox.width / 2, launchLayerBox.y + 36);
+    for (let step = 0; step < 8; step += 1) {
+      await page.mouse.wheel(0, 220);
+      await page.waitForTimeout(25);
+    }
+    await page.waitForTimeout(240);
+    assert(
+      await launchLayer.isVisible(),
+      "Mobile launch layer should ignore unlock wheel intent that starts outside the bottom swipe zone."
+    );
+    assert(
+      page.url().includes("/spending?workspace=project"),
+      "Top-zone wheel in mobile viewport must not unlock out of project view."
+    );
+  }
+
+  if (launchLayerBox && isMobileViewport) {
+    await page.evaluate((clientY) => {
+      const launchLayer = document.querySelector("[data-testid='workspace-launch-layer']");
+      if (!launchLayer) {
+        return;
+      }
+      for (let step = 0; step < 8; step += 1) {
+        launchLayer.dispatchEvent(
+          new WheelEvent("wheel", {
+            deltaY: 220,
+            clientY,
+            bubbles: true,
+            cancelable: true
+          })
+        );
+      }
+    }, Math.floor(launchLayerBox.y + launchLayerBox.height - 16));
+    await page.waitForTimeout(240);
+  } else if (launchLayerBox) {
+    await page.mouse.move(
+      launchLayerBox.x + launchLayerBox.width / 2,
+      launchLayerBox.y + launchLayerBox.height - 16
+    );
+    for (let step = 0; step < 8; step += 1) {
+      await page.mouse.wheel(0, 220);
+      await page.waitForTimeout(25);
+    }
+  } else {
+    await launchLayer.hover();
+    for (let step = 0; step < 8; step += 1) {
+      await page.mouse.wheel(0, 220);
+      await page.waitForTimeout(25);
+    }
   }
   await waitFor(
     () => !page.url().includes("launch=1") && !page.url().includes("/spending?workspace=project"),

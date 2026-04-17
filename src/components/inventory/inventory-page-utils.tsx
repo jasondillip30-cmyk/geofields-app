@@ -81,6 +81,16 @@ type UsageRequestLike = {
   decisionNote?: string | null;
 };
 
+type UsageBatchLike = {
+  status: string;
+  decidedAt?: string | null;
+  summary: {
+    approved: number;
+    rejected: number;
+    submitted: number;
+  };
+};
+
 export function toIsoDate(value: string) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -98,6 +108,23 @@ export function formatUsageRequestDecision(requestRow: UsageRequestLike) {
     return requestRow.decisionNote?.trim() ? `Rejected • ${requestRow.decisionNote}` : "Rejected by approver";
   }
   if (requestRow.status === "PENDING") {
+    return "Pending manager review";
+  }
+  return "Awaiting review";
+}
+
+export function formatUsageBatchDecision(batchRow: UsageBatchLike) {
+  if (batchRow.status === "APPROVED") {
+    const decidedOn = batchRow.decidedAt ? toIsoDate(batchRow.decidedAt) : "recently";
+    return `Approved ${decidedOn} • ${batchRow.summary.approved} line(s)`;
+  }
+  if (batchRow.status === "PARTIALLY_APPROVED") {
+    return `Partially approved • ${batchRow.summary.approved} approved / ${batchRow.summary.rejected} rejected`;
+  }
+  if (batchRow.status === "REJECTED") {
+    return `Rejected • ${batchRow.summary.rejected} line(s)`;
+  }
+  if (batchRow.status === "PENDING") {
     return "Pending manager review";
   }
   return "Awaiting review";

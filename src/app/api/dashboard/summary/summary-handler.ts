@@ -194,7 +194,17 @@ export async function GET(request: NextRequest) {
       () =>
         prisma.project.findMany({
           include: {
-            assignedRig: { select: { id: true, rigCode: true } }
+            assignedRig: { select: { id: true, rigCode: true } },
+            billingRateItems: {
+              where: { isActive: true },
+              select: {
+                unit: true,
+                drillingStageLabel: true,
+                depthBandStartM: true,
+                depthBandEndM: true,
+                isActive: true
+              }
+            }
           },
           orderBy: { createdAt: "desc" }
         }),

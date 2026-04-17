@@ -98,7 +98,7 @@ export default function ClientsPage() {
   }
 
   return (
-    <AccessGate permission="clients:view">
+    <AccessGate denyBehavior="redirect" permission="clients:view">
       <div className="gf-page-stack">
         <FilterScopeBanner
           filters={filters}

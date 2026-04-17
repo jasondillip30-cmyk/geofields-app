@@ -382,6 +382,79 @@ export interface InventoryUsageRequestRow {
   decidedBy: { id: string; fullName: string; role: string } | null;
 }
 
+export type InventoryUsageBatchStatus =
+  | "SUBMITTED"
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "PARTIALLY_APPROVED";
+
+export type InventoryUsageBatchLineStatus = "SUBMITTED" | "APPROVED" | "REJECTED";
+
+export interface InventoryUsageBatchLineRow {
+  id: string;
+  quantity: number;
+  status: InventoryUsageBatchLineStatus;
+  decisionNote: string | null;
+  approvedMovementId: string | null;
+  item: {
+    id: string;
+    name: string;
+    sku: string;
+    status: "ACTIVE" | "INACTIVE";
+    unitCost: number;
+    quantityInStock: number;
+  } | null;
+}
+
+export interface InventoryUsageBatchRow {
+  id: string;
+  batchCode: string;
+  contextType: "DRILLING_REPORT" | "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+  reasonType: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "OTHER";
+  reason: string;
+  status: InventoryUsageBatchStatus;
+  requestedForDate: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  projectId: string | null;
+  rigId: string | null;
+  maintenanceRequestId: string | null;
+  breakdownReportId: string | null;
+  locationId: string | null;
+  project: { id: string; name: string; clientId: string } | null;
+  rig: { id: string; rigCode: string } | null;
+  location: { id: string; name: string } | null;
+  maintenanceRequest: { id: string; requestCode: string; status: string } | null;
+  breakdownReport: {
+    id: string;
+    title: string;
+    status: string;
+    severity: string;
+  } | null;
+  requestedBy: { id: string; fullName: string; role: string } | null;
+  decidedBy: { id: string; fullName: string; role: string } | null;
+  summary: {
+    lineCount: number;
+    approved: number;
+    rejected: number;
+    submitted: number;
+    totalQuantity: number;
+  };
+  lines: InventoryUsageBatchLineRow[];
+}
+
+export interface UseRequestBatchFormState {
+  reasonType: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "";
+  reasonDetails: string;
+  maintenanceRigId: string;
+  projectId: string;
+  rigId: string;
+  maintenanceRequestId: string;
+  breakdownReportId: string;
+  locationId: string;
+}
+
 export const defaultOverview: InventoryOverviewResponse = {
   projectLinked: null,
   overview: {

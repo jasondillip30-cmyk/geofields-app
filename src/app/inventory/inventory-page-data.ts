@@ -12,6 +12,7 @@ import {
   type InventoryMovementRow,
   type InventoryOverviewResponse,
   type InventorySupplier,
+  type InventoryUsageBatchRow,
   type InventoryUsageRequestRow,
   type ItemFormState,
   type MaintenanceContextOption
@@ -207,17 +208,76 @@ export async function loadInventoryWorkspaceData({
   };
 }
 
-export async function loadMyUsageRequestsMine(status: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") {
+export async function loadMyUsageRequestsMine({
+  status,
+  filters
+}: {
+  status: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
+  filters?: InventoryFilterScope;
+}) {
   const query = new URLSearchParams();
   query.set("scope", "mine");
   query.set("requestedBy", "me");
   query.set("status", status);
+  if (filters?.from) query.set("from", filters.from);
+  if (filters?.to) query.set("to", filters.to);
+  if (filters?.projectId && filters.projectId !== "all") {
+    query.set("projectId", filters.projectId);
+  } else {
+    if (filters?.clientId && filters.clientId !== "all") {
+      query.set("clientId", filters.clientId);
+    }
+    if (filters?.rigId && filters.rigId !== "all") {
+      query.set("rigId", filters.rigId);
+    }
+  }
 
   const response = await fetch(`/api/inventory/usage-requests?${query.toString()}`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(await readApiError(response, "Failed to load your usage requests."));
   }
   const payload = (await response.json()) as { data?: InventoryUsageRequestRow[] };
+  return payload.data || [];
+}
+
+export async function loadMyUsageRequestBatchesMine({
+  status,
+  filters
+}: {
+  status:
+    | "ALL"
+    | "SUBMITTED"
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "PARTIALLY_APPROVED";
+  filters?: InventoryFilterScope;
+}) {
+  const query = new URLSearchParams();
+  query.set("scope", "mine");
+  query.set("requestedBy", "me");
+  query.set("status", status);
+  if (filters?.from) query.set("from", filters.from);
+  if (filters?.to) query.set("to", filters.to);
+  if (filters?.projectId && filters.projectId !== "all") {
+    query.set("projectId", filters.projectId);
+  } else {
+    if (filters?.clientId && filters.clientId !== "all") {
+      query.set("clientId", filters.clientId);
+    }
+    if (filters?.rigId && filters.rigId !== "all") {
+      query.set("rigId", filters.rigId);
+    }
+  }
+
+  const response = await fetch(
+    `/api/inventory/usage-requests/batches?${query.toString()}`,
+    { cache: "no-store" }
+  );
+  if (!response.ok) {
+    throw new Error(await readApiError(response, "Failed to load your usage batch requests."));
+  }
+  const payload = (await response.json()) as { data?: InventoryUsageBatchRow[] };
   return payload.data || [];
 }
 

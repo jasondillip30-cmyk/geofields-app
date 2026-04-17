@@ -118,7 +118,7 @@ function ExpensesPageContent() {
 
   if (filters.workspaceMode === "project" && filters.projectId === "all") {
     return (
-      <AccessGate permission="expenses:manual">
+      <AccessGate denyBehavior="redirect" permission="expenses:manual">
         <div className="gf-page-stack">
           <Card title="Select one project">
             <p className="text-sm text-ink-600">

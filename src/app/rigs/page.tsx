@@ -472,7 +472,7 @@ export default function RigsPage() {
   }
 
   return (
-    <AccessGate permission="rigs:view">
+    <AccessGate denyBehavior="redirect" permission="rigs:view">
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} rigLabel={selectedRigLabel} />
 

@@ -24,6 +24,7 @@ import {
   loadInventoryMovementDetailsById,
   loadInventoryReferenceData,
   loadInventoryWorkspaceData,
+  loadMyUsageRequestBatchesMine,
   loadMyUsageRequestsMine
 } from "./inventory-page-data";
 import { InventoryItemsSection, InventoryManualEntrySection, InventoryOverviewSection, InventorySuppliersLocationsSection, UsageRequestToast } from "./inventory-page-panels";
@@ -42,6 +43,7 @@ import {
   type InventoryMovementRow,
   type InventoryOverviewResponse,
   type InventorySupplier,
+  type InventoryUsageBatchRow,
   type InventoryUsageRequestRow,
   type IssueTriageFilter,
   type ItemFormState,
@@ -144,14 +146,25 @@ function InventoryPageContent() {
   const [manualMovementModalOpen, setManualMovementModalOpen] = useState(false);
   const [showCreateItemForm, setShowCreateItemForm] = useState(false);
   const [requestUseModalOpen, setRequestUseModalOpen] = useState(false);
+  const [requestUseBatchModalOpen, setRequestUseBatchModalOpen] = useState(false);
+  const [usageBatchDetailModalOpen, setUsageBatchDetailModalOpen] = useState(false);
   const [submittingUseRequest, setSubmittingUseRequest] = useState(false);
   const [useRequestError, setUseRequestError] = useState<string | null>(null);
   const [usageRequestsLoading, setUsageRequestsLoading] = useState(false);
+  const [usageBatchRequestsLoading, setUsageBatchRequestsLoading] = useState(false);
   const [usageRequestStatusFilter, setUsageRequestStatusFilter] = useState<
     "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED"
   >("ALL");
+  const [usageBatchStatusFilter, setUsageBatchStatusFilter] = useState<
+    "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED" | "PARTIALLY_APPROVED"
+  >("ALL");
   const [myUsageRequests, setMyUsageRequests] = useState<InventoryUsageRequestRow[]>([]);
+  const [myUsageBatchRequests, setMyUsageBatchRequests] = useState<InventoryUsageBatchRow[]>([]);
+  const [selectedUsageBatchId, setSelectedUsageBatchId] = useState("");
+  const [selectedUsageBatchDetails, setSelectedUsageBatchDetails] =
+    useState<InventoryUsageBatchRow | null>(null);
   const usageRequestFetchSeq = useRef(0);
+  const usageBatchFetchSeq = useRef(0);
   const [usageRequestToast, setUsageRequestToast] = useState<{
     tone: "success" | "error";
     message: string;
@@ -339,24 +352,86 @@ function InventoryPageContent() {
 
   const loadMyUsageRequests = useCallback(
     async (statusOverride?: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => {
-    const requestSeq = ++usageRequestFetchSeq.current;
-    setUsageRequestsLoading(true);
-    try {
-      const payload = await loadMyUsageRequestsMine(statusOverride || usageRequestStatusFilter);
-      if (requestSeq === usageRequestFetchSeq.current) {
-        setMyUsageRequests(payload || []);
+      const requestSeq = ++usageRequestFetchSeq.current;
+      setUsageRequestsLoading(true);
+      try {
+        const payload = await loadMyUsageRequestsMine({
+          status: statusOverride || usageRequestStatusFilter,
+          filters: {
+            from: filters.from,
+            to: filters.to,
+            clientId: filters.clientId,
+            rigId: filters.rigId,
+            projectId: filters.projectId
+          }
+        });
+        if (requestSeq === usageRequestFetchSeq.current) {
+          setMyUsageRequests(payload || []);
+        }
+      } catch {
+        if (requestSeq === usageRequestFetchSeq.current) {
+          setMyUsageRequests([]);
+        }
+      } finally {
+        if (requestSeq === usageRequestFetchSeq.current) {
+          setUsageRequestsLoading(false);
+        }
       }
-    } catch {
-      if (requestSeq === usageRequestFetchSeq.current) {
-        setMyUsageRequests([]);
-      }
-    } finally {
-      if (requestSeq === usageRequestFetchSeq.current) {
-        setUsageRequestsLoading(false);
-      }
-    }
     },
-    [usageRequestStatusFilter]
+    [
+      filters.clientId,
+      filters.from,
+      filters.projectId,
+      filters.rigId,
+      filters.to,
+      usageRequestStatusFilter
+    ]
+  );
+
+  const loadMyUsageBatchRequests = useCallback(
+    async (
+      statusOverride?:
+        | "ALL"
+        | "SUBMITTED"
+        | "PENDING"
+        | "APPROVED"
+        | "REJECTED"
+        | "PARTIALLY_APPROVED"
+    ) => {
+      const requestSeq = ++usageBatchFetchSeq.current;
+      setUsageBatchRequestsLoading(true);
+      try {
+        const payload = await loadMyUsageRequestBatchesMine({
+          status: statusOverride || usageBatchStatusFilter,
+          filters: {
+            from: filters.from,
+            to: filters.to,
+            clientId: filters.clientId,
+            rigId: filters.rigId,
+            projectId: filters.projectId
+          }
+        });
+        if (requestSeq === usageBatchFetchSeq.current) {
+          setMyUsageBatchRequests(payload || []);
+        }
+      } catch {
+        if (requestSeq === usageBatchFetchSeq.current) {
+          setMyUsageBatchRequests([]);
+        }
+      } finally {
+        if (requestSeq === usageBatchFetchSeq.current) {
+          setUsageBatchRequestsLoading(false);
+        }
+      }
+    },
+    [
+      filters.clientId,
+      filters.from,
+      filters.projectId,
+      filters.rigId,
+      filters.to,
+      usageBatchStatusFilter
+    ]
   );
 
   const loadSelectedItemDetails = useCallback(async () => {
@@ -381,6 +456,31 @@ function InventoryPageContent() {
       setSelectedMovementDetails(null);
     }
   }, [selectedMovementId]);
+
+  const loadSelectedUsageBatchDetails = useCallback(async () => {
+    if (!selectedUsageBatchId) {
+      setSelectedUsageBatchDetails(null);
+      return;
+    }
+    try {
+      const query = new URLSearchParams();
+      query.set("scope", "mine");
+      query.set("requestedBy", "me");
+      const response = await fetch(
+        `/api/inventory/usage-requests/batches/${selectedUsageBatchId}?${query.toString()}`,
+        { cache: "no-store" }
+      );
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(response, "Failed to load usage batch details.")
+        );
+      }
+      const payload = (await response.json()) as { data?: InventoryUsageBatchRow };
+      setSelectedUsageBatchDetails(payload.data || null);
+    } catch {
+      setSelectedUsageBatchDetails(null);
+    }
+  }, [selectedUsageBatchId]);
 
   const loadCategorySuggestion = useCallback(async () => {
     setSuggestionLoading(true);
@@ -421,12 +521,20 @@ function InventoryPageContent() {
   }, [loadMyUsageRequests]);
 
   useEffect(() => {
+    void loadMyUsageBatchRequests();
+  }, [loadMyUsageBatchRequests]);
+
+  useEffect(() => {
     void loadSelectedItemDetails();
   }, [loadSelectedItemDetails]);
 
   useEffect(() => {
     void loadSelectedMovementDetails();
   }, [loadSelectedMovementDetails]);
+
+  useEffect(() => {
+    void loadSelectedUsageBatchDetails();
+  }, [loadSelectedUsageBatchDetails]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -564,6 +672,40 @@ function InventoryPageContent() {
     routerPush: (href) => router.push(href),
     readApiError
   });
+
+  const openRequestUseBatchModal = useCallback(() => {
+    setUseRequestError(null);
+    setRequestUseBatchModalOpen(true);
+  }, []);
+
+  const closeRequestUseBatchModal = useCallback(() => {
+    setRequestUseBatchModalOpen(false);
+  }, []);
+
+  const handleUsageBatchSubmitted = useCallback(async () => {
+    setNotice("Inventory usage batch submitted for approval.");
+    setUsageRequestToast({
+      tone: "success",
+      message: "Usage batch request submitted."
+    });
+    setUsageBatchStatusFilter("ALL");
+    await Promise.all([
+      loadMyUsageRequests("ALL"),
+      loadMyUsageBatchRequests("ALL")
+    ]);
+  }, [loadMyUsageBatchRequests, loadMyUsageRequests]);
+
+  const openUsageBatchDetail = useCallback((batchId: string) => {
+    if (!batchId) {
+      return;
+    }
+    setSelectedUsageBatchId(batchId);
+    setUsageBatchDetailModalOpen(true);
+  }, []);
+
+  const closeUsageBatchDetail = useCallback(() => {
+    setUsageBatchDetailModalOpen(false);
+  }, []);
 
   const handleToggleSelectedItemStatus = useCallback(
     async (nextStatus: "ACTIVE" | "INACTIVE") => {
@@ -738,7 +880,7 @@ function InventoryPageContent() {
   }, [filteredIssues, selectedIssueId, showIssues, triageQueueIssues]);
 
   return (
-    <AccessGate permission="inventory:view">
+    <AccessGate denyBehavior="redirect" permission="inventory:view">
       <InventoryPageChrome
         notice={notice}
         errorMessage={errorMessage}
@@ -754,6 +896,7 @@ function InventoryPageContent() {
         canManage={canManage}
         onOpenCreateItem={() => router.push("/inventory/items?create=1")}
         onOpenManualAdjustment={() => setManualMovementModalOpen(true)}
+        onOpenRequestBatch={openRequestUseBatchModal}
       >
 
         <InventoryOverviewSection
@@ -841,6 +984,11 @@ function InventoryPageContent() {
           setUsageRequestStatusFilter={setUsageRequestStatusFilter}
           usageRequestsLoading={usageRequestsLoading}
           myUsageRequests={myUsageRequests}
+          usageBatchStatusFilter={usageBatchStatusFilter}
+          setUsageBatchStatusFilter={setUsageBatchStatusFilter}
+          usageBatchRequestsLoading={usageBatchRequestsLoading}
+          myUsageBatchRequests={myUsageBatchRequests}
+          openUsageBatchDetail={openUsageBatchDetail}
           openMovementDetail={openMovementDetail}
         />
 
@@ -917,6 +1065,7 @@ function InventoryPageContent() {
           canManage={canManage}
           isSingleProjectScope={isSingleProjectScope}
           openRequestUseModal={openRequestUseModal}
+          openRequestUseBatchModal={openRequestUseBatchModal}
           onToggleItemStatus={handleToggleSelectedItemStatus}
           manualMovementModalOpen={manualMovementModalOpen}
           onCloseManualMovementModal={() => setManualMovementModalOpen(false)}
@@ -939,6 +1088,12 @@ function InventoryPageContent() {
           requestUseModalOpen={requestUseModalOpen}
           closeRequestUseModal={closeRequestUseModal}
           submitUseRequest={submitUseRequest}
+          requestUseBatchModalOpen={requestUseBatchModalOpen}
+          closeRequestUseBatchModal={closeRequestUseBatchModal}
+          onUsageBatchSubmitted={handleUsageBatchSubmitted}
+          usageBatchDetailModalOpen={usageBatchDetailModalOpen}
+          closeUsageBatchDetailModal={closeUsageBatchDetail}
+          selectedUsageBatch={selectedUsageBatchDetails}
           continueToPurchaseRequest={continueToPurchaseRequest}
           useRequestForm={useRequestForm}
           setUseRequestForm={setUseRequestForm}
@@ -955,7 +1110,7 @@ function InventoryPageContent() {
 
 function InventoryPageFallback() {
   return (
-    <AccessGate permission="inventory:view">
+    <AccessGate denyBehavior="redirect" permission="inventory:view">
       <div className="space-y-3">
         <p className="text-sm text-ink-600">Loading inventory workspace...</p>
       </div>

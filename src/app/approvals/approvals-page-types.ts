@@ -35,6 +35,47 @@ export interface InventoryUsageApprovalRow {
   requestedBy: { id: string; fullName: string; role: string } | null;
 }
 
+export interface InventoryUsageBatchApprovalLineRow {
+  id: string;
+  quantity: number;
+  status: "SUBMITTED" | "APPROVED" | "REJECTED";
+  decisionNote: string | null;
+  approvedMovementId: string | null;
+  item: {
+    id: string;
+    name: string;
+    sku: string;
+    status: "ACTIVE" | "INACTIVE";
+    quantityInStock: number;
+    unitCost: number;
+  } | null;
+}
+
+export interface InventoryUsageBatchApprovalRow {
+  id: string;
+  batchCode: string;
+  contextType: "DRILLING_REPORT" | "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+  reasonType: "DRILLING_REPORT" | "MAINTENANCE" | "BREAKDOWN" | "OTHER";
+  reason: string;
+  status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED" | "PARTIALLY_APPROVED";
+  createdAt: string;
+  decidedAt: string | null;
+  project: { id: string; name: string; clientId: string } | null;
+  rig: { id: string; rigCode: string } | null;
+  maintenanceRequest: { id: string; requestCode: string; status: string } | null;
+  location: { id: string; name: string } | null;
+  requestedBy: { id: string; fullName: string; role: string } | null;
+  decidedBy: { id: string; fullName: string; role: string } | null;
+  summary: {
+    lineCount: number;
+    approved: number;
+    rejected: number;
+    submitted: number;
+    totalQuantity: number;
+  };
+  lines: InventoryUsageBatchApprovalLineRow[];
+}
+
 export interface ReceiptSubmissionApprovalRow {
   id: string;
   reportDate: string;

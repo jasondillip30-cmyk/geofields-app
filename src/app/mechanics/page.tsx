@@ -112,7 +112,7 @@ export default function MechanicsPage() {
   );
 
   return (
-    <AccessGate permission="mechanics:view">
+    <AccessGate denyBehavior="redirect" permission="mechanics:view">
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} />
 

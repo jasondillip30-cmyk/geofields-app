@@ -59,7 +59,7 @@ export default function EmployeesPage() {
   }
 
   return (
-    <AccessGate permission="employees:view">
+    <AccessGate denyBehavior="redirect" permission="employees:view">
       <div className="gf-page-stack">
         <section className="grid gap-3 md:grid-cols-4">
           <MetricCard label="Total Employees" value={String(employees.length)} />

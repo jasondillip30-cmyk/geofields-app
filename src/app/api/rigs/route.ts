@@ -44,6 +44,7 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
+  const status = parseRigStatusFilter(request.nextUrl.searchParams.get("status"));
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
@@ -73,7 +74,10 @@ export async function GET(request: NextRequest) {
     }
 
     const rigs = await prisma.rig.findMany({
-      where: { id: { in: uniqueRigIds } }
+      where: {
+        id: { in: uniqueRigIds },
+        ...(status ? { status } : {})
+      }
     });
     const rigById = new Map(rigs.map((entry) => [entry.id, entry]));
     const orderedRigs = uniqueRigIds
@@ -87,6 +91,7 @@ export async function GET(request: NextRequest) {
   const hasScopeFilter = Boolean(clientId || rigId || hasDateFilter);
 
   const rigs = await prisma.rig.findMany({
+    where: status ? { status } : undefined,
     orderBy: { createdAt: "desc" }
   });
 
@@ -255,6 +260,17 @@ function parseDateOrNull(value: string | null, endOfDay = false) {
 
 function nullableFilter(value: string | null) {
   return value && value !== "all" ? value : null;
+}
+
+function parseRigStatusFilter(value: string | null) {
+  if (!value || value === "all") {
+    return null;
+  }
+  const upper = value.toUpperCase();
+  if (upper in RigStatus) {
+    return RigStatus[upper as keyof typeof RigStatus];
+  }
+  return null;
 }
 
 function parseNonNegativeNumber(value: unknown) {

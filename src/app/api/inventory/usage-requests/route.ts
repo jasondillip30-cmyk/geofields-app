@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
   const rigId = nullableFilter(request.nextUrl.searchParams.get("rigId"));
+  const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const itemId = nullableFilter(request.nextUrl.searchParams.get("itemId"));
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
@@ -91,6 +92,7 @@ export async function GET(request: NextRequest) {
     statusWhere,
     ...(mineOnly ? [{ requestedById: auth.session.userId }] : []),
     ...(rigId ? [{ rigId }] : []),
+    ...(projectId ? [{ projectId }] : []),
     ...(clientId ? [{ project: { clientId } }] : []),
     ...(itemId ? [{ itemId }] : []),
     ...(maintenanceRequestId ? [{ maintenanceRequestId }] : []),
@@ -121,6 +123,7 @@ export async function GET(request: NextRequest) {
         mineOnly,
         statusFilter,
         rigId,
+        projectId,
         clientId,
         itemId,
         maintenanceRequestId,

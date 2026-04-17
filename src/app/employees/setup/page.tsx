@@ -138,7 +138,7 @@ function EmployeeSetupPageContent() {
   }
 
   return (
-    <AccessGate permission="employees:manage">
+    <AccessGate denyBehavior="redirect" permission="employees:manage">
       <div className="gf-page-stack">
         <section className="flex items-center justify-between">
           <h1 className="text-xl font-semibold text-ink-900">{form.id ? "Edit Employee" : "Create Employee"}</h1>

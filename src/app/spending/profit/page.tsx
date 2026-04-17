@@ -200,7 +200,7 @@ export default function SpendingProfitPage() {
   }, [summary.costBreakdownByCategory, summary.totals.totalExpenses, summary.totals.totalProfit, summary.totals.totalRevenue]);
 
   return (
-    <AccessGate
+    <AccessGate denyBehavior="redirect"
       permission="finance:view"
       fallback={
         <Card title="Finance permission required">

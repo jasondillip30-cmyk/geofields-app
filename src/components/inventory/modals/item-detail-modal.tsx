@@ -17,6 +17,7 @@ export function ItemDetailModal({
   canManage,
   isProjectLocked,
   onRequestUse,
+  onRequestBatch,
   onToggleStatus
 }: {
   open: boolean;
@@ -26,6 +27,7 @@ export function ItemDetailModal({
   canManage: boolean;
   isProjectLocked: boolean;
   onRequestUse: () => void;
+  onRequestBatch: () => void;
   onToggleStatus: (nextStatus: "ACTIVE" | "INACTIVE") => Promise<void>;
 }) {
   const [isMounted, setIsMounted] = useState(open);
@@ -123,6 +125,13 @@ export function ItemDetailModal({
                   ) : null}
                   <button type="button" onClick={onRequestUse} className="gf-btn-primary px-3 py-1.5 text-xs">
                     Request Use
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onRequestBatch}
+                    className="gf-btn-secondary px-3 py-1.5 text-xs"
+                  >
+                    Request Batch
                   </button>
                   {canManage && !isProjectLocked && (
                     <button
@@ -259,4 +268,3 @@ export function ItemDetailModal({
     </div>
   );
 }
-

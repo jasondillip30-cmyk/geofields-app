@@ -314,7 +314,7 @@ export function CompanyDashboard() {
         project.location,
         project.status,
         project.assignedRigCode,
-        `${project.contractRatePerM}/m`
+        project.contractRateLabel || `${project.contractRatePerM}/m`
       ]),
     [summary.projectAssignments]
   );

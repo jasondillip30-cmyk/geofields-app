@@ -571,7 +571,7 @@ export default function ForecastingPage() {
   }, [focusedSectionId]);
 
   return (
-    <AccessGate permission="finance:view">
+    <AccessGate denyBehavior="redirect" permission="finance:view">
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} />
 

@@ -8,6 +8,7 @@ import { formatCurrency, formatNumber } from "@/lib/utils";
 import type {
   ApprovalRowKind,
   ApprovalTab,
+  InventoryUsageBatchApprovalRow,
   DrillingApprovalRow,
   InventoryUsageApprovalRow,
   PendingAgeBucket,
@@ -210,6 +211,10 @@ export function getInventoryPendingDate(row: InventoryUsageApprovalRow) {
   return row.createdAt;
 }
 
+export function getInventoryBatchPendingDate(row: InventoryUsageBatchApprovalRow) {
+  return row.createdAt;
+}
+
 export function getReceiptSubmissionPendingDate(row: ReceiptSubmissionApprovalRow) {
   return row.submittedAt || row.reportDate;
 }
@@ -366,12 +371,14 @@ export function buildApprovalsHref(
 
 export function buildApprovalCandidates({
   sortedDrillingRows,
+  sortedInventoryBatchRows,
   sortedInventoryRows,
   sortedReceiptSubmissionRows,
   sortedRequisitionRows,
   buildHref
 }: {
   sortedDrillingRows: DrillingApprovalRow[];
+  sortedInventoryBatchRows: InventoryUsageBatchApprovalRow[];
   sortedInventoryRows: InventoryUsageApprovalRow[];
   sortedReceiptSubmissionRows: ReceiptSubmissionApprovalRow[];
   sortedRequisitionRows: RequisitionApprovalRow[];
@@ -463,6 +470,42 @@ export function buildApprovalCandidates({
       sectionId: APPROVAL_SECTION_IDS.inventory,
       actionLabel: "Review approval",
       inspectHint: "Inspect stock impact, request reason, and linked rig/project before decision.",
+      targetPageKey: "approvals",
+      score
+    });
+  });
+
+  sortedInventoryBatchRows.slice(0, 8).forEach((row) => {
+    const pendingAt = getInventoryBatchPendingDate(row);
+    const pendingMeta = getPendingAgeMeta(pendingAt);
+    const pendingTimestamp = toPendingTimestamp(pendingAt);
+    const hasMaintenanceLink = Boolean(row.maintenanceRequest?.id);
+    const severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" = hasMaintenanceLink
+      ? "HIGH"
+      : pendingMeta?.bucket === "OVER_3_DAYS"
+        ? "HIGH"
+        : pendingMeta?.bucket === "OVER_24_HOURS"
+          ? "MEDIUM"
+          : "LOW";
+    const score =
+      (severity === "HIGH" ? 36 : severity === "MEDIUM" ? 20 : 12) +
+      (hasMaintenanceLink ? 20 : 0) +
+      Math.min(24, row.summary.lineCount * 2) +
+      Math.min(14, Math.round(row.summary.totalQuantity));
+    candidates.push({
+      id: `approval-inventory-batch-${row.id}`,
+      label: `Inventory batch • ${row.batchCode}`,
+      reason: `${formatNumber(row.summary.lineCount)} lines requested${hasMaintenanceLink ? " for linked maintenance" : ""}; pending ${pendingMeta?.label || "review"}.`,
+      severity,
+      amount: row.summary.totalQuantity,
+      pendingAt,
+      pendingTimestamp,
+      issueType: "APPROVAL_BACKLOG",
+      href: buildHref({ tab: "inventory" }),
+      targetId: makeApprovalFocusRowId("inventory", row.id),
+      sectionId: APPROVAL_SECTION_IDS.inventory,
+      actionLabel: "Review approval",
+      inspectHint: "Inspect each line decision, stock impact, and rejection reasons before submit.",
       targetPageKey: "approvals",
       score
     });

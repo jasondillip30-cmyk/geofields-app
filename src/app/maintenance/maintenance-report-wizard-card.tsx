@@ -28,6 +28,7 @@ interface MaintenanceReportWizardCardProps {
   scopedProject: ProjectOption | null;
   scopedProjectRigOptions: RigOption[];
   rigOptionsForForm: RigOption[];
+  stepOneBlockingMessage: string | null;
   loadingRefs: boolean;
   form: MaintenanceFormState;
   setForm: Dispatch<SetStateAction<MaintenanceFormState>>;
@@ -118,9 +119,9 @@ export function MaintenanceReportWizardCard(props: MaintenanceReportWizardCardPr
               </div>
             )}
 
-            {props.isSingleProjectScope && props.scopedProjectRigOptions.length === 0 ? (
+            {props.stepOneBlockingMessage ? (
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                This project has no assigned rig. Assign a rig to the project first.
+                {props.stepOneBlockingMessage}
               </div>
             ) : props.rigOptionsForForm.length === 1 ? (
               <label className="text-sm text-ink-700">

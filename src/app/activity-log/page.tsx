@@ -100,7 +100,7 @@ export default function ActivityLogPage() {
   );
 
   return (
-    <AccessGate permission="reports:view">
+    <AccessGate denyBehavior="redirect" permission="reports:view">
       <div className="gf-page-stack">
         <Card title="Activity Log" subtitle="Full audit trail for operational and financial actions.">
           <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">

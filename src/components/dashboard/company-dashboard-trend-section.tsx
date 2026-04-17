@@ -49,10 +49,6 @@ export function CompanyDashboardTrendSection({
         title="Monthly Revenue vs Expenses"
         subtitle="Financial trend and margin view"
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/spending");
-        }}
-        clickLabel="Open revenue details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading financial trend...</p>
@@ -70,21 +66,6 @@ export function CompanyDashboardTrendSection({
             xKey="label"
             yKey="revenue"
             secondaryKey="expenses"
-            clickHint="Click to view revenue details"
-            onBackgroundClick={() => {
-              pushWithFilters("/spending");
-            }}
-            onElementClick={(entry) => {
-              const range = getBucketDateRange(entry.bucketStart);
-              if (!range) {
-                pushWithFilters("/spending");
-                return;
-              }
-              pushWithFilters("/spending", {
-                from: range.from,
-                to: range.to
-              });
-            }}
           />
         )}
       </Card>
@@ -93,10 +74,6 @@ export function CompanyDashboardTrendSection({
         title="Profit Trend Over Time"
         subtitle="Revenue minus expenses by period"
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/spending/profit");
-        }}
-        clickLabel="Open profit details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading profit trend...</p>
@@ -118,21 +95,6 @@ export function CompanyDashboardTrendSection({
             xKey="label"
             yKey="profit"
             color="#0f766e"
-            clickHint="Click to view profit details"
-            onBackgroundClick={() => {
-              pushWithFilters("/spending/profit");
-            }}
-            onElementClick={(entry) => {
-              const range = getBucketDateRange(entry.bucketStart);
-              if (!range) {
-                pushWithFilters("/spending/profit");
-                return;
-              }
-              pushWithFilters("/spending/profit", {
-                from: range.from,
-                to: range.to
-              });
-            }}
           />
         )}
       </Card>
@@ -190,10 +152,6 @@ export function CompanyDashboardTrendSection({
         title="Revenue by Client"
         subtitle="Client contribution to revenue in the selected scope."
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/spending");
-        }}
-        clickLabel="Open revenue by client details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading...</p>
@@ -210,14 +168,14 @@ export function CompanyDashboardTrendSection({
             data={summary.revenueByClient}
             xKey="name"
             yKey="revenue"
-            clickHint="Click client bar to drill into revenue"
-            onBackgroundClick={() => {
-              pushWithFilters("/spending");
-            }}
+            clickHint="Tap once to preview, tap again to open client details"
+            requireTouchConfirm
+            getTouchConfirmKey={(entry) => entry.id || entry.name}
             onElementClick={(entry) => {
-              pushWithFilters("/spending", {
-                clientId: entry.id || null
-              });
+              if (!entry.id) {
+                return;
+              }
+              pushWithFilters(`/clients/${encodeURIComponent(entry.id)}`);
             }}
           />
         )}
@@ -227,10 +185,6 @@ export function CompanyDashboardTrendSection({
         title="Revenue by Rig"
         subtitle="Rig revenue distribution for the current filters."
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/spending");
-        }}
-        clickLabel="Open revenue by rig details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading...</p>
@@ -248,14 +202,14 @@ export function CompanyDashboardTrendSection({
             xKey="name"
             yKey="revenue"
             color="#0f766e"
-            clickHint="Click rig bar to drill into revenue"
-            onBackgroundClick={() => {
-              pushWithFilters("/spending");
-            }}
+            clickHint="Tap once to preview, tap again to open rig details"
+            requireTouchConfirm
+            getTouchConfirmKey={(entry) => entry.id || entry.name}
             onElementClick={(entry) => {
-              pushWithFilters("/spending", {
-                rigId: entry.id || null
-              });
+              if (!entry.id) {
+                return;
+              }
+              pushWithFilters(`/rigs/${encodeURIComponent(entry.id)}`);
             }}
           />
         )}
@@ -265,10 +219,6 @@ export function CompanyDashboardTrendSection({
         title="Meters Drilled Trend"
         subtitle="Drilling output trend by selected period."
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/drilling-reports");
-        }}
-        clickLabel="Open drilling report details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading...</p>
@@ -286,21 +236,6 @@ export function CompanyDashboardTrendSection({
             xKey="label"
             yKey="meters"
             color="#1c3d8e"
-            clickHint="Click to open drilling reports"
-            onBackgroundClick={() => {
-              pushWithFilters("/drilling-reports");
-            }}
-            onElementClick={(entry) => {
-              const range = getBucketDateRange(entry.bucketStart);
-              if (!range) {
-                pushWithFilters("/drilling-reports");
-                return;
-              }
-              pushWithFilters("/drilling-reports", {
-                from: range.from,
-                to: range.to
-              });
-            }}
           />
         )}
       </Card>
@@ -309,10 +244,6 @@ export function CompanyDashboardTrendSection({
         title="Active vs Idle vs Maintenance"
         subtitle="Current rig utilization status mix."
         className="transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/rigs");
-        }}
-        clickLabel="Open rig status details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading...</p>
@@ -329,15 +260,6 @@ export function CompanyDashboardTrendSection({
             data={summary.rigStatusData}
             nameKey="status"
             valueKey="value"
-            clickHint="Click status slice to view rigs"
-            onBackgroundClick={() => {
-              pushWithFilters("/rigs");
-            }}
-            onElementClick={(entry) => {
-              pushWithFilters("/rigs", {
-                status: entry.status
-              });
-            }}
           />
         )}
       </Card>
@@ -346,10 +268,6 @@ export function CompanyDashboardTrendSection({
         title="Expense Breakdown by Category"
         subtitle="Category-level expense concentrations."
         className="xl:col-span-2 transition-shadow hover:shadow-md"
-        onClick={() => {
-          pushWithFilters("/expenses");
-        }}
-        clickLabel="Open expense breakdown details"
       >
         {loading ? (
           <p className="text-sm text-ink-600">Loading...</p>
@@ -367,15 +285,6 @@ export function CompanyDashboardTrendSection({
             xKey="category"
             yKey="amount"
             color="#f59e0b"
-            clickHint="Click category bar to drill into expenses"
-            onBackgroundClick={() => {
-              pushWithFilters("/expenses");
-            }}
-            onElementClick={(entry) => {
-              pushWithFilters("/expenses", {
-                category: entry.category
-              });
-            }}
           />
         )}
       </Card>

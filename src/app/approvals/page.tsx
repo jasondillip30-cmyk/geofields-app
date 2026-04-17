@@ -21,6 +21,7 @@ import {
 import { REQUISITION_APPROVAL_QUEUE_STATUS } from "@/lib/requisition-lifecycle";
 import { formatCurrency } from "@/lib/utils";
 import { ApprovalsWorkspaceCard } from "./approvals-workspace-card";
+import { InventoryUsageBatchReviewModal } from "./inventory-usage-batch-review-modal";
 import { buildApprovalWorkflowAssist } from "./approvals-page-assist";
 import {
   mapReceiptSubmissionRows,
@@ -29,6 +30,7 @@ import {
 import {
   type ApprovalTab,
   type DrillingApprovalRow,
+  type InventoryUsageBatchApprovalRow,
   type InventoryUsageApprovalRow,
   type ReceiptSubmissionApprovalRow,
   type RequisitionApprovalRow
@@ -39,6 +41,7 @@ import {
   buildApprovalCandidates,
   buildApprovalsHref,
   formatRequisitionType,
+  getInventoryBatchPendingDate,
   getDrillingPendingDate,
   getInventoryPendingDate,
   getPendingAgeMeta,
@@ -61,6 +64,7 @@ export default function ApprovalsPage() {
   const [drillingRows, setDrillingRows] = useState<DrillingApprovalRow[]>([]);
   const [requisitionRows, setRequisitionRows] = useState<RequisitionApprovalRow[]>([]);
   const [inventoryRows, setInventoryRows] = useState<InventoryUsageApprovalRow[]>([]);
+  const [inventoryBatchRows, setInventoryBatchRows] = useState<InventoryUsageBatchApprovalRow[]>([]);
   const [receiptSubmissionRows, setReceiptSubmissionRows] = useState<ReceiptSubmissionApprovalRow[]>([]);
   const [drillingNotes, setDrillingNotes] = useState<Record<string, string>>({});
   const [requisitionNotes, setRequisitionNotes] = useState<Record<string, string>>({});
@@ -71,6 +75,10 @@ export default function ApprovalsPage() {
     tone: "success" | "error";
     message: string;
   } | null>(null);
+  const [inventoryBatchReviewOpen, setInventoryBatchReviewOpen] = useState(false);
+  const [selectedInventoryBatchId, setSelectedInventoryBatchId] = useState("");
+  const [selectedInventoryBatch, setSelectedInventoryBatch] =
+    useState<InventoryUsageBatchApprovalRow | null>(null);
   const [actingRowId, setActingRowId] = useState<string | null>(null);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
@@ -122,6 +130,20 @@ export default function ApprovalsPage() {
     });
   }, [filters.clientId, filters.from, filters.rigId, filters.to]);
 
+  const loadInventoryBatchApprovals = useCallback(async () => {
+    const search = new URLSearchParams();
+    if (filters.from) search.set("from", filters.from);
+    if (filters.to) search.set("to", filters.to);
+    if (filters.clientId !== "all") search.set("clientId", filters.clientId);
+    if (filters.rigId !== "all") search.set("rigId", filters.rigId);
+    const response = await fetch(
+      `/api/inventory/usage-requests/batches?${search.toString()}`,
+      { cache: "no-store" }
+    );
+    const payload = response.ok ? await response.json() : { data: [] };
+    setInventoryBatchRows(payload.data || []);
+  }, [filters.clientId, filters.from, filters.rigId, filters.to]);
+
   const loadReceiptSubmissionApprovals = useCallback(async () => {
     const search = new URLSearchParams();
     if (filters.from) search.set("from", filters.from);
@@ -146,6 +168,7 @@ export default function ApprovalsPage() {
         loadRequisitionApprovals(),
         loadDrillingApprovals(),
         loadInventoryApprovals(),
+        loadInventoryBatchApprovals(),
         loadReceiptSubmissionApprovals()
       ]);
       const failure = results.find(
@@ -161,7 +184,13 @@ export default function ApprovalsPage() {
     } finally {
       setLoading(false);
     }
-  }, [loadDrillingApprovals, loadInventoryApprovals, loadReceiptSubmissionApprovals, loadRequisitionApprovals]);
+  }, [
+    loadDrillingApprovals,
+    loadInventoryApprovals,
+    loadInventoryBatchApprovals,
+    loadReceiptSubmissionApprovals,
+    loadRequisitionApprovals
+  ]);
 
   useEffect(() => {
     void refreshApprovalsWorkspace();
@@ -196,8 +225,14 @@ export default function ApprovalsPage() {
     if (drillingRig) {
       return drillingRig;
     }
+    const batchRig =
+      inventoryBatchRows.find((entry) => entry.rig?.id === filters.rigId)?.rig?.rigCode ||
+      null;
+    if (batchRig) {
+      return batchRig;
+    }
     return inventoryRows.find((entry) => entry.rig?.id === filters.rigId)?.rig?.rigCode || null;
-  }, [drillingRows, filters.rigId, inventoryRows]);
+  }, [drillingRows, filters.rigId, inventoryBatchRows, inventoryRows]);
 
   const updateRequisitionStatus = useCallback(
     async (requisitionId: string, action: "approve" | "reject") => {
@@ -373,6 +408,134 @@ export default function ApprovalsPage() {
     [canManageInventoryApprovals, inventoryNotes, refreshApprovalsWorkspace]
   );
 
+  const openInventoryBatchReview = useCallback((batchId: string) => {
+    if (!batchId) {
+      return;
+    }
+    setSelectedInventoryBatchId(batchId);
+    setInventoryBatchReviewOpen(true);
+  }, []);
+
+  const closeInventoryBatchReview = useCallback(() => {
+    setInventoryBatchReviewOpen(false);
+    setSelectedInventoryBatchId("");
+    setSelectedInventoryBatch(null);
+  }, []);
+
+  useEffect(() => {
+    if (!inventoryBatchReviewOpen || !selectedInventoryBatchId) {
+      setSelectedInventoryBatch(null);
+      return;
+    }
+    let ignore = false;
+    const query = new URLSearchParams();
+    if (filters.from) query.set("from", filters.from);
+    if (filters.to) query.set("to", filters.to);
+    if (filters.clientId !== "all") query.set("clientId", filters.clientId);
+    if (filters.rigId !== "all") query.set("rigId", filters.rigId);
+
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/inventory/usage-requests/batches/${selectedInventoryBatchId}?${query.toString()}`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) {
+          throw new Error(await readApiError(response, "Failed to load usage batch detail."));
+        }
+        const payload = (await response.json()) as {
+          data?: InventoryUsageBatchApprovalRow;
+        };
+        if (!ignore) {
+          setSelectedInventoryBatch(payload.data || null);
+        }
+      } catch (error) {
+        if (!ignore) {
+          setSelectedInventoryBatch(null);
+          setInventoryActionError(
+            error instanceof Error ? error.message : "Failed to load usage batch detail."
+          );
+        }
+      }
+    })();
+
+    return () => {
+      ignore = true;
+    };
+  }, [
+    filters.clientId,
+    filters.from,
+    filters.rigId,
+    filters.to,
+    inventoryBatchReviewOpen,
+    selectedInventoryBatchId
+  ]);
+
+  const submitInventoryBatchDecisions = useCallback(
+    async (
+      decisions: Array<{
+        lineId: string;
+        action: "approve" | "reject";
+        note?: string;
+      }>
+    ) => {
+      if (!canManageInventoryApprovals) {
+        const message =
+          "You do not have permission to approve or reject inventory usage batches.";
+        setInventoryActionError(message);
+        setInventoryActionToast({ tone: "error", message });
+        return;
+      }
+      if (!selectedInventoryBatchId) {
+        const message = "No usage batch selected.";
+        setInventoryActionError(message);
+        setInventoryActionToast({ tone: "error", message });
+        return;
+      }
+      setInventoryActionError(null);
+      setActingRowId(selectedInventoryBatchId);
+      try {
+        const response = await fetch(
+          `/api/inventory/usage-requests/batches/${selectedInventoryBatchId}/decision`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ decisions })
+          }
+        );
+        if (!response.ok) {
+          throw new Error(
+            await readApiError(
+              response,
+              "Failed to submit inventory usage batch decisions."
+            )
+          );
+        }
+        setInventoryActionToast({
+          tone: "success",
+          message: "Inventory usage batch decisions submitted."
+        });
+        setNotice("Inventory usage batch decisions submitted.");
+        setInventoryBatchReviewOpen(false);
+        setSelectedInventoryBatchId("");
+        setSelectedInventoryBatch(null);
+        await refreshApprovalsWorkspace();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Failed to submit inventory usage batch decisions.";
+        setInventoryActionError(message);
+        setInventoryActionToast({ tone: "error", message });
+      } finally {
+        setActingRowId(null);
+      }
+    },
+    [canManageInventoryApprovals, refreshApprovalsWorkspace, selectedInventoryBatchId]
+  );
+
   const sortedDrillingRows = useMemo(
     () => [...drillingRows].sort((a, b) => toPendingTimestamp(getDrillingPendingDate(a)) - toPendingTimestamp(getDrillingPendingDate(b))),
     [drillingRows]
@@ -390,6 +553,15 @@ export default function ApprovalsPage() {
         (a, b) => toPendingTimestamp(getInventoryPendingDate(a)) - toPendingTimestamp(getInventoryPendingDate(b))
       ),
     [inventoryRows]
+  );
+  const sortedInventoryBatchRows = useMemo(
+    () =>
+      [...inventoryBatchRows].sort(
+        (a, b) =>
+          toPendingTimestamp(getInventoryBatchPendingDate(a)) -
+          toPendingTimestamp(getInventoryBatchPendingDate(b))
+      ),
+    [inventoryBatchRows]
   );
   const sortedReceiptSubmissionRows = useMemo(
     () =>
@@ -415,7 +587,7 @@ export default function ApprovalsPage() {
     const counts = {
       receiptSubmissions: receiptSubmissionRows.length,
       requisitions: requisitionRows.length,
-      inventoryUsage: inventoryRows.length,
+      inventoryUsage: inventoryRows.length + inventoryBatchRows.length,
       drilling: drillingRows.length
     };
     const total =
@@ -432,6 +604,7 @@ export default function ApprovalsPage() {
       ...drillingRows.map(getDrillingPendingDate),
       ...requisitionRows.map((row) => row.submittedAt),
       ...inventoryRows.map(getInventoryPendingDate),
+      ...inventoryBatchRows.map(getInventoryBatchPendingDate),
       ...receiptSubmissionRows.map(getReceiptSubmissionPendingDate)
     ];
     for (const pendingAt of pendingDates) {
@@ -459,7 +632,13 @@ export default function ApprovalsPage() {
       buckets,
       mostAttention: attentionEntries[0] || null
     };
-  }, [drillingRows, inventoryRows, receiptSubmissionRows, requisitionRows]);
+  }, [
+    drillingRows,
+    inventoryBatchRows,
+    inventoryRows,
+    receiptSubmissionRows,
+    requisitionRows
+  ]);
 
   const buildApprovalHref = useCallback(
     (extras?: Record<string, string | null | undefined>) =>
@@ -479,12 +658,20 @@ export default function ApprovalsPage() {
     () =>
       buildApprovalCandidates({
         sortedDrillingRows,
+        sortedInventoryBatchRows,
         sortedInventoryRows,
         sortedReceiptSubmissionRows,
         sortedRequisitionRows,
         buildHref: buildApprovalHref
       }),
-    [buildApprovalHref, sortedDrillingRows, sortedInventoryRows, sortedReceiptSubmissionRows, sortedRequisitionRows]
+    [
+      buildApprovalHref,
+      sortedDrillingRows,
+      sortedInventoryBatchRows,
+      sortedInventoryRows,
+      sortedReceiptSubmissionRows,
+      sortedRequisitionRows
+    ]
   );
 
   const oldestPendingApproval = useMemo(
@@ -574,16 +761,34 @@ export default function ApprovalsPage() {
         {
           key: "approvals-inventory-usage",
           title: "Pending Inventory Usage Approvals",
-          rowCount: sortedInventoryRows.length,
+          rowCount: sortedInventoryRows.length + sortedInventoryBatchRows.length,
           columns: ["item", "qty", "rig", "project", "pendingHours"],
-          rows: sortedInventoryRows.slice(0, 8).map((row) => ({
-            id: makeApprovalFocusRowId("inventory", row.id),
-            item: row.item.name,
-            qty: row.quantity,
-            rig: row.rig?.rigCode || row.location?.name || "Unlinked",
-            project: row.project?.name || "Unlinked",
-            pendingHours: Math.max(0, (Date.now() - toPendingTimestamp(getInventoryPendingDate(row))) / (1000 * 60 * 60))
-          }))
+          rows: [
+            ...sortedInventoryRows.slice(0, 6).map((row) => ({
+              id: makeApprovalFocusRowId("inventory", row.id),
+              item: row.item.name,
+              qty: row.quantity,
+              rig: row.rig?.rigCode || row.location?.name || "Unlinked",
+              project: row.project?.name || "Unlinked",
+              pendingHours: Math.max(
+                0,
+                (Date.now() - toPendingTimestamp(getInventoryPendingDate(row))) /
+                  (1000 * 60 * 60)
+              )
+            })),
+            ...sortedInventoryBatchRows.slice(0, 2).map((row) => ({
+              id: makeApprovalFocusRowId("inventory", row.id),
+              item: `${row.batchCode} (batch)`,
+              qty: row.summary.totalQuantity,
+              rig: row.rig?.rigCode || row.location?.name || "Unlinked",
+              project: row.project?.name || "Unlinked",
+              pendingHours: Math.max(
+                0,
+                (Date.now() - toPendingTimestamp(getInventoryBatchPendingDate(row))) /
+                  (1000 * 60 * 60)
+              )
+            }))
+          ]
         }
       ],
       priorityItems: [
@@ -732,6 +937,7 @@ export default function ApprovalsPage() {
       pendingSummary.counts.requisitions,
       pendingSummary.counts.receiptSubmissions,
       pendingSummary.total,
+      sortedInventoryBatchRows,
       sortedInventoryRows,
       sortedRequisitionRows,
       sortedReceiptSubmissionRows
@@ -829,7 +1035,7 @@ export default function ApprovalsPage() {
   );
 
   return (
-    <AccessGate permission="reports:view">
+    <AccessGate denyBehavior="redirect" permission="reports:view">
       <div className="gf-page-stack">
         {notice && (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
@@ -897,6 +1103,7 @@ export default function ApprovalsPage() {
           requisitionNotes={requisitionNotes}
           drillingNotes={drillingNotes}
           sortedDrillingRows={sortedDrillingRows}
+          sortedInventoryBatchRows={sortedInventoryBatchRows}
           sortedInventoryRows={sortedInventoryRows}
           sortedReceiptSubmissionRows={sortedReceiptSubmissionRows}
           sortedRequisitionRows={sortedRequisitionRows}
@@ -907,6 +1114,7 @@ export default function ApprovalsPage() {
             }))
           }
           onDrillingStatus={(rowId, action) => void updateDrillingStatus(rowId, action)}
+          onOpenInventoryBatchReview={openInventoryBatchReview}
           onInventoryNoteChange={(rowId, value) =>
             setInventoryNotes((current) => ({
               ...current,
@@ -924,6 +1132,17 @@ export default function ApprovalsPage() {
           onTabChange={setActiveTab}
         />
         </div>
+
+        <InventoryUsageBatchReviewModal
+          open={inventoryBatchReviewOpen}
+          onClose={closeInventoryBatchReview}
+          batch={selectedInventoryBatch}
+          canManageInventoryApprovals={canManageInventoryApprovals}
+          submitting={Boolean(
+            actingRowId && selectedInventoryBatchId && actingRowId === selectedInventoryBatchId
+          )}
+          onSubmit={submitInventoryBatchDecisions}
+        />
       </div>
     </AccessGate>
   );

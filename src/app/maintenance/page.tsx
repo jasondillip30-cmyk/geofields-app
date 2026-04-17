@@ -37,7 +37,7 @@ import { canReportMaintenanceActivity } from "@/lib/auth/approval-policy";
 
 export default function MaintenancePage() {
   return (
-    <AccessGate permission="maintenance:view">
+    <AccessGate denyBehavior="redirect" permission="maintenance:view">
       <Suspense fallback={<MaintenanceWorkspaceFallback />}>
         <MaintenanceWorkspace />
       </Suspense>
@@ -65,11 +65,13 @@ function MaintenanceWorkspace() {
   const hasBreakdownPrefill = Boolean(breakdownPrefillId);
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
+  const isWorkshopMode = filters.workspaceMode === "workshop";
 
   const [wizardStep, setWizardStep] = useState<MaintenanceWizardStep>(1);
   const [form, setForm] = useState<MaintenanceFormState>(INITIAL_FORM_STATE);
   const [logFilters, setLogFilters] = useState<LogFilterState>(INITIAL_LOG_FILTERS);
-  const [rigs, setRigs] = useState<RigOption[]>([]);
+  const [allRigs, setAllRigs] = useState<RigOption[]>([]);
+  const [eligibleMaintenanceRigs, setEligibleMaintenanceRigs] = useState<RigOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [breakdowns, setBreakdowns] = useState<BreakdownOption[]>([]);
   const [rows, setRows] = useState<MaintenanceRow[]>([]);
@@ -96,8 +98,8 @@ function MaintenanceWorkspace() {
   const [rigDetailCases, setRigDetailCases] = useState<MaintenanceRow[]>([]);
 
   const selectedRig = useMemo(
-    () => rigs.find((entry) => entry.id === form.rigId) || null,
-    [form.rigId, rigs]
+    () => allRigs.find((entry) => entry.id === form.rigId) || null,
+    [allRigs, form.rigId]
   );
   const scopedProject = useMemo(
     () => projects.find((entry) => entry.id === scopeProjectId) || null,
@@ -105,14 +107,21 @@ function MaintenanceWorkspace() {
   );
   const scopedProjectRigIds = useMemo(() => getProjectRigIds(scopedProject), [scopedProject]);
   const scopedProjectRigOptions = useMemo(
-    () => rigs.filter((entry) => scopedProjectRigIds.includes(entry.id)),
-    [rigs, scopedProjectRigIds]
+    () => allRigs.filter((entry) => scopedProjectRigIds.includes(entry.id)),
+    [allRigs, scopedProjectRigIds]
+  );
+  const scopedProjectEligibleRigOptions = useMemo(
+    () => eligibleMaintenanceRigs.filter((entry) => scopedProjectRigIds.includes(entry.id)),
+    [eligibleMaintenanceRigs, scopedProjectRigIds]
   );
   const rigOptionsForForm = useMemo(
-    () => (isSingleProjectScope ? scopedProjectRigOptions : rigs),
-    [isSingleProjectScope, rigs, scopedProjectRigOptions]
+    () =>
+      isSingleProjectScope
+        ? scopedProjectEligibleRigOptions
+        : eligibleMaintenanceRigs,
+    [eligibleMaintenanceRigs, isSingleProjectScope, scopedProjectEligibleRigOptions]
   );
-  const shouldSkipRigSelectionStep = isSingleProjectScope && scopedProjectRigOptions.length === 1;
+  const shouldSkipRigSelectionStep = isSingleProjectScope && rigOptionsForForm.length === 1;
   const activeProjectForSelectedRig = useMemo(
     () =>
       projects.find(
@@ -247,23 +256,41 @@ function MaintenanceWorkspace() {
     [rigDetailCases]
   );
   const isPrefilledFromBreakdown = hasBreakdownPrefill && Boolean(form.linkedBreakdownId);
+  const stepOneBlockingMessage = useMemo(() => {
+    if (rigOptionsForForm.length > 0) {
+      return null;
+    }
+    if (isSingleProjectScope) {
+      if (!scopedProject) {
+        return "Select an active project in the top bar first.";
+      }
+      return isWorkshopMode
+        ? "No idle rigs are available for this project. Move a project rig to IDLE before reporting workshop maintenance."
+        : "This project has no assigned rig. Assign a rig to the project first.";
+    }
+    if (isWorkshopMode) {
+      return "No idle rigs are available. Move a rig to IDLE before reporting workshop maintenance.";
+    }
+    return "No rigs are available for maintenance reporting.";
+  }, [isSingleProjectScope, isWorkshopMode, rigOptionsForForm.length, scopedProject]);
   const validateMaintenanceStep = useCallback(
     (step: MaintenanceWizardStep) => {
       const baseError = validateMaintenanceFormStep(step, form);
       if (baseError) {
         return baseError;
       }
-      if (step === 1 && isSingleProjectScope) {
-        if (!scopedProject) {
-          return "Select an active project in the top bar first.";
-        }
-        if (scopedProjectRigOptions.length === 0) {
-          return "This project has no assigned rig. Assign a rig to the project first.";
+      if (step === 1 && stepOneBlockingMessage) {
+        return stepOneBlockingMessage;
+      }
+      if (step === 1 && form.rigId) {
+        const selectedRigEntry = allRigs.find((entry) => entry.id === form.rigId);
+        if (selectedRigEntry && selectedRigEntry.status !== "IDLE") {
+          return "Only idle rigs can be reported for workshop maintenance.";
         }
       }
       return null;
     },
-    [form, isSingleProjectScope, scopedProject, scopedProjectRigOptions.length]
+    [allRigs, form, stepOneBlockingMessage]
   );
   const activeWizardStep: MaintenanceWizardStep =
     shouldSkipRigSelectionStep && wizardStep === 1 ? 2 : wizardStep;
@@ -408,7 +435,7 @@ function MaintenanceWorkspace() {
       return;
     }
     setForm((current) => {
-      const allowedRigIds = scopedProjectRigOptions.map((entry) => entry.id);
+      const allowedRigIds = rigOptionsForForm.map((entry) => entry.id);
       if (allowedRigIds.length === 1) {
         const onlyRigId = allowedRigIds[0];
         if (current.rigId === onlyRigId) {
@@ -429,7 +456,24 @@ function MaintenanceWorkspace() {
         linkedBreakdownId: ""
       };
     });
-  }, [isSingleProjectScope, scopedProjectRigOptions]);
+  }, [isSingleProjectScope, rigOptionsForForm]);
+
+  useEffect(() => {
+    setForm((current) => {
+      if (!current.rigId) {
+        return current;
+      }
+      const isStillAllowed = rigOptionsForForm.some((entry) => entry.id === current.rigId);
+      if (isStillAllowed) {
+        return current;
+      }
+      return {
+        ...current,
+        rigId: "",
+        linkedBreakdownId: ""
+      };
+    });
+  }, [rigOptionsForForm]);
 
   useEffect(() => {
     if (!shouldSkipRigSelectionStep) {
@@ -460,25 +504,36 @@ function MaintenanceWorkspace() {
       if (isSingleProjectScope) {
         breakdownsQuery.set("projectId", scopeProjectId);
       }
-      const [rigsRes, projectsRes, breakdownsRes] = await Promise.all([
+      const [rigsRes, idleRigsRes, projectsRes, breakdownsRes] = await Promise.all([
         fetch("/api/rigs", { cache: "no-store" }),
+        fetch("/api/rigs?status=IDLE", { cache: "no-store" }),
         fetch("/api/projects", { cache: "no-store" }),
         fetch(`/api/breakdowns?${breakdownsQuery.toString()}`, { cache: "no-store" })
       ]);
-      const [rigsPayload, projectsPayload, breakdownsPayload] = await Promise.all([
+      const [rigsPayload, idleRigsPayload, projectsPayload, breakdownsPayload] = await Promise.all([
         rigsRes.ok ? rigsRes.json() : Promise.resolve({ data: [] }),
+        idleRigsRes.ok ? idleRigsRes.json() : Promise.resolve({ data: [] }),
         projectsRes.ok ? projectsRes.json() : Promise.resolve({ data: [] }),
         breakdownsRes.ok ? breakdownsRes.json() : Promise.resolve({ data: [] })
       ]);
+      const mappedAllRigs: RigOption[] = Array.isArray(rigsPayload.data)
+        ? rigsPayload.data.map((entry: { id: string; rigCode: string; status: string }) => ({
+            id: entry.id,
+            rigCode: entry.rigCode,
+            status: entry.status
+          }))
+        : [];
+      const mappedIdleRigs: RigOption[] = Array.isArray(idleRigsPayload.data)
+        ? idleRigsPayload.data.map((entry: { id: string; rigCode: string; status: string }) => ({
+            id: entry.id,
+            rigCode: entry.rigCode,
+            status: entry.status
+          }))
+        : [];
 
-      setRigs(
-        Array.isArray(rigsPayload.data)
-          ? rigsPayload.data.map((entry: { id: string; rigCode: string; status: string }) => ({
-              id: entry.id,
-              rigCode: entry.rigCode,
-              status: entry.status
-            }))
-          : []
+      setAllRigs(mappedAllRigs);
+      setEligibleMaintenanceRigs(
+        (idleRigsRes.ok ? mappedIdleRigs : mappedAllRigs).filter((entry) => entry.status === "IDLE")
       );
       setProjects(
         Array.isArray(projectsPayload.data)
@@ -864,8 +919,9 @@ function MaintenanceWorkspace() {
         activeWizardStep={activeWizardStep}
         isSingleProjectScope={isSingleProjectScope}
         scopedProject={scopedProject}
-        scopedProjectRigOptions={scopedProjectRigOptions}
+        scopedProjectRigOptions={scopedProjectEligibleRigOptions}
         rigOptionsForForm={rigOptionsForForm}
+        stepOneBlockingMessage={stepOneBlockingMessage}
         loadingRefs={loadingRefs}
         form={form}
         setForm={setForm}
@@ -896,7 +952,7 @@ function MaintenanceWorkspace() {
         logFilters={logFilters}
         setLogFilters={setLogFilters}
         scopedProjectRigOptions={scopedProjectRigOptions}
-        rigs={rigs}
+        rigs={allRigs}
         loadingRows={loadingRows}
         rigHistoryRows={rigHistoryRows}
         selectedRigHistoryId={selectedRigHistoryId}

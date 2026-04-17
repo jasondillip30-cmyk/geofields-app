@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { Eye } from "lucide-react";
 
 import {
+  formatUsageBatchDecision,
   formatUsageRequestDecision,
   toIsoDate
 } from "@/components/inventory/inventory-page-utils";
@@ -20,6 +21,7 @@ import type {
   InventoryItemRow,
   InventoryLocation,
   InventorySupplier,
+  InventoryUsageBatchRow,
   InventoryUsageRequestRow
 } from "./inventory-page-types";
 
@@ -52,6 +54,11 @@ export function InventoryItemsSection({
   setUsageRequestStatusFilter,
   usageRequestsLoading,
   myUsageRequests,
+  usageBatchStatusFilter,
+  setUsageBatchStatusFilter,
+  usageBatchRequestsLoading,
+  myUsageBatchRequests,
+  openUsageBatchDetail,
   openMovementDetail
 }: {
   showItems: boolean;
@@ -90,6 +97,21 @@ export function InventoryItemsSection({
   >;
   usageRequestsLoading: boolean;
   myUsageRequests: InventoryUsageRequestRow[];
+  usageBatchStatusFilter:
+    | "ALL"
+    | "SUBMITTED"
+    | "PENDING"
+    | "APPROVED"
+    | "REJECTED"
+    | "PARTIALLY_APPROVED";
+  setUsageBatchStatusFilter: Dispatch<
+    SetStateAction<
+      "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED" | "PARTIALLY_APPROVED"
+    >
+  >;
+  usageBatchRequestsLoading: boolean;
+  myUsageBatchRequests: InventoryUsageBatchRow[];
+  openUsageBatchDetail: (batchId: string) => void;
   openMovementDetail: (movementId: string) => void;
 }) {
   if (!showItems) {
@@ -97,6 +119,7 @@ export function InventoryItemsSection({
   }
   const visibleItems = items.slice(0, 50);
   const visibleUsageRequests = myUsageRequests.slice(0, 20);
+  const visibleUsageBatchRequests = myUsageBatchRequests.slice(0, 20);
 
   return (
     <section
@@ -304,92 +327,172 @@ export function InventoryItemsSection({
                     {formatCurrency(projectUsageSummary?.usedValue || 0)}
                   </p>
                 </div>
-              ) : (
-                <div className="mt-3 rounded-xl border border-slate-200/85 bg-slate-50/65 p-3">
+              ) : null}
+
+              <div className="mt-3 rounded-xl border border-slate-200/85 bg-slate-50/65 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      My Usage Requests
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      Single-item requests and batch requests are both shown here with line-level outcomes.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
+                    {(["ALL", "SUBMITTED", "PENDING", "APPROVED", "REJECTED"] as const).map((statusOption) => (
+                      <button
+                        key={`usage-status-${statusOption}`}
+                        type="button"
+                        onClick={() => setUsageRequestStatusFilter(statusOption)}
+                        className={cn(
+                          "rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          usageRequestStatusFilter === statusOption
+                            ? "border-brand-300 bg-brand-50 text-brand-800"
+                            : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-800"
+                        )}
+                      >
+                        {statusOption === "ALL"
+                          ? "All"
+                          : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-2">
+                  {usageRequestsLoading ? (
+                    <p className="text-sm text-slate-600">Loading your usage requests...</p>
+                  ) : myUsageRequests.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
+                      No single-item usage requests found in this status.
+                    </p>
+                  ) : (
+                    <DataTable
+                      className="border-slate-200/70"
+                      columns={["Requested", "Item", "Qty", "Status", "Project / Rig", "Decision", "Action"]}
+                      rows={visibleUsageRequests.map((requestRow) => [
+                        toIsoDate(requestRow.createdAt),
+                        requestRow.item ? `${requestRow.item.name} (${requestRow.item.sku})` : "-",
+                        formatNumber(requestRow.quantity),
+                        <UsageRequestStatusBadge key={`${requestRow.id}-status`} status={requestRow.status} />,
+                        `${requestRow.project?.name || "-"} / ${requestRow.rig?.rigCode || requestRow.location?.name || "-"}`,
+                        <span key={`${requestRow.id}-decision`} className="text-xs text-slate-700">
+                          {formatUsageRequestDecision(requestRow)}
+                        </span>,
+                        <div key={`${requestRow.id}-actions`} className="flex flex-wrap gap-1">
+                          {requestRow.item?.id ? (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openItemDetail(requestRow.item?.id || "");
+                              }}
+                              className="gf-btn-subtle"
+                            >
+                              Open item
+                            </button>
+                          ) : null}
+                          {requestRow.approvedMovementId ? (
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openMovementDetail(requestRow.approvedMovementId || "");
+                              }}
+                              className="gf-btn-subtle"
+                            >
+                              Open movement
+                            </button>
+                          ) : null}
+                          {!requestRow.item?.id && !requestRow.approvedMovementId ? "-" : null}
+                        </div>
+                      ])}
+                      onRowClick={(rowIndex) => openItemDetail(visibleUsageRequests[rowIndex]?.item?.id || "")}
+                    />
+                  )}
+                </div>
+
+                <div className="mt-4 border-t border-slate-200 pt-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                        My Usage Requests
+                        My Batch Requests
                       </p>
                       <p className="text-xs text-slate-600">
-                        Scoped to your account. Approved requests create stock-out history; rejected requests do
-                        not mutate stock.
+                        First submitted as one batch, then decided per line by approver.
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
-                      {(["ALL", "SUBMITTED", "PENDING", "APPROVED", "REJECTED"] as const).map((statusOption) => (
+                      {(
+                        [
+                          "ALL",
+                          "SUBMITTED",
+                          "PENDING",
+                          "APPROVED",
+                          "PARTIALLY_APPROVED",
+                          "REJECTED"
+                        ] as const
+                      ).map((statusOption) => (
                         <button
-                          key={`usage-status-${statusOption}`}
+                          key={`usage-batch-status-${statusOption}`}
                           type="button"
-                          onClick={() => setUsageRequestStatusFilter(statusOption)}
+                          onClick={() => setUsageBatchStatusFilter(statusOption)}
                           className={cn(
                             "rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                            usageRequestStatusFilter === statusOption
+                            usageBatchStatusFilter === statusOption
                               ? "border-brand-300 bg-brand-50 text-brand-800"
                               : "border-slate-300 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-800"
                           )}
                         >
                           {statusOption === "ALL"
                             ? "All"
-                            : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
+                            : statusOption === "PARTIALLY_APPROVED"
+                              ? "Partial"
+                              : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="mt-2">
-                    {usageRequestsLoading ? (
-                      <p className="text-sm text-slate-600">Loading your usage requests...</p>
-                    ) : myUsageRequests.length === 0 ? (
+                    {usageBatchRequestsLoading ? (
+                      <p className="text-sm text-slate-600">Loading your batch requests...</p>
+                    ) : myUsageBatchRequests.length === 0 ? (
                       <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-3 text-sm text-slate-600">
-                        No usage requests found for your account in this status.
+                        No batch usage requests found in this status.
                       </p>
                     ) : (
                       <DataTable
                         className="border-slate-200/70"
-                        columns={["Requested", "Item", "Qty", "Status", "Project / Rig", "Decision", "Action"]}
-                        rows={visibleUsageRequests.map((requestRow) => [
-                          toIsoDate(requestRow.createdAt),
-                          requestRow.item ? `${requestRow.item.name} (${requestRow.item.sku})` : "-",
-                          formatNumber(requestRow.quantity),
-                          <UsageRequestStatusBadge key={`${requestRow.id}-status`} status={requestRow.status} />,
-                          `${requestRow.project?.name || "-"} / ${requestRow.rig?.rigCode || requestRow.location?.name || "-"}`,
-                          <span key={`${requestRow.id}-decision`} className="text-xs text-slate-700">
-                            {formatUsageRequestDecision(requestRow)}
+                        columns={["Requested", "Batch", "Lines", "Status", "Project / Rig", "Decision", "Action"]}
+                        rows={visibleUsageBatchRequests.map((batchRow) => [
+                          toIsoDate(batchRow.createdAt),
+                          batchRow.batchCode,
+                          `${formatNumber(batchRow.summary.lineCount)} item(s) • Qty ${formatNumber(batchRow.summary.totalQuantity)}`,
+                          <UsageRequestStatusBadge key={`${batchRow.id}-status`} status={batchRow.status} />,
+                          `${batchRow.project?.name || "-"} / ${batchRow.rig?.rigCode || batchRow.location?.name || "-"}`,
+                          <span key={`${batchRow.id}-decision`} className="text-xs text-slate-700">
+                            {formatUsageBatchDecision(batchRow)}
                           </span>,
-                          <div key={`${requestRow.id}-actions`} className="flex flex-wrap gap-1">
-                            {requestRow.item?.id ? (
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openItemDetail(requestRow.item?.id || "");
-                                }}
-                                className="gf-btn-subtle"
-                              >
-                                Open item
-                              </button>
-                            ) : null}
-                            {requestRow.approvedMovementId ? (
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  openMovementDetail(requestRow.approvedMovementId || "");
-                                }}
-                                className="gf-btn-subtle"
-                              >
-                                Open movement
-                              </button>
-                            ) : null}
-                            {!requestRow.item?.id && !requestRow.approvedMovementId ? "-" : null}
-                          </div>
+                          <button
+                            key={`${batchRow.id}-action`}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openUsageBatchDetail(batchRow.id);
+                            }}
+                            className="gf-btn-subtle"
+                          >
+                            View batch
+                          </button>
                         ])}
-                        onRowClick={(rowIndex) => openItemDetail(visibleUsageRequests[rowIndex]?.item?.id || "")}
+                        onRowClick={(rowIndex) =>
+                          openUsageBatchDetail(visibleUsageBatchRequests[rowIndex]?.id || "")
+                        }
                       />
                     )}
                   </div>
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>

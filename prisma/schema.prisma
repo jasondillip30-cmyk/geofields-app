@@ -126,6 +126,20 @@ enum InventoryUsageRequestStatus {
   REJECTED
 }
 
+enum InventoryUsageRequestBatchStatus {
+  SUBMITTED
+  PENDING
+  APPROVED
+  REJECTED
+  PARTIALLY_APPROVED
+}
+
+enum InventoryUsageRequestBatchLineStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
 enum InventoryUsageContextType {
   DRILLING_REPORT
   MAINTENANCE
@@ -191,6 +205,8 @@ model User {
   inventoryMovements  InventoryMovement[] @relation("inventoryPerformedBy")
   inventoryUsageRequests InventoryUsageRequest[] @relation("inventoryUsageRequester")
   inventoryUsageDecisions InventoryUsageRequest[] @relation("inventoryUsageDecider")
+  inventoryUsageRequestBatchesRequested InventoryUsageRequestBatch[] @relation("inventoryUsageBatchRequester")
+  inventoryUsageRequestBatchesDecided InventoryUsageRequestBatch[] @relation("inventoryUsageBatchDecider")
   createdBudgetPlans  BudgetPlan[]        @relation("budgetPlanCreator")
   updatedBudgetPlans  BudgetPlan[]        @relation("budgetPlanUpdater")
   copilotChatThreads  CopilotChatThread[]
@@ -259,6 +275,7 @@ model Project {
   breakdownReports   BreakdownReport[]
   inventoryMovements InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
+  inventoryUsageRequestBatches InventoryUsageRequestBatch[]
   budgetPlans        BudgetPlan[]
   changeOrders       ProjectChangeOrder[]
   laborEntries       ProjectLaborEntry[]
@@ -363,6 +380,7 @@ model Rig {
   inventoryMovements       InventoryMovement[]
   compatibleInventoryItems InventoryItem[]      @relation("itemCompatibleRig")
   inventoryUsageRequests   InventoryUsageRequest[]
+  inventoryUsageRequestBatches InventoryUsageRequestBatch[]
   budgetPlans              BudgetPlan[]
   projectLaborEntries      ProjectLaborEntry[]
 }
@@ -443,6 +461,7 @@ model DrillReport {
   approvedBy         User?               @relation("reportApprover", fields: [approvedById], references: [id])
   billableLines      DrillReportBillableLine[]
   inventoryUsageRequests InventoryUsageRequest[] @relation("drillReportUsageRequests")
+  inventoryUsageRequestBatches InventoryUsageRequestBatch[] @relation("drillReportUsageRequestBatches")
   inventoryMovements InventoryMovement[] @relation("drillReportMovements")
 }
 
@@ -569,6 +588,7 @@ model MaintenanceRequest {
   approvals            Approval[]
   inventoryMovements   InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
+  inventoryUsageRequestBatches InventoryUsageRequestBatch[]
 
   @@index([breakdownReportId, requestDate])
 }
@@ -600,6 +620,7 @@ model InventoryLocation {
   movementFrom InventoryMovement[] @relation("movementLocationFrom")
   movementTo   InventoryMovement[] @relation("movementLocationTo")
   usageRequests InventoryUsageRequest[]
+  usageRequestBatches InventoryUsageRequestBatch[]
 
   @@index([name])
 }
@@ -627,6 +648,7 @@ model InventoryItem {
   compatibleRig     Rig?                @relation("itemCompatibleRig", fields: [compatibleRigId], references: [id])
   movements         InventoryMovement[]
   usageRequests     InventoryUsageRequest[]
+  usageRequestBatchLines InventoryUsageRequestBatchLine[]
 
   @@index([category])
   @@index([status])
@@ -720,6 +742,59 @@ model InventoryUsageRequest {
   @@index([breakdownReportId, requestedForDate])
 }
 
+model InventoryUsageRequestBatch {
+  id                   String                           @id @default(cuid())
+  contextType          InventoryUsageContextType        @default(OTHER)
+  reason               String?
+  projectId            String?
+  rigId                String?
+  drillReportId        String?
+  maintenanceRequestId String?
+  breakdownReportId    String?
+  locationId           String?
+  requestedForDate     DateTime?
+  requestedById        String?
+  status               InventoryUsageRequestBatchStatus @default(SUBMITTED)
+  decidedById          String?
+  decidedAt            DateTime?
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
+  project              Project?                         @relation(fields: [projectId], references: [id])
+  rig                  Rig?                             @relation(fields: [rigId], references: [id])
+  drillReport          DrillReport?                     @relation("drillReportUsageRequestBatches", fields: [drillReportId], references: [id], onDelete: SetNull)
+  maintenanceRequest   MaintenanceRequest?              @relation(fields: [maintenanceRequestId], references: [id])
+  breakdownReport      BreakdownReport?                 @relation(fields: [breakdownReportId], references: [id])
+  location             InventoryLocation?               @relation(fields: [locationId], references: [id])
+  requestedBy          User?                            @relation("inventoryUsageBatchRequester", fields: [requestedById], references: [id])
+  decidedBy            User?                            @relation("inventoryUsageBatchDecider", fields: [decidedById], references: [id])
+  lines                InventoryUsageRequestBatchLine[]
+
+  @@index([status, createdAt])
+  @@index([projectId, rigId, locationId])
+  @@index([drillReportId, requestedForDate])
+  @@index([maintenanceRequestId, requestedForDate])
+  @@index([breakdownReportId, requestedForDate])
+}
+
+model InventoryUsageRequestBatchLine {
+  id               String                               @id @default(cuid())
+  batchId          String
+  itemId           String
+  quantity         Float
+  status           InventoryUsageRequestBatchLineStatus @default(SUBMITTED)
+  decisionNote     String?
+  approvedMovementId String?
+  createdAt        DateTime                             @default(now())
+  updatedAt        DateTime                             @updatedAt
+  batch            InventoryUsageRequestBatch           @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  item             InventoryItem                        @relation(fields: [itemId], references: [id])
+
+  @@unique([batchId, itemId])
+  @@index([status, createdAt])
+  @@index([itemId, createdAt])
+  @@index([batchId, status])
+}
+
 model MaintenanceUpdate {
   id                 String             @id @default(cuid())
   maintenanceId      String
@@ -793,6 +868,7 @@ model BreakdownReport {
   client        Client       @relation(fields: [clientId], references: [id])
   maintenanceRequests MaintenanceRequest[]
   inventoryUsageRequests InventoryUsageRequest[]
+  inventoryUsageRequestBatches InventoryUsageRequestBatch[]
   inventoryMovements InventoryMovement[]
 }
 

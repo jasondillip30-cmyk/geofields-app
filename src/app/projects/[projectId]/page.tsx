@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
 import { prisma } from "@/lib/prisma";
+import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
 
 type ContractType = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 
@@ -55,7 +56,7 @@ export default async function ProjectWorkspacePage({
   const drillingReportsHref = `/spending?view=drilling-reports&projectId=${encodeURIComponent(project.id)}`;
 
   return (
-    <AccessGate permission="projects:view">
+    <AccessGate denyBehavior="redirect" permission="projects:view">
       <div className="gf-page-stack">
         <section className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -77,7 +78,7 @@ export default async function ProjectWorkspacePage({
             >
               Open Drilling reports
             </Link>
-            <AccessGate permission="projects:manage">
+            <AccessGate denyBehavior="redirect" permission="projects:manage">
               <Link
                 href={`/projects/setup?editProjectId=${project.id}`}
                 className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
@@ -103,7 +104,7 @@ export default async function ProjectWorkspacePage({
               ["Assigned rig", project.assignedRig?.rigCode || "Unassigned"],
               ["Backup rig", project.backupRig?.rigCode || "Unassigned"],
               ["Project type", formatProjectType(project.contractType)],
-              ["Contract rate", formatContractRate(project)],
+              ["Contract rate", formatProjectContractRateDisplay(project)],
               ["Start date", formatDate(project.startDate)],
               ["End date", project.endDate ? formatDate(project.endDate) : "-"],
               ["Description", project.description || "-"]
@@ -142,21 +143,6 @@ function formatProjectType(value: ContractType) {
     return "Day rate";
   }
   return "Lump sum";
-}
-
-function formatContractRate(project: {
-  contractType: ContractType;
-  contractRatePerM: number;
-  contractDayRate: number | null;
-  contractLumpSumValue: number | null;
-}) {
-  if (project.contractType === "PER_METER") {
-    return `${formatCurrency(project.contractRatePerM)} / meter`;
-  }
-  if (project.contractType === "DAY_RATE") {
-    return `${formatCurrency(project.contractDayRate || 0)} / day`;
-  }
-  return formatCurrency(project.contractLumpSumValue || 0);
 }
 
 function formatStageDepth(stageLabel: string | null, startM: number | null, endM: number | null) {

@@ -248,7 +248,7 @@ export default function InventoryExpensesPage() {
   ]);
 
   return (
-    <AccessGate permission="inventory:view">
+    <AccessGate denyBehavior="redirect" permission="inventory:view">
       <div className="gf-page-stack space-y-4 md:space-y-5">
         {errorMessage ? (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</div>

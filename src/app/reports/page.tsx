@@ -292,7 +292,7 @@ export default function ReportsPage() {
     ]);
 
   return (
-    <AccessGate permission="reports:view">
+    <AccessGate denyBehavior="redirect" permission="reports:view">
       <div className="gf-page-stack">
         <FilterScopeBanner filters={filters} />
 

@@ -8,6 +8,7 @@ const PORT_RELEASE_TIMEOUT_MS = 6_000;
 const PORT_RELEASE_POLL_INTERVAL_MS = 140;
 const HEALTH_PROBE_TIMEOUT_MS = 1_800;
 const APP_IDENTITY_MARKER = "GeoFields Sign In";
+const LOGIN_STYLE_MARKER = "bg-app-gradient";
 
 async function main() {
   const port = resolvePort(process.env.PORT);
@@ -23,14 +24,19 @@ async function main() {
     console.warn(`[dev] detected listener on :${port}: ${existingPids.join(", ")}`);
     const healthy = await probeServerHealth(port, host);
     const matchesAppIdentity = healthy ? await probeServerIdentity(port, host) : false;
-    if (healthy && matchesAppIdentity) {
+    const hasHealthyStyles = healthy && matchesAppIdentity ? await probeLoginStyles(port, host) : false;
+    if (healthy && matchesAppIdentity && hasHealthyStyles) {
       console.info(
         `[dev] existing server on :${port} is already healthy. Reusing it. Run \`PORT=${port} npm run -s dev:reset\` for a clean restart.`
       );
       return;
     }
 
-    if (healthy && !matchesAppIdentity) {
+    if (healthy && matchesAppIdentity && !hasHealthyStyles) {
+      console.warn(
+        `[dev] existing listener on :${port} matches GeoFields but is serving broken/missing login CSS. Cleaning up and restarting...`
+      );
+    } else if (healthy && !matchesAppIdentity) {
       console.warn(
         `[dev] existing listener on :${port} is healthy but does not match this GeoFields app. Cleaning up and starting the correct server...`
       );
@@ -155,6 +161,56 @@ async function probeServerIdentity(port: number, host: string) {
       }
       const html = await response.text();
       if (html.includes(APP_IDENTITY_MARKER)) {
+        return true;
+      }
+    } catch {
+      // Try the next probe URL.
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  return false;
+}
+
+async function probeLoginStyles(port: number, host: string) {
+  const probeUrls = resolveProbeHosts(host).map((entry) => `http://${entry}:${port}/login`);
+
+  for (const pageUrl of probeUrls) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+    try {
+      const response = await fetch(pageUrl, {
+        method: "GET",
+        cache: "no-store",
+        redirect: "follow",
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        continue;
+      }
+
+      const html = await response.text();
+      const stylesheetHref = html.match(
+        /<link[^>]+rel=["']stylesheet["'][^>]+href=["']([^"']+)["']/i
+      )?.[1];
+      if (!stylesheetHref) {
+        continue;
+      }
+
+      const stylesheetUrl = new URL(stylesheetHref, pageUrl).toString();
+      const cssResponse = await fetch(stylesheetUrl, {
+        method: "GET",
+        cache: "no-store",
+        redirect: "follow",
+        signal: controller.signal
+      });
+      if (!cssResponse.ok) {
+        continue;
+      }
+
+      const css = await cssResponse.text();
+      if (css.includes(LOGIN_STYLE_MARKER)) {
         return true;
       }
     } catch {

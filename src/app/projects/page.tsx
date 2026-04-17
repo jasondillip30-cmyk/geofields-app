@@ -9,6 +9,7 @@ import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provi
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
 
 interface ClientOption {
   id: string;
@@ -36,6 +37,13 @@ interface ProjectRecord {
   contractLumpSumValue: number | null;
   assignedRigId: string | null;
   backupRigId: string | null;
+  billingRateItems?: Array<{
+    unit: string;
+    drillingStageLabel: string | null;
+    depthBandStartM: number | null;
+    depthBandEndM: number | null;
+    isActive: boolean;
+  }>;
   client: { id: string; name: string };
   assignedRig: { id: string; rigCode: string } | null;
   backupRig: { id: string; rigCode: string } | null;
@@ -254,7 +262,7 @@ export default function ProjectsPage() {
     : "/spending?view=drilling-reports";
 
   return (
-    <AccessGate permission="projects:view">
+    <AccessGate denyBehavior="redirect" permission="projects:view">
       <div className="gf-page-stack">
         <FilterScopeBanner
           filters={filters}
@@ -275,7 +283,7 @@ export default function ProjectsPage() {
           <Card
             title="Project profile"
             action={
-              <AccessGate permission="projects:manage">
+              <AccessGate denyBehavior="redirect" permission="projects:manage">
                 <Link
                   href="/projects/setup"
                   className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
@@ -300,7 +308,7 @@ export default function ProjectsPage() {
                     ["Assigned rig", selectedProject.assignedRig?.rigCode || "Unassigned"],
                     ["Backup rig", selectedProject.backupRig?.rigCode || "Unassigned"],
                     ["Contract type", formatProjectType(selectedProject.contractType)],
-                    ["Contract rate", formatContractRate(selectedProject)],
+                    ["Contract rate", formatProjectContractRateDisplay(selectedProject)],
                     ["Start date", formatDateValue(selectedProject.startDate)],
                     ["End date", formatDateValue(selectedProject.endDate)],
                     ["Description", selectedProject.description || "-"]
@@ -460,16 +468,6 @@ function formatProjectType(value: ContractType) {
     return "Day rate";
   }
   return "Lump sum";
-}
-
-function formatContractRate(project: ProjectRecord) {
-  if (project.contractType === "PER_METER") {
-    return `${formatCurrency(project.contractRatePerM)} / meter`;
-  }
-  if (project.contractType === "DAY_RATE") {
-    return `${formatCurrency(project.contractDayRate || 0)} / day`;
-  }
-  return formatCurrency(project.contractLumpSumValue || 0);
 }
 
 function formatDateValue(value: string | null) {

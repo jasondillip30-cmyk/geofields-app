@@ -879,7 +879,7 @@ export default function SpendingPage() {
   }, [selectedTransaction, transactionEditDate, transactionEditMerchant, transactionSaving]);
 
   return (
-    <AccessGate anyOf={["finance:view", "drilling:view"]}>
+    <AccessGate denyBehavior="redirect" anyOf={["finance:view", "drilling:view"]}>
       <div className="gf-page-stack">
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">

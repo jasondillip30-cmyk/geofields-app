@@ -55,6 +55,7 @@ export interface DashboardSummary {
     status: string;
     assignedRigCode: string;
     contractRatePerM: number;
+    contractRateLabel?: string;
   }>;
   recommendations: RecommendationItem[];
   profitForecast: {

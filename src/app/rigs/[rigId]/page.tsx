@@ -230,7 +230,7 @@ export default async function RigProfilePage({
       : 0;
 
   return (
-    <AccessGate permission="rigs:view">
+    <AccessGate denyBehavior="redirect" permission="rigs:view">
       <div className="gf-page-stack">
         <section className="flex flex-wrap items-center justify-between gap-3">
           <div>

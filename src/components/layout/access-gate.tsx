@@ -1,26 +1,31 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 
 import { canAccess, type Permission } from "@/lib/auth/permissions";
-import { roleLabels } from "@/lib/auth/roles";
 import { useRole } from "@/components/layout/role-provider";
 import {
   resolveDevRuntimeResetCommand,
   SESSION_BOOTSTRAP_LOADING_TIMEOUT_MS
 } from "@/components/layout/session-bootstrap-recovery";
+import { resolveFirstAllowedRoute } from "@/lib/auth/route-fallback";
 
 export function AccessGate({
   permission,
   anyOf,
   children,
-  fallback
+  fallback,
+  denyBehavior = "hide"
 }: {
   permission?: Permission;
   anyOf?: Permission[];
   children: ReactNode;
   fallback?: ReactNode;
+  denyBehavior?: "hide" | "redirect";
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const { role, loading, bootstrapError, refreshSession } = useRole();
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
@@ -39,6 +44,24 @@ export function AccessGate({
 
   const recoveryMessage = bootstrapError || (loadingTimedOut ? "Access profile is taking longer than expected." : null);
   const resetCommand = resolveDevRuntimeResetCommand();
+  const allowedBySingle = permission && role ? canAccess(role, permission) : false;
+  const allowedByAnyOf =
+    Array.isArray(anyOf) && anyOf.length > 0 && role
+      ? anyOf.some((entry) => canAccess(role, entry))
+      : false;
+  const hasExplicitRule = Boolean(permission || (Array.isArray(anyOf) && anyOf.length > 0));
+  const isAllowed = hasExplicitRule ? allowedBySingle || allowedByAnyOf : Boolean(role);
+
+  useEffect(() => {
+    if (loading || recoveryMessage || isAllowed || denyBehavior !== "redirect" || !role) {
+      return;
+    }
+    const destination = resolveFirstAllowedRoute(role, pathname);
+    if (!destination || destination === pathname) {
+      return;
+    }
+    router.replace(destination);
+  }, [denyBehavior, isAllowed, loading, pathname, recoveryMessage, role, router]);
 
   if (loading && !recoveryMessage) {
     return (
@@ -73,25 +96,8 @@ export function AccessGate({
     );
   }
 
-  const allowedBySingle = permission && role ? canAccess(role, permission) : false;
-  const allowedByAnyOf =
-    Array.isArray(anyOf) && anyOf.length > 0 && role
-      ? anyOf.some((entry) => canAccess(role, entry))
-      : false;
-  const hasExplicitRule = Boolean(permission || (Array.isArray(anyOf) && anyOf.length > 0));
-  const isAllowed = hasExplicitRule ? allowedBySingle || allowedByAnyOf : Boolean(role);
-
   if (!isAllowed) {
-    return (
-      fallback || (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-900">
-          <h2 className="font-display text-lg">Permission required</h2>
-          <p className="mt-2 text-sm">
-            The {role ? roleLabels[role] : "current account"} does not currently have access to this module.
-          </p>
-        </div>
-      )
-    );
+    return fallback || null;
   }
 
   return <>{children}</>;

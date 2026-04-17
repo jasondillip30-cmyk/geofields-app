@@ -35,7 +35,7 @@ export default async function ClientWorkspacePage({
     : "/spending";
 
   return (
-    <AccessGate permission="clients:view">
+    <AccessGate denyBehavior="redirect" permission="clients:view">
       <div className="gf-page-stack">
         <section className="flex flex-wrap items-center justify-between gap-3">
           <div>

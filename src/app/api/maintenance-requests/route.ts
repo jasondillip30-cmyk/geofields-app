@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
     const [rig, project, selectedClient, breakdown, activeProjectForRig, mechanicId] = await Promise.all([
       prisma.rig.findUnique({
         where: { id: rigId },
-        select: { id: true, rigCode: true }
+        select: { id: true, rigCode: true, status: true }
       }),
       projectId
         ? prisma.project.findUnique({
@@ -156,6 +156,12 @@ export async function POST(request: NextRequest) {
 
     if (!rig) {
       return NextResponse.json({ message: "Rig not found." }, { status: 404 });
+    }
+    if (rig.status !== "IDLE") {
+      return NextResponse.json(
+        { message: "Only idle rigs can be reported for workshop maintenance." },
+        { status: 400 }
+      );
     }
     if (projectId && !project) {
       return NextResponse.json({ message: "Project not found." }, { status: 404 });

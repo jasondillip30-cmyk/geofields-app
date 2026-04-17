@@ -1,6 +1,7 @@
 import type { RigStatus } from "@prisma/client";
 
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
+import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
 
 interface RigProfitAccumulator {
   id: string;
@@ -256,7 +257,17 @@ export function buildProjectAssignments({
     name: string;
     location: string;
     status: string;
+    contractType: "PER_METER" | "DAY_RATE" | "LUMP_SUM";
     contractRatePerM: number;
+    contractDayRate: number;
+    contractLumpSumValue: number;
+    billingRateItems: Array<{
+      unit: string;
+      drillingStageLabel: string | null;
+      depthBandStartM: number | null;
+      depthBandEndM: number | null;
+      isActive: boolean;
+    }>;
     assignedRigId: string | null;
     backupRigId: string | null;
     assignedRig: { id: string; rigCode: string } | null;
@@ -291,7 +302,14 @@ export function buildProjectAssignments({
       location: project.location,
       status: project.status,
       assignedRigCode: project.assignedRig?.rigCode || "Unassigned",
-      contractRatePerM: project.contractRatePerM
+      contractRatePerM: project.contractRatePerM,
+      contractRateLabel: formatProjectContractRateDisplay({
+        contractType: project.contractType,
+        contractRatePerM: project.contractRatePerM,
+        contractDayRate: project.contractDayRate,
+        contractLumpSumValue: project.contractLumpSumValue,
+        billingRateItems: project.billingRateItems
+      })
     }));
 }
 

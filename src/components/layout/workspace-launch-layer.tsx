@@ -31,8 +31,10 @@ interface ApiProjectRow {
 const UNLOCK_THRESHOLD = 0.5;
 const PROGRESS_PER_WHEEL_PIXEL = 1 / 320;
 const PROGRESS_PER_TOUCH_PIXEL = 1 / 340;
+const BOTTOM_EDGE_SWIPE_ZONE_PX = 96;
 
 let markerCache: { markers: WorkspaceLaunchMarker[]; hasLive: boolean } | null = null;
+let safeAreaProbeElement: HTMLDivElement | null = null;
 
 export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLayerProps) {
   const router = useRouter();
@@ -50,6 +52,8 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   const finalizeTimerRef = useRef<number | null>(null);
   const touchLastYRef = useRef<number | null>(null);
   const touchStartedOnInteractiveControlRef = useRef(false);
+  const touchGestureArmedRef = useRef(false);
+  const lastPointerYRef = useRef<number | null>(null);
   const wheelUnlockDirectionRef = useRef<1 | -1 | 0>(0);
 
   useEffect(() => {
@@ -62,12 +66,14 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       setProgress(0);
       progressRef.current = 0;
       wheelUnlockDirectionRef.current = 0;
+      touchGestureArmedRef.current = false;
       return;
     }
     setIsInteracting(false);
     setProgress(1);
     progressRef.current = 1;
     wheelUnlockDirectionRef.current = 0;
+    touchGestureArmedRef.current = false;
   }, [open]);
 
   useEffect(() => {
@@ -269,11 +275,15 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   }, []);
 
   const processWheelIntent = useCallback(
-    (deltaY: number, target: EventTarget | null, preventDefault?: () => void) => {
+    (deltaY: number, clientY: number, target: EventTarget | null, preventDefault?: () => void) => {
       if (!open || commitInFlightRef.current) {
         return;
       }
       if (isInteractiveGestureTarget(target)) {
+        return;
+      }
+      const effectiveClientY = resolveGestureClientY(clientY, lastPointerYRef.current);
+      if (requiresBottomZoneForWheelUnlock() && !isWithinBottomEdgeGestureZone(effectiveClientY)) {
         return;
       }
       if (Math.abs(deltaY) < 0.5) {
@@ -288,10 +298,15 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       if (progressRef.current <= 0.02 && normalizedDelta < 0) {
         wheelUnlockDirectionRef.current = deltaY >= 0 ? 1 : -1;
       }
-      adjustProgress(progressRef.current + normalizedDelta * PROGRESS_PER_WHEEL_PIXEL);
+      const nextProgress = clamp(progressRef.current + normalizedDelta * PROGRESS_PER_WHEEL_PIXEL, 0, 1);
+      adjustProgress(nextProgress);
+      if (nextProgress >= UNLOCK_THRESHOLD && wheelUnlockDirectionRef.current === 1) {
+        handleUnlockToAllProjects();
+        return;
+      }
       scheduleFinalizeGesture();
     },
-    [adjustProgress, open, scheduleFinalizeGesture]
+    [adjustProgress, handleUnlockToAllProjects, open, scheduleFinalizeGesture]
   );
 
   const handleTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
@@ -299,7 +314,19 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       return;
     }
     touchStartedOnInteractiveControlRef.current = isInteractiveGestureTarget(event.target);
-    touchLastYRef.current = event.touches[0]?.clientY ?? null;
+    const touchStartY = event.touches[0]?.clientY ?? null;
+    touchLastYRef.current = touchStartY;
+    lastPointerYRef.current = touchStartY;
+    touchGestureArmedRef.current = false;
+    if (
+      touchStartedOnInteractiveControlRef.current ||
+      touchStartY === null ||
+      !isWithinBottomEdgeGestureZone(touchStartY)
+    ) {
+      setIsInteracting(false);
+      return;
+    }
+    touchGestureArmedRef.current = true;
     setIsInteracting(true);
   }, [open]);
 
@@ -308,7 +335,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       if (!open || commitInFlightRef.current) {
         return;
       }
-      if (touchStartedOnInteractiveControlRef.current) {
+      if (touchStartedOnInteractiveControlRef.current || !touchGestureArmedRef.current) {
         return;
       }
       const currentY = event.touches[0]?.clientY ?? null;
@@ -329,26 +356,43 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       return;
     }
     touchLastYRef.current = null;
-    if (touchStartedOnInteractiveControlRef.current) {
+    if (touchStartedOnInteractiveControlRef.current || !touchGestureArmedRef.current) {
       touchStartedOnInteractiveControlRef.current = false;
+      touchGestureArmedRef.current = false;
       setIsInteracting(false);
       return;
     }
+    touchGestureArmedRef.current = false;
     finalizeGesture();
   }, [finalizeGesture, open]);
 
-  useEffect(() => {
-    if (!open) {
+  const handleTouchCancel = useCallback(() => {
+    touchLastYRef.current = null;
+    touchStartedOnInteractiveControlRef.current = false;
+    touchGestureArmedRef.current = false;
+    setIsInteracting(false);
+  }, []);
+
+  const handleWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      processWheelIntent(event.deltaY, event.clientY, event.target, () => event.preventDefault());
+    },
+    [processWheelIntent]
+  );
+
+  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
       return;
     }
-    const handleWindowWheel = (event: WheelEvent) => {
-      processWheelIntent(event.deltaY, event.target, () => event.preventDefault());
-    };
-    window.addEventListener("wheel", handleWindowWheel, { passive: false });
-    return () => {
-      window.removeEventListener("wheel", handleWindowWheel);
-    };
-  }, [open, processWheelIntent]);
+    lastPointerYRef.current = event.clientY;
+  }, []);
+
+  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
+      return;
+    }
+    lastPointerYRef.current = event.clientY;
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -375,6 +419,10 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
+      onWheel={handleWheel}
+      onPointerMove={handlePointerMove}
+      onMouseMove={handleMouseMove}
     >
       <main className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
         <div className="w-full max-w-3xl">
@@ -390,6 +438,16 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
           />
         </div>
       </main>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3"
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
+      >
+        <span
+          data-testid="workspace-launch-swipe-handle"
+          className="h-1.5 w-28 rounded-full bg-slate-900/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]"
+        />
+      </div>
     </div>
   );
 }
@@ -399,7 +457,60 @@ function isInteractiveGestureTarget(target: EventTarget | null) {
   if (!element) {
     return false;
   }
-  return Boolean(element.closest("input, textarea, select, [contenteditable='true']"));
+  return Boolean(
+    element.closest(
+      "input, textarea, select, button, a, [role='button'], [contenteditable='true'], [data-marker-id], [data-testid='workspace-launch-workshop-button'], [data-workspace-launch-ignore-unlock='true']"
+    )
+  );
+}
+
+function isWithinBottomEdgeGestureZone(clientY: number) {
+  if (typeof window === "undefined" || !Number.isFinite(clientY)) {
+    return false;
+  }
+  const safeAreaInset = readSafeAreaInsetBottom();
+  const startY = window.innerHeight - (BOTTOM_EDGE_SWIPE_ZONE_PX + safeAreaInset);
+  return clientY >= Math.max(0, startY);
+}
+
+function requiresBottomZoneForWheelUnlock() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (
+    window.matchMedia("(pointer: coarse)").matches ||
+    window.matchMedia("(max-width: 1023px)").matches
+  );
+}
+
+function readSafeAreaInsetBottom() {
+  if (typeof window === "undefined" || typeof document === "undefined" || !document.body) {
+    return 0;
+  }
+  if (!safeAreaProbeElement) {
+    const probe = document.createElement("div");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.position = "fixed";
+    probe.style.pointerEvents = "none";
+    probe.style.visibility = "hidden";
+    probe.style.height = "0";
+    probe.style.paddingBottom = "env(safe-area-inset-bottom)";
+    document.body.appendChild(probe);
+    safeAreaProbeElement = probe;
+  }
+  const computed = window.getComputedStyle(safeAreaProbeElement);
+  const parsed = Number.parseFloat(computed.paddingBottom || "0");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function resolveGestureClientY(clientY: number, fallbackY: number | null) {
+  if (Number.isFinite(clientY) && clientY > 0) {
+    return clientY;
+  }
+  if (typeof fallbackY === "number" && Number.isFinite(fallbackY) && fallbackY > 0) {
+    return fallbackY;
+  }
+  return Number.NaN;
 }
 
 function clamp(value: number, min: number, max: number) {
