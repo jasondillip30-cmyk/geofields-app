@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type TouchEvent as ReactTouchEvent
+} from "react";
 import { useRouter } from "next/navigation";
 
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
@@ -31,6 +38,7 @@ interface ApiProjectRow {
 const UNLOCK_THRESHOLD = 0.5;
 const PROGRESS_PER_WHEEL_PIXEL = 1 / 320;
 const PROGRESS_PER_TOUCH_PIXEL = 1 / 340;
+const TOUCH_UNLOCK_DELTA_PX = 120;
 const BOTTOM_EDGE_SWIPE_ZONE_PX = 96;
 
 let markerCache: { markers: WorkspaceLaunchMarker[]; hasLive: boolean } | null = null;
@@ -51,6 +59,9 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   const commitInFlightRef = useRef(false);
   const finalizeTimerRef = useRef<number | null>(null);
   const touchLastYRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
+  const touchMovedRef = useRef(false);
+  const suppressMarkerClicksUntilRef = useRef(0);
   const touchStartedOnInteractiveControlRef = useRef(false);
   const touchGestureArmedRef = useRef(false);
   const lastPointerYRef = useRef<number | null>(null);
@@ -62,18 +73,26 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
 
   useEffect(() => {
     if (open) {
+      commitInFlightRef.current = false;
       setIsInteracting(false);
       setProgress(0);
       progressRef.current = 0;
       wheelUnlockDirectionRef.current = 0;
       touchGestureArmedRef.current = false;
+      touchStartYRef.current = null;
+      touchMovedRef.current = false;
+      suppressMarkerClicksUntilRef.current = 0;
       return;
     }
+    commitInFlightRef.current = false;
     setIsInteracting(false);
     setProgress(1);
     progressRef.current = 1;
     wheelUnlockDirectionRef.current = 0;
     touchGestureArmedRef.current = false;
+    touchStartYRef.current = null;
+    touchMovedRef.current = false;
+    suppressMarkerClicksUntilRef.current = 0;
   }, [open]);
 
   useEffect(() => {
@@ -180,6 +199,16 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       window.setTimeout(() => {
         onRequestClose();
         router.push(href);
+        if (typeof window !== "undefined") {
+          const targetUrl = new URL(href, window.location.origin);
+          const targetPathWithQuery = `${targetUrl.pathname}${targetUrl.search}`;
+          window.setTimeout(() => {
+            const currentPathWithQuery = `${window.location.pathname}${window.location.search}`;
+            if (currentPathWithQuery !== targetPathWithQuery) {
+              window.location.assign(targetPathWithQuery);
+            }
+          }, 420);
+        }
         commitInFlightRef.current = false;
       }, 210);
     },
@@ -316,6 +345,8 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
     touchStartedOnInteractiveControlRef.current = isInteractiveGestureTarget(event.target);
     const touchStartY = event.touches[0]?.clientY ?? null;
     touchLastYRef.current = touchStartY;
+    touchStartYRef.current = touchStartY;
+    touchMovedRef.current = false;
     lastPointerYRef.current = touchStartY;
     touchGestureArmedRef.current = false;
     if (
@@ -346,53 +377,65 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       event.preventDefault();
       const deltaY = currentY - previousY;
       touchLastYRef.current = currentY;
+      if (Math.abs(deltaY) > 2) {
+        touchMovedRef.current = true;
+      }
       adjustProgress(progressRef.current + -deltaY * PROGRESS_PER_TOUCH_PIXEL);
     },
     [adjustProgress, open]
   );
 
-  const handleTouchEnd = useCallback(() => {
-    if (!open || commitInFlightRef.current) {
-      return;
-    }
-    touchLastYRef.current = null;
-    if (touchStartedOnInteractiveControlRef.current || !touchGestureArmedRef.current) {
+  const finalizeTouchGesture = useCallback(
+    (touchEndY: number | null) => {
+      if (!open || commitInFlightRef.current) {
+        return;
+      }
+      const touchStartY = touchStartYRef.current;
+      const resolvedTouchEndY =
+        typeof touchEndY === "number" ? touchEndY : touchLastYRef.current;
+      if (touchMovedRef.current) {
+        suppressMarkerClicksUntilRef.current = Date.now() + 420;
+      }
+      touchMovedRef.current = false;
+      touchLastYRef.current = null;
+      touchStartYRef.current = null;
+      if (touchStartedOnInteractiveControlRef.current || !touchGestureArmedRef.current) {
+        touchStartedOnInteractiveControlRef.current = false;
+        touchGestureArmedRef.current = false;
+        setIsInteracting(false);
+        return;
+      }
       touchStartedOnInteractiveControlRef.current = false;
       touchGestureArmedRef.current = false;
-      setIsInteracting(false);
-      return;
-    }
-    touchGestureArmedRef.current = false;
-    finalizeGesture();
-  }, [finalizeGesture, open]);
-
-  const handleTouchCancel = useCallback(() => {
-    touchLastYRef.current = null;
-    touchStartedOnInteractiveControlRef.current = false;
-    touchGestureArmedRef.current = false;
-    setIsInteracting(false);
-  }, []);
-
-  const handleWheel = useCallback(
-    (event: React.WheelEvent<HTMLDivElement>) => {
-      processWheelIntent(event.deltaY, event.clientY, event.target, () => event.preventDefault());
+      if (
+        typeof touchStartY === "number" &&
+        typeof resolvedTouchEndY === "number" &&
+        touchStartY - resolvedTouchEndY >= TOUCH_UNLOCK_DELTA_PX
+      ) {
+        handleUnlockToAllProjects();
+        return;
+      }
+      finalizeGesture();
     },
-    [processWheelIntent]
+    [finalizeGesture, handleUnlockToAllProjects, open]
   );
 
-  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
-      return;
-    }
-    lastPointerYRef.current = event.clientY;
-  }, []);
+  const handleTouchEnd = useCallback(
+    (event: ReactTouchEvent<HTMLDivElement>) => {
+      finalizeTouchGesture(event.changedTouches[0]?.clientY ?? null);
+    },
+    [finalizeTouchGesture]
+  );
 
-  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
-      return;
-    }
-    lastPointerYRef.current = event.clientY;
-  }, []);
+  const handleTouchCancel = useCallback(() => {
+    touchMovedRef.current = false;
+    finalizeTouchGesture(null);
+  }, [finalizeTouchGesture]);
+
+  const isMarkerClickSuppressed = useCallback(
+    () => Date.now() < suppressMarkerClicksUntilRef.current,
+    []
+  );
 
   useEffect(() => {
     return () => {
@@ -402,11 +445,59 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
     };
   }, []);
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handleWindowTouchEnd = (event: TouchEvent) => {
+      finalizeTouchGesture(event.changedTouches[0]?.clientY ?? null);
+    };
+    const handleWindowTouchCancel = () => {
+      finalizeTouchGesture(null);
+    };
+    window.addEventListener("touchend", handleWindowTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", handleWindowTouchCancel, { passive: true });
+    return () => {
+      window.removeEventListener("touchend", handleWindowTouchEnd);
+      window.removeEventListener("touchcancel", handleWindowTouchCancel);
+    };
+  }, [finalizeTouchGesture, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const handleWindowWheel = (event: WheelEvent) => {
+      processWheelIntent(event.deltaY, event.clientY, event.target, () => event.preventDefault());
+    };
+    const handleWindowPointerMove = (event: PointerEvent) => {
+      if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
+        return;
+      }
+      lastPointerYRef.current = event.clientY;
+    };
+    const handleWindowMouseMove = (event: MouseEvent) => {
+      if (!Number.isFinite(event.clientY) || event.clientY <= 0) {
+        return;
+      }
+      lastPointerYRef.current = event.clientY;
+    };
+    window.addEventListener("wheel", handleWindowWheel, { passive: false });
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: true });
+    window.addEventListener("mousemove", handleWindowMouseMove, { passive: true });
+    return () => {
+      window.removeEventListener("wheel", handleWindowWheel);
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("mousemove", handleWindowMouseMove);
+    };
+  }, [open, processWheelIntent]);
+
   const visible = open || progress < 0.995;
 
   return (
     <div
       data-testid="workspace-launch-layer"
+      data-open={open ? "1" : "0"}
       className={`
         fixed inset-0 z-[80] bg-app-gradient
         ${visible ? "pointer-events-auto" : "pointer-events-none"}
@@ -414,15 +505,14 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       style={{
         transform: `translateY(${-progress * 100}%)`,
         transition: isInteracting ? "none" : "transform 380ms cubic-bezier(0.22, 1, 0.36, 1)",
-        touchAction: "none"
+        touchAction: "none",
+        visibility: visible ? "visible" : "hidden"
       }}
+      aria-hidden={!visible}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchCancel}
-      onWheel={handleWheel}
-      onPointerMove={handlePointerMove}
-      onMouseMove={handleMouseMove}
     >
       <main className="flex min-h-screen flex-col items-center justify-center px-4 py-8">
         <div className="w-full max-w-3xl">
@@ -432,6 +522,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
           <GlobeInteractive
             markers={markers}
             markerSelectableById={markerSelectableById}
+            isMarkerClickSuppressed={isMarkerClickSuppressed}
             onWorkshopClick={handleOpenWorkshop}
             onMarkerSelect={handleOpenProjectOperations}
             className="mx-auto"
@@ -439,8 +530,16 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
         </div>
       </main>
       <div
+        data-testid="workspace-launch-gesture-zone"
+        className="absolute inset-x-0 bottom-0 z-40"
+        style={{
+          height: `calc(${BOTTOM_EDGE_SWIPE_ZONE_PX}px + env(safe-area-inset-bottom) + 16px)`,
+          touchAction: "none"
+        }}
+      />
+      <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3"
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-50 flex justify-center pb-3"
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
       >
         <span

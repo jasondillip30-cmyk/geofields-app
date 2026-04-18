@@ -44,6 +44,7 @@ export function InventoryManualMovementModal({
 }) {
   const [isMounted, setIsMounted] = useState(open);
   const [isVisible, setIsVisible] = useState(open);
+  const [fallbackItems, setFallbackItems] = useState<InventoryItemRow[]>([]);
 
   useEffect(() => {
     let timeoutId: number | undefined;
@@ -62,12 +63,55 @@ export function InventoryManualMovementModal({
     };
   }, [isMounted, open]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadFallbackItems() {
+      if (!open || items.length > 0) {
+        if (!cancelled) {
+          setFallbackItems([]);
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/inventory/items", {
+          cache: "no-store",
+          signal: controller.signal
+        });
+        if (!response.ok) {
+          if (!cancelled) {
+            setFallbackItems([]);
+          }
+          return;
+        }
+        const payload = (await response.json()) as { data?: InventoryItemRow[] };
+        if (!cancelled) {
+          setFallbackItems(Array.isArray(payload.data) ? payload.data : []);
+        }
+      } catch {
+        if (!cancelled) {
+          setFallbackItems([]);
+        }
+      }
+    }
+
+    void loadFallbackItems();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [items.length, open]);
+
   const filteredProjects = useMemo(() => {
     if (!form.clientId) {
       return projects;
     }
     return projects.filter((project) => project.clientId === form.clientId);
   }, [form.clientId, projects]);
+  const availableItems = items.length > 0 ? items : fallbackItems;
 
   if (!isMounted) {
     return null;
@@ -134,7 +178,7 @@ export function InventoryManualMovementModal({
                 onChange={(value) => onFormChange({ itemId: value })}
                 options={[
                   { value: "", label: "Select item" },
-                  ...items.map((item) => ({
+                  ...availableItems.map((item) => ({
                     value: item.id,
                     label: `${item.name} (${item.sku})`
                   }))

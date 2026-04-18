@@ -12,6 +12,7 @@ interface GlobeInteractiveProps {
   className?: string;
   speed?: number;
   markerSelectableById?: Record<string, boolean>;
+  isMarkerClickSuppressed?: () => boolean;
   onMarkerSelect?: (markerId: string) => void;
   onWorkshopClick?: () => void;
 }
@@ -21,6 +22,7 @@ export function GlobeInteractive({
   className,
   speed = 0.0026,
   markerSelectableById,
+  isMarkerClickSuppressed,
   onMarkerSelect,
   onWorkshopClick
 }: GlobeInteractiveProps) {
@@ -201,6 +203,9 @@ export function GlobeInteractive({
   }, [resolvedMarkers, speed, updateMarkerPositionStyles]);
 
   const openMarker = (markerId: string) => {
+    if (isMarkerClickSuppressed?.()) {
+      return;
+    }
     if (expandedMarkerId !== markerId) {
       setExpandedMarkerId(markerId);
       return;
