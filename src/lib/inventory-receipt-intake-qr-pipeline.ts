@@ -29,6 +29,7 @@ import {
   extractTraCriticalFields,
   extractTraLabelValuePairs,
   extractTraLineCandidates,
+  isLikelyTraLoadingShellHtml,
   mapTraLabelToField,
   normalizeTraFinancialFields,
   sanitizeTraFieldValue,
@@ -59,11 +60,47 @@ interface TraLookupResult {
   lineItemsParseStatus: "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED";
   parsedFieldCount: number;
   parsedLineItemsCount: number;
+  derivedFinancialFallback: boolean;
   debugRawTextPreview: string;
   debugFieldCandidates: Array<{ field: string; value: string; confidence: number; source: string }>;
 }
 
 const PDF_MODULE_WARNING_PREFIX = "[PDF_MODULE_ERROR]";
+const TRA_LOADING_SHELL_RETRY_HINT =
+  "TRA verification page is still loading. Try Scan again or continue with manual review.";
+const TRA_LOOKUP_ATTEMPT_PROFILES: Array<{
+  label: string;
+  retryDelayMs: number;
+  gotoTimeoutMs: number;
+  waitForBodyMs: number;
+  waitForSignalMs: number;
+  fallbackTimeoutMs: number;
+}> = [
+  {
+    label: "quick",
+    retryDelayMs: 0,
+    gotoTimeoutMs: 7000,
+    waitForBodyMs: 3500,
+    waitForSignalMs: 2500,
+    fallbackTimeoutMs: 5000
+  },
+  {
+    label: "balanced",
+    retryDelayMs: 900,
+    gotoTimeoutMs: 10000,
+    waitForBodyMs: 4500,
+    waitForSignalMs: 4500,
+    fallbackTimeoutMs: 7000
+  },
+  {
+    label: "extended",
+    retryDelayMs: 1800,
+    gotoTimeoutMs: 13000,
+    waitForBodyMs: 5000,
+    waitForSignalMs: 6500,
+    fallbackTimeoutMs: 8500
+  }
+];
 
 export async function extractQrDataFromReceipt({
   fileBuffer,
@@ -397,14 +434,21 @@ async function finalizeQrResult(qrResult: ReceiptQrResult): Promise<ReceiptQrRes
     new Set([
       ...qrResult.warnings,
       lookup.status === "FAILED" ? "TRA verification lookup returned limited data and needs review." : "",
+      lookup.status === "FAILED" && lookup.reason ? lookup.reason : "",
       lookup.success && !lookup.parsed
         ? "TRA verification lookup succeeded, but parsing returned limited fields."
         : "",
       lookup.status === "SUCCESS" && lookup.fieldsParseStatus === "PARTIAL"
         ? "TRA fields were parsed partially. Please review mapped values."
         : "",
+      lookup.status === "SUCCESS" && lookup.lineItemsParseStatus === "PARTIAL"
+        ? "TRA line items were partially detected. Verify line quantities and totals before saving."
+        : "",
       lookup.status === "SUCCESS" && lookup.lineItemsParseStatus === "FAILED"
         ? "TRA line items were not detected automatically. Add or confirm line items manually."
+        : "",
+      lookup.derivedFinancialFallback
+        ? "Receipt totals were inferred from parsed line items. Verify total and subtotal before saving."
         : ""
     ].filter(Boolean))
   );
@@ -449,74 +493,102 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
       lineItemsParseStatus: "NOT_ATTEMPTED",
       parsedFieldCount: 0,
       parsedLineItemsCount: 0,
+      derivedFinancialFallback: false,
       debugRawTextPreview: "",
       debugFieldCandidates: []
     };
   }
 
+  type TraLookupAttempt = {
+    profileLabel: string;
+    renderedLookup: Awaited<ReturnType<typeof fetchTraRenderedHtml>>;
+    parsedLookup: ReturnType<typeof parseTraLookupResponse>;
+    parsedFields: Partial<ReceiptHeaderExtraction>;
+    parsedCount: number;
+    parsedLineItemsCount: number;
+    parsed: boolean;
+    isLoadingShell: boolean;
+    reason: string;
+    score: number;
+  };
+
+  const attempts: TraLookupAttempt[] = [];
+
   try {
     if (process.env.NODE_ENV !== "production") {
-      debugLog("[inventory][receipt-intake][tra-lookup][request]", { url: target.toString() });
+      debugLog("[inventory][receipt-intake][tra-lookup][request]", {
+        url: target.toString(),
+        attemptProfiles: TRA_LOOKUP_ATTEMPT_PROFILES.map((profile) => profile.label)
+      });
     }
-    const renderedLookup = await fetchTraRenderedHtml(target.toString());
-    const body = renderedLookup.html;
-    const parsedLookup = parseTraLookupResponse({ url: target, body });
-    const parsedFields = parsedLookup.parsedFields;
-    const parsedCount = countParsedFields(parsedFields);
-    const parsed = parsedCount > 0;
-    const success = renderedLookup.ok;
-    const reason = success
-      ? parsed
-        ? ""
-        : "Lookup response could not be parsed"
-      : renderedLookup.error || `Lookup failed with status ${renderedLookup.httpStatus ?? "unknown"}`;
 
-    if (process.env.NODE_ENV !== "production") {
-      debugLog("[inventory][receipt-intake][tra-lookup][response]", {
-        status: renderedLookup.httpStatus,
+    for (const profile of TRA_LOOKUP_ATTEMPT_PROFILES) {
+      if (profile.retryDelayMs > 0 && attempts.length > 0) {
+        await sleep(profile.retryDelayMs);
+      }
+      const renderedLookup = await fetchTraRenderedHtml(target.toString(), profile);
+      const body = renderedLookup.html;
+      const parsedLookup = parseTraLookupResponse({ url: target, body });
+      const parsedFields = parsedLookup.parsedFields;
+      const parsedCount = countParsedFields(parsedFields);
+      const parsedLineItemsCount = parsedLookup.parsedLineCandidates.length;
+      const parsed = parsedCount > 0 || parsedLineItemsCount > 0;
+      const isLoadingShell = isLikelyTraLoadingShellHtml(body);
+      const reason = renderedLookup.ok
+        ? isLoadingShell
+          ? TRA_LOADING_SHELL_RETRY_HINT
+          : parsed
+            ? ""
+            : "Lookup response could not be parsed"
+        : normalizeTraLookupFailureReason(renderedLookup.error || `Lookup failed with status ${renderedLookup.httpStatus ?? "unknown"}`);
+      const score = scoreTraLookupAttempt({
         ok: renderedLookup.ok,
-        source: renderedLookup.source,
-        htmlLength: body.length,
-        containsReceipt: renderedLookup.containsReceipt,
-        containsTin: renderedLookup.containsTin,
-        containsPurchasedItems: renderedLookup.containsPurchasedItems,
-        parsed,
         parsedCount,
-        lineItems: parsedLookup.parsedLineCandidates.length,
+        parsedLineItemsCount,
+        isLoadingShell,
         fieldsParseStatus: parsedLookup.fieldsParseStatus,
         lineItemsParseStatus: parsedLookup.lineItemsParseStatus
       });
-      debugLog("[inventory][receipt-intake][tra-lookup][mapped-fields]", parsedFields);
-      if (parsedLookup.debugRawTextPreview) {
-        debugLog("[inventory][receipt-intake][tra-lookup][raw-text-preview]", {
-          preview: parsedLookup.debugRawTextPreview
+      attempts.push({
+        profileLabel: profile.label,
+        renderedLookup,
+        parsedLookup,
+        parsedFields,
+        parsedCount,
+        parsedLineItemsCount,
+        parsed,
+        isLoadingShell,
+        reason,
+        score
+      });
+
+      if (process.env.NODE_ENV !== "production") {
+        debugLog("[inventory][receipt-intake][tra-lookup][attempt]", {
+          profile: profile.label,
+          status: renderedLookup.httpStatus,
+          ok: renderedLookup.ok,
+          source: renderedLookup.source,
+          htmlLength: body.length,
+          containsReceipt: renderedLookup.containsReceipt,
+          containsTin: renderedLookup.containsTin,
+          containsPurchasedItems: renderedLookup.containsPurchasedItems,
+          isLoadingShell,
+          parsed,
+          parsedCount,
+          lineItems: parsedLineItemsCount,
+          fieldsParseStatus: parsedLookup.fieldsParseStatus,
+          lineItemsParseStatus: parsedLookup.lineItemsParseStatus,
+          reason
         });
       }
-      if (parsedLookup.debugFieldCandidates.length > 0) {
-        debugLog("[inventory][receipt-intake][tra-lookup][field-candidates]", {
-          candidates: parsedLookup.debugFieldCandidates.slice(0, 20)
-        });
+
+      const hasMeaningfulStructuredData = parsedCount >= 3 || parsedLineItemsCount > 0;
+      if (renderedLookup.ok && !isLoadingShell && hasMeaningfulStructuredData) {
+        break;
       }
     }
-
-    return {
-      attempted: true,
-      success,
-      status: success ? "SUCCESS" : "FAILED",
-      reason,
-      httpStatus: renderedLookup.httpStatus,
-      parsed,
-      parsedFields,
-      parsedLineCandidates: parsedLookup.parsedLineCandidates,
-      fieldsParseStatus: parsedLookup.fieldsParseStatus,
-      lineItemsParseStatus: parsedLookup.lineItemsParseStatus,
-      parsedFieldCount: parsedCount,
-      parsedLineItemsCount: parsedLookup.parsedLineCandidates.length,
-      debugRawTextPreview: parsedLookup.debugRawTextPreview,
-      debugFieldCandidates: parsedLookup.debugFieldCandidates
-    };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Lookup request failed";
+    const reason = normalizeTraLookupFailureReason(error instanceof Error ? error.message : "Lookup request failed");
     if (process.env.NODE_ENV !== "production") {
       debugLog("[inventory][receipt-intake][tra-lookup][error]", { reason });
     }
@@ -533,13 +605,175 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
       lineItemsParseStatus: "FAILED",
       parsedFieldCount: 0,
       parsedLineItemsCount: 0,
+      derivedFinancialFallback: false,
       debugRawTextPreview: "",
       debugFieldCandidates: []
     };
   }
+
+  const bestAttempt = chooseBestTraLookupAttempt(attempts);
+  if (!bestAttempt) {
+    return {
+      attempted: true,
+      success: false,
+      status: "FAILED",
+      reason: normalizeTraLookupFailureReason("TRA verification lookup returned limited data."),
+      httpStatus: null,
+      parsed: false,
+      parsedFields: {},
+      parsedLineCandidates: [],
+      fieldsParseStatus: "FAILED",
+      lineItemsParseStatus: "FAILED",
+      parsedFieldCount: 0,
+      parsedLineItemsCount: 0,
+      derivedFinancialFallback: false,
+      debugRawTextPreview: "",
+      debugFieldCandidates: []
+    };
+  }
+
+  const success = bestAttempt.renderedLookup.ok && !bestAttempt.isLoadingShell;
+  const status: ReceiptVerificationLookupStatus = success ? "SUCCESS" : "FAILED";
+  const reason = success
+    ? bestAttempt.parsed
+      ? ""
+      : "Lookup response could not be parsed"
+    : bestAttempt.reason || normalizeTraLookupFailureReason("TRA verification lookup returned limited data.");
+
+  if (process.env.NODE_ENV !== "production") {
+    debugLog("[inventory][receipt-intake][tra-lookup][response]", {
+      profile: bestAttempt.profileLabel,
+      status: bestAttempt.renderedLookup.httpStatus,
+      ok: bestAttempt.renderedLookup.ok,
+      source: bestAttempt.renderedLookup.source,
+      htmlLength: bestAttempt.renderedLookup.html.length,
+      containsReceipt: bestAttempt.renderedLookup.containsReceipt,
+      containsTin: bestAttempt.renderedLookup.containsTin,
+      containsPurchasedItems: bestAttempt.renderedLookup.containsPurchasedItems,
+      isLoadingShell: bestAttempt.isLoadingShell,
+      parsed: bestAttempt.parsed,
+      parsedCount: bestAttempt.parsedCount,
+      lineItems: bestAttempt.parsedLineItemsCount,
+      fieldsParseStatus: bestAttempt.parsedLookup.fieldsParseStatus,
+      lineItemsParseStatus: bestAttempt.parsedLookup.lineItemsParseStatus,
+      attemptsEvaluated: attempts.length,
+      attemptScores: attempts.map((attempt) => ({
+        profile: attempt.profileLabel,
+        score: roundTo(attempt.score, 2),
+        ok: attempt.renderedLookup.ok,
+        parsedCount: attempt.parsedCount,
+        parsedLineItemsCount: attempt.parsedLineItemsCount,
+        isLoadingShell: attempt.isLoadingShell
+      }))
+    });
+    debugLog("[inventory][receipt-intake][tra-lookup][mapped-fields]", bestAttempt.parsedFields);
+    if (bestAttempt.parsedLookup.debugRawTextPreview) {
+      debugLog("[inventory][receipt-intake][tra-lookup][raw-text-preview]", {
+        preview: bestAttempt.parsedLookup.debugRawTextPreview
+      });
+    }
+    if (bestAttempt.parsedLookup.debugFieldCandidates.length > 0) {
+      debugLog("[inventory][receipt-intake][tra-lookup][field-candidates]", {
+        candidates: bestAttempt.parsedLookup.debugFieldCandidates.slice(0, 20)
+      });
+    }
+  }
+
+  return {
+    attempted: true,
+    success,
+    status,
+    reason,
+    httpStatus: bestAttempt.renderedLookup.httpStatus,
+    parsed: bestAttempt.parsed,
+    parsedFields: bestAttempt.parsedFields,
+    parsedLineCandidates: bestAttempt.parsedLookup.parsedLineCandidates,
+    fieldsParseStatus: bestAttempt.parsedLookup.fieldsParseStatus,
+    lineItemsParseStatus: bestAttempt.parsedLookup.lineItemsParseStatus,
+    parsedFieldCount: bestAttempt.parsedCount,
+    parsedLineItemsCount: bestAttempt.parsedLineItemsCount,
+    derivedFinancialFallback: bestAttempt.parsedLookup.derivedFinancialFallback,
+    debugRawTextPreview: bestAttempt.parsedLookup.debugRawTextPreview,
+    debugFieldCandidates: bestAttempt.parsedLookup.debugFieldCandidates
+  };
 }
 
-async function fetchTraRenderedHtml(url: string): Promise<{
+function scoreTraLookupAttempt({
+  ok,
+  parsedCount,
+  parsedLineItemsCount,
+  isLoadingShell,
+  fieldsParseStatus,
+  lineItemsParseStatus
+}: {
+  ok: boolean;
+  parsedCount: number;
+  parsedLineItemsCount: number;
+  isLoadingShell: boolean;
+  fieldsParseStatus: "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED";
+  lineItemsParseStatus: "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED";
+}) {
+  const fieldStatusWeight =
+    fieldsParseStatus === "SUCCESS" ? 4 : fieldsParseStatus === "PARTIAL" ? 2 : fieldsParseStatus === "FAILED" ? -1 : 0;
+  const lineStatusWeight =
+    lineItemsParseStatus === "SUCCESS"
+      ? 4
+      : lineItemsParseStatus === "PARTIAL"
+        ? 2
+        : lineItemsParseStatus === "FAILED"
+          ? -1
+          : 0;
+  const base = (ok ? 5 : 0) + parsedCount * 1.5 + parsedLineItemsCount * 2 + fieldStatusWeight + lineStatusWeight;
+  return isLoadingShell ? base - 10 : base;
+}
+
+function chooseBestTraLookupAttempt<T extends { score: number; renderedLookup: { html: string } }>(attempts: T[]) {
+  if (attempts.length === 0) {
+    return null;
+  }
+  return [...attempts].sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return (right.renderedLookup.html?.length || 0) - (left.renderedLookup.html?.length || 0);
+  })[0];
+}
+
+function normalizeTraLookupFailureReason(rawReason: string) {
+  const reason = (rawReason || "").trim();
+  if (!reason) {
+    return "TRA verification lookup returned limited data. Try Scan again or continue with manual review.";
+  }
+  const lower = reason.toLowerCase();
+  if (lower.includes("aborted") || lower.includes("aborterror") || lower.includes("operation was aborted")) {
+    return "TRA verification timed out before the receipt fully loaded. Try Scan again or continue with manual review.";
+  }
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "TRA verification is taking longer than expected. Try Scan again or continue with manual review.";
+  }
+  if (lower.includes("loading")) {
+    return TRA_LOADING_SHELL_RETRY_HINT;
+  }
+  return reason;
+}
+
+async function sleep(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchTraRenderedHtml(
+  url: string,
+  profile: {
+    label: string;
+    gotoTimeoutMs: number;
+    waitForBodyMs: number;
+    waitForSignalMs: number;
+    fallbackTimeoutMs: number;
+  }
+): Promise<{
   ok: boolean;
   httpStatus: number | null;
   html: string;
@@ -551,7 +785,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
 }> {
   const fallbackFetch = async (reason: string) => {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), profile.fallbackTimeoutMs);
     try {
       const response = await fetch(url, {
         method: "GET",
@@ -561,6 +795,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
       const metrics = buildTraHtmlKeywordMetrics(html);
       if (process.env.NODE_ENV !== "production") {
         debugLog("[inventory][receipt-intake][tra-lookup][fetch-fallback]", {
+          profile: profile.label,
           reason,
           status: response.status,
           ok: response.ok,
@@ -609,18 +844,27 @@ async function fetchTraRenderedHtml(url: string): Promise<{
       const page = await browser.newPage();
       const response = await page.goto(url, {
         waitUntil: "networkidle",
-        timeout: 15000
+        timeout: profile.gotoTimeoutMs
       });
       await page.waitForSelector("body", {
-        timeout: 5000
+        timeout: profile.waitForBodyMs
       });
       await page
         .waitForFunction(
           () => {
             const text = (document.body?.innerText || "").toUpperCase();
-            return text.includes("RECEIPT") || text.includes("TIN") || text.includes("PURCHASED ITEMS");
+            const hasCoreSignals =
+              text.includes("START OF LEGAL RECEIPT") ||
+              text.includes("PURCHASED ITEMS") ||
+              text.includes("RECEIPT NO") ||
+              (text.includes("TIN") && text.includes("VRN"));
+            const stillLoading =
+              text.includes("PAGE IS LOADING") ||
+              text.includes("PLEASE WAIT") ||
+              text.includes("PROCESSING REQUEST");
+            return hasCoreSignals && !stillLoading;
           },
-          { timeout: 7000 }
+          { timeout: profile.waitForSignalMs }
         )
         .catch(() => null);
 
@@ -631,6 +875,7 @@ async function fetchTraRenderedHtml(url: string): Promise<{
 
       if (process.env.NODE_ENV !== "production") {
         debugLog("[inventory][receipt-intake][tra-lookup][playwright-rendered]", {
+          profile: profile.label,
           status,
           ok,
           htmlLength: html.length,
@@ -685,19 +930,14 @@ function parseTraLookupResponse({
 
   const fromUrl = parseQrFromUrl(url);
   for (const [field, value] of Object.entries(fromUrl)) {
-    if (typeof value === "string" && value.trim()) {
+    if ((typeof value === "string" && value.trim()) || (typeof value === "number" && Number.isFinite(value) && value > 0)) {
+      const sanitized = sanitizeTraFieldValue(field as keyof ReceiptHeaderExtraction, value as string | number, field);
+      if (sanitized === null) {
+        continue;
+      }
       fieldCandidates.push({
         field: field as keyof ReceiptHeaderExtraction,
-        value: value.trim(),
-        confidence: 0.55,
-        source: "url-query"
-      });
-      continue;
-    }
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      fieldCandidates.push({
-        field: field as keyof ReceiptHeaderExtraction,
-        value,
+        value: sanitized,
         confidence: 0.55,
         source: "url-query"
       });
@@ -820,12 +1060,27 @@ function parseTraLookupResponse({
     }
   }
   const resolvedFields = selectBestTraFieldCandidates(fieldCandidates);
-  const financiallyNormalizedFields = normalizeTraFinancialFields(resolvedFields);
+  const totalBeforeNormalization = Number((resolvedFields as Record<string, unknown>).total || 0);
+  const subtotalBeforeNormalization = Number((resolvedFields as Record<string, unknown>).subtotal || 0);
+  const financiallyNormalizedFields = normalizeTraFinancialFields(resolvedFields, lineCandidates);
+  const totalAfterNormalization = Number((financiallyNormalizedFields as Record<string, unknown>).total || 0);
+  const subtotalAfterNormalization = Number((financiallyNormalizedFields as Record<string, unknown>).subtotal || 0);
+  const totalDerivedFromLines =
+    (!Number.isFinite(totalBeforeNormalization) || totalBeforeNormalization <= 0) &&
+    Number.isFinite(totalAfterNormalization) &&
+    totalAfterNormalization > 0;
+  const subtotalDerivedFromLines =
+    (!Number.isFinite(subtotalBeforeNormalization) || subtotalBeforeNormalization <= 0) &&
+    Number.isFinite(subtotalAfterNormalization) &&
+    subtotalAfterNormalization > 0;
+  const derivedFinancialFallback =
+    lineCandidates.length > 0 && (totalDerivedFromLines || subtotalDerivedFromLines);
   const resolvedParsedFieldCount = countParsedFields(financiallyNormalizedFields);
   const fieldsParseStatus: "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED" =
     resolvedParsedFieldCount >= 8 ? "SUCCESS" : resolvedParsedFieldCount >= 3 ? "PARTIAL" : "FAILED";
+  const hasLineSignals = hasLikelyTraLineSignals(parseContext.selectedHtml, text) || hasLikelyTraLineSignals(body, parseContext.fullText);
   const lineItemsParseStatus: "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED" =
-    lineCandidates.length > 0 ? "SUCCESS" : "FAILED";
+    lineCandidates.length > 0 ? "SUCCESS" : hasLineSignals ? "PARTIAL" : "FAILED";
 
   if (process.env.NODE_ENV !== "production") {
     debugLog("[inventory][receipt-intake][tra-lookup][html-structure]", parseContext.structureSummary);
@@ -842,7 +1097,8 @@ function parseTraLookupResponse({
       parsedFieldCount: resolvedParsedFieldCount,
       parsedLineItemsCount: lineCandidates.length,
       fieldsParseStatus,
-      lineItemsParseStatus
+      lineItemsParseStatus,
+      derivedFinancialFallback
     });
   }
 
@@ -851,6 +1107,7 @@ function parseTraLookupResponse({
     parsedLineCandidates: lineCandidates,
     fieldsParseStatus,
     lineItemsParseStatus,
+    derivedFinancialFallback,
     debugRawTextPreview: text.slice(0, 1200),
     debugFieldCandidates: fieldCandidates
       .slice(0, 60)
@@ -861,6 +1118,30 @@ function parseTraLookupResponse({
         source: candidate.source
       }))
   };
+}
+
+function hasLikelyTraLineSignals(html: string, text: string) {
+  const lowerText = (text || "").toLowerCase();
+  const lowerHtml = (html || "").toLowerCase();
+  if (!lowerText && !lowerHtml) {
+    return false;
+  }
+  if (
+    containsAny(lowerText, [
+      "purchased items",
+      "description",
+      "qty",
+      "quantity",
+      "unit price",
+      "line total",
+      "amount"
+    ])
+  ) {
+    return true;
+  }
+  const hasRowStructures = /<(?:tr|li|div|p)\b/i.test(html || "");
+  const hasMoneyTokens = /\b\d[\d,]*(?:\.\d{1,2})\b/.test(text || "");
+  return hasRowStructures && hasMoneyTokens;
 }
 
 export {

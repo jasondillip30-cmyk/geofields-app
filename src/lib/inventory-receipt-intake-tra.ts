@@ -339,6 +339,49 @@ function scoreTraParseText(text: string) {
   };
 }
 
+export function isLikelyTraLoadingShellText(text: string) {
+  const normalized = normalizeWhitespace(decodeHtmlEntities(text)).toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  const loadingPhrases = [
+    "page is loading",
+    "please wait",
+    "processing request",
+    "javascript is required",
+    "verification portal",
+    "loading..."
+  ];
+  const hasLoadingPhrase = loadingPhrases.some((phrase) => normalized.includes(phrase));
+  const strongReceiptSignals = [
+    "start of legal receipt",
+    "end of legal receipt",
+    "purchased items",
+    "receipt no",
+    "verification code",
+    "total incl",
+    "total excl",
+    "tin",
+    "vrn"
+  ];
+  const strongSignalHits = strongReceiptSignals.filter((signal) => normalized.includes(signal)).length;
+  if (hasLoadingPhrase && strongSignalHits < 2) {
+    return true;
+  }
+  if (normalized.length < 220 && hasLoadingPhrase) {
+    return true;
+  }
+  if (normalized.includes("receipt verification portal") && strongSignalHits === 0) {
+    return true;
+  }
+  return false;
+}
+
+export function isLikelyTraLoadingShellHtml(html: string) {
+  const text = extractReadableTraTextWithLineBreaks(html, { keepScripts: true });
+  return isLikelyTraLoadingShellText(text);
+}
+
 function extractMarkerSlice(html: string, startMarker: string, endMarker: string) {
   const lower = html.toLowerCase();
   const start = lower.indexOf(startMarker);
@@ -780,11 +823,19 @@ export function sanitizeTraFieldValue(
   return cleaned;
 }
 
-export function normalizeTraFinancialFields(parsed: Partial<ReceiptHeaderExtraction>) {
+export function normalizeTraFinancialFields(
+  parsed: Partial<ReceiptHeaderExtraction>,
+  lineCandidates: ReceiptLineCandidate[] = []
+) {
   const next: Partial<ReceiptHeaderExtraction> = { ...parsed };
+  const lineTotalSum = sumTraLineTotals(lineCandidates);
   const subtotal = toPositiveMoney(next.subtotal);
   const tax = toPositiveMoney(next.tax);
   const total = toPositiveMoney(next.total);
+
+  if (total <= 0 && lineTotalSum > 0) {
+    next.total = lineTotalSum;
+  }
 
   if (subtotal > 0 && total > 0) {
     const impliedTax = roundCurrency(total - subtotal);
@@ -802,6 +853,15 @@ export function normalizeTraFinancialFields(parsed: Partial<ReceiptHeaderExtract
   if (normalizedTotal > 0 && normalizedTax > 0 && normalizedSubtotal <= 0 && normalizedTotal >= normalizedTax) {
     next.subtotal = roundCurrency(normalizedTotal - normalizedTax);
   }
+  const finalSubtotal = toPositiveMoney(next.subtotal);
+  const finalTax = toPositiveMoney(next.tax);
+  const finalTotal = toPositiveMoney(next.total);
+  if (finalSubtotal <= 0 && lineTotalSum > 0 && (finalTotal <= 0 || approximatelyEqual(finalTotal, lineTotalSum, 0.25))) {
+    next.subtotal = lineTotalSum;
+  }
+  if (finalTax <= 0 && finalTotal > 0 && finalSubtotal > 0 && approximatelyEqual(finalTotal, finalSubtotal, 0.25)) {
+    next.tax = 0;
+  }
 
   return next;
 }
@@ -813,6 +873,20 @@ function toPositiveMoney(value: unknown) {
 
 function approximatelyEqual(a: number, b: number, tolerance = 0.01) {
   return Math.abs(a - b) <= tolerance;
+}
+
+function sumTraLineTotals(lineCandidates: ReceiptLineCandidate[]) {
+  if (!Array.isArray(lineCandidates) || lineCandidates.length === 0) {
+    return 0;
+  }
+  const total = lineCandidates.reduce((sum, line) => {
+    const lineTotal = Number(line.lineTotal || 0);
+    if (!Number.isFinite(lineTotal) || lineTotal <= 0) {
+      return sum;
+    }
+    return sum + lineTotal;
+  }, 0);
+  return total > 0 ? roundCurrency(total) : 0;
 }
 
 export function selectBestTraFieldCandidates(
@@ -835,7 +909,18 @@ export function selectBestTraFieldCandidates(
 export function extractTraLineCandidates(html: string, text: string) {
   const targetedHtml = extractTraPurchasedItemsSection(html) || html;
   const lineCandidates: ReceiptLineCandidate[] = [];
-  const rows = Array.from(targetedHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)).map((row) =>
+  lineCandidates.push(...extractTraTableLineCandidates(targetedHtml));
+  lineCandidates.push(...extractTraNonTableLineCandidates(targetedHtml));
+  lineCandidates.push(...extractTraScriptLineCandidates(html));
+  if (lineCandidates.length > 0) {
+    return mergeDuplicateLineCandidates(lineCandidates).slice(0, 40);
+  }
+  return extractLineCandidates(text).slice(0, 40);
+}
+
+function extractTraTableLineCandidates(html: string) {
+  const lineCandidates: ReceiptLineCandidate[] = [];
+  const rows = Array.from(html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)).map((row) =>
     Array.from((row[1] || "").matchAll(/<(?:th|td)[^>]*>([\s\S]*?)<\/(?:th|td)>/gi))
       .map((cell) => normalizeWhitespace(decodeHtmlEntities((cell[1] || "").replace(/<[^>]+>/g, " "))))
       .filter(Boolean)
@@ -890,12 +975,120 @@ export function extractTraLineCandidates(html: string, text: string) {
       extractionConfidence: positiveAmounts.length >= 2 ? "HIGH" : "MEDIUM"
     });
   }
+  return lineCandidates;
+}
 
-  if (lineCandidates.length > 0) {
-    return mergeDuplicateLineCandidates(lineCandidates).slice(0, 40);
+function extractTraNonTableLineCandidates(html: string) {
+  const lineCandidates: ReceiptLineCandidate[] = [];
+  const blocks = Array.from(html.matchAll(/<(?:li|div|p)[^>]*>([\s\S]{1,280}?)<\/(?:li|div|p)>/gi))
+    .map((match) => normalizeWhitespace(decodeHtmlEntities((match[1] || "").replace(/<[^>]+>/g, " "))))
+    .filter(Boolean)
+    .slice(0, 700);
+  for (const block of blocks) {
+    const lower = block.toLowerCase();
+    if (!/[a-z]/i.test(block) || !/\d/.test(block)) {
+      continue;
+    }
+    if (isLikelyTraLoadingShellText(lower) || isLikelyLineSummaryText(lower)) {
+      continue;
+    }
+    const explicit = parseExplicitLinePattern(block);
+    if (explicit) {
+      lineCandidates.push(explicit);
+      continue;
+    }
+    const fallback = parseFallbackLinePattern(block);
+    if (!fallback) {
+      continue;
+    }
+    const hasLineHints = containsAny(lower, ["qty", "quantity", "unit price", "line total", "amount", "item"]);
+    if (fallback.extractionConfidence === "LOW" && !hasLineHints) {
+      continue;
+    }
+    lineCandidates.push(fallback);
   }
+  return lineCandidates;
+}
 
-  return extractLineCandidates(text).slice(0, 40);
+function extractTraScriptLineCandidates(html: string) {
+  const lineCandidates: ReceiptLineCandidate[] = [];
+  const scriptCandidates = extractTraScriptTextCandidates(html).slice(0, 40);
+  for (const scriptCandidate of scriptCandidates) {
+    const scriptText = normalizeWhitespace(scriptCandidate.text);
+    if (!scriptText || isLikelyTraLoadingShellText(scriptText)) {
+      continue;
+    }
+    lineCandidates.push(...extractLineCandidates(scriptText));
+    const objectMatches = Array.from(scriptText.matchAll(/\{[^{}]{20,500}\}/g)).slice(0, 120);
+    for (const objectMatch of objectMatches) {
+      const parsed = parseStructuredScriptObjectLine(objectMatch[0] || "");
+      if (!parsed) {
+        continue;
+      }
+      lineCandidates.push(parsed);
+    }
+  }
+  return lineCandidates;
+}
+
+function parseStructuredScriptObjectLine(raw: string): ReceiptLineCandidate | null {
+  if (!raw || raw.length < 20) {
+    return null;
+  }
+  const description = cleanupDescription(
+    (raw.match(/(?:description|item(?:name)?|product|goods|name)\s*[:=]\s*["']?([a-z0-9][^,"'}]{1,80})/i)?.[1] || "")
+      .replace(/\\"/g, "\"")
+      .replace(/\\'/g, "'")
+  );
+  if (!description) {
+    return null;
+  }
+  const lowerDescription = description.toLowerCase();
+  if (isLikelyLineSummaryText(lowerDescription) || containsAny(lowerDescription, lineSkipKeywords)) {
+    return null;
+  }
+  const quantity = parseNumberSafe(raw.match(/(?:qty|quantity)\s*[:=]\s*["']?([0-9][0-9.,]{0,10})/i)?.[1] || "1");
+  const unitPrice = parseNumberSafe(raw.match(/(?:unitprice|unit_price|price)\s*[:=]\s*["']?([0-9][0-9.,]{0,12})/i)?.[1] || "0");
+  const lineTotalRaw =
+    raw.match(/(?:linetotal|line_total|amount|total|value)\s*[:=]\s*["']?([0-9][0-9.,]{0,12})/i)?.[1] || "";
+  const lineTotalParsed = parseNumberSafe(lineTotalRaw);
+  const safeQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : 1;
+  const safeUnitPrice = Number.isFinite(unitPrice) && unitPrice > 0 ? unitPrice : 0;
+  const safeLineTotal =
+    Number.isFinite(lineTotalParsed) && lineTotalParsed > 0
+      ? lineTotalParsed
+      : safeUnitPrice > 0
+        ? safeUnitPrice * safeQuantity
+        : 0;
+  if (safeLineTotal <= 0) {
+    return null;
+  }
+  return {
+    description,
+    quantity: roundCurrency(Math.max(1, safeQuantity)),
+    unitPrice: roundCurrency(Math.max(0, safeUnitPrice || safeLineTotal / Math.max(1, safeQuantity))),
+    lineTotal: roundCurrency(safeLineTotal),
+    extractionConfidence: safeUnitPrice > 0 ? "MEDIUM" : "LOW"
+  };
+}
+
+function isLikelyLineSummaryText(loweredText: string) {
+  return containsAny(loweredText, [
+    "subtotal",
+    "grand total",
+    "vat",
+    "tax",
+    "total inclusive",
+    "total incl",
+    "total excl",
+    "amount due",
+    "description",
+    "unit price",
+    "line total",
+    "page is loading",
+    "please wait",
+    "processing request"
+  ]);
 }
 
 function extractTraPurchasedItemsSection(html: string) {

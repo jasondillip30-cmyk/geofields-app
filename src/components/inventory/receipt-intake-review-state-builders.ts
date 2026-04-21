@@ -40,7 +40,6 @@ import {
 import {
   asRecord,
   asString,
-  readNumericFieldValue,
   readNumericFieldValueOptional,
   readStringFieldValue,
   toNumericString
@@ -307,6 +306,9 @@ export function buildReviewStateFromPayload({
   const qrParsedFields = asRecord(qr?.parsedFields);
   const qrStages = asRecord(qr?.stages);
   const qrLookup = asRecord(qrStages?.verificationLookup);
+  const qrLookupStatus = normalizeQrLookupStatus(qrLookup?.status);
+  const qrFieldsParseStatus = normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus);
+  const qrLineItemsParseStatus = normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus);
   const fromQrParsedSupplier = asString(qrParsedFields?.supplierName);
   const payloadSupplierName = asString(payload.supplierName);
   const payloadSupplierConfidence = toReadability(payload.supplierConfidence);
@@ -364,6 +366,7 @@ export function buildReviewStateFromPayload({
     initialRequisition,
     effectiveClassification
   );
+  const requisitionEstimatedTotal = resolveRequisitionEstimatedTotal(initialRequisition);
   const extractedLines = mapExtractedLines(extracted.lines);
   const lines = resolveReviewLinesWithRequisitionFallback({
     extractedLines,
@@ -395,13 +398,45 @@ export function buildReviewStateFromPayload({
     qrParsedFields,
     keys: ["total", "amount", "grossTotal"]
   });
-  const scannedSnapshotLines = extractedLines.map((line) => ({
+  const shouldApplyRequisitionDerivedFallback =
+    Boolean(qr?.isTraVerification) &&
+    (qrLookupStatus !== "SUCCESS" || qrFieldsParseStatus !== "SUCCESS" || qrLineItemsParseStatus !== "SUCCESS");
+  const derivedTotalFromRequisition =
+    shouldApplyRequisitionDerivedFallback &&
+    !scannedTotal &&
+    Number.isFinite(requisitionEstimatedTotal) &&
+    requisitionEstimatedTotal > 0;
+  const derivedScannedLinesFromRequisition =
+    shouldApplyRequisitionDerivedFallback &&
+    extractedLines.length === 0 &&
+    requisitionFallbackLines.length > 0;
+  const scannedSnapshotLinesFromExtraction = extractedLines.map((line) => ({
     id: line.id,
     description: line.description,
     quantity: line.quantity,
     unitPrice: line.unitPrice,
     lineTotal: line.lineTotal
   }));
+  const scannedSnapshotLines = derivedScannedLinesFromRequisition
+    ? requisitionFallbackLines.map((line, index) => ({
+        id: line.id || `rq-scan-${index + 1}`,
+        description: line.description,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        lineTotal: line.lineTotal
+      }))
+    : scannedSnapshotLinesFromExtraction;
+  const effectiveScannedTotal = derivedTotalFromRequisition ? String(requisitionEstimatedTotal) : scannedTotal;
+  const effectiveScannedSubtotal =
+    derivedTotalFromRequisition && !scannedSubtotal ? String(requisitionEstimatedTotal) : scannedSubtotal;
+  const effectiveScannedTax = derivedTotalFromRequisition && !scannedTax ? "0" : scannedTax;
+  const withDerivedFinancialFieldMaps = applyDerivedFinancialFieldOverrides({
+    fieldConfidence: supplierFieldMaps.fieldConfidence,
+    fieldSource: supplierFieldMaps.fieldSource,
+    derivedTotalFromRequisition,
+    derivedSubtotalFromRequisition: derivedTotalFromRequisition && !scannedSubtotal,
+    derivedTaxFromRequisition: derivedTotalFromRequisition && !scannedTax
+  });
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -411,6 +446,39 @@ export function buildReviewStateFromPayload({
     workflowChoice === "MAINTENANCE_PURCHASE" || workflowChoice === "PROJECT_PURCHASE"
       ? defaultRigId
       : "";
+
+  const warnings = Array.isArray(extracted.warnings)
+    ? Array.from(
+        new Set(
+          [
+            ...extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean),
+            ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
+              ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
+              : []),
+            ...(derivedTotalFromRequisition
+              ? ["Scanned receipt total was inferred from approved requisition; verify before saving."]
+              : []),
+            ...(derivedScannedLinesFromRequisition
+              ? ["Scanned receipt lines were inferred from approved requisition; verify before saving."]
+              : [])
+          ].filter(Boolean)
+        )
+      )
+    : Array.from(
+        new Set(
+          [
+            ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
+              ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
+              : []),
+            ...(derivedTotalFromRequisition
+              ? ["Scanned receipt total was inferred from approved requisition; verify before saving."]
+              : []),
+            ...(derivedScannedLinesFromRequisition
+              ? ["Scanned receipt lines were inferred from approved requisition; verify before saving."]
+              : [])
+          ].filter(Boolean)
+        )
+      );
 
   return {
     requisitionId: requisitionLink.id,
@@ -450,10 +518,10 @@ export function buildReviewStateFromPayload({
     qrDecodePass: asString(qr?.decodePass),
     qrParseStatus: normalizeQrParseStatus(qr?.parseStatus),
     qrFailureReason: asString(qr?.failureReason),
-    qrLookupStatus: normalizeQrLookupStatus(qrLookup?.status),
+    qrLookupStatus,
     qrLookupReason: asString(qrLookup?.reason),
-    qrFieldsParseStatus: normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus),
-    qrLineItemsParseStatus: normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus),
+    qrFieldsParseStatus,
+    qrLineItemsParseStatus,
     receiptDate: scannedReceiptDate,
     receiptTime: readStringFieldValue({
       header: extractedHeader,
@@ -486,9 +554,9 @@ export function buildReviewStateFromPayload({
         qrParsedFields,
         keys: ["currency"]
       }) || "USD",
-    subtotal: scannedSubtotal,
-    tax: scannedTax,
-    total: scannedTotal,
+    subtotal: effectiveScannedSubtotal,
+    tax: effectiveScannedTax,
+    total: effectiveScannedTotal,
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
@@ -500,25 +568,12 @@ export function buildReviewStateFromPayload({
     receiptPurpose: receiptConfig.receiptPurpose,
     receiptWorkflowChoice: workflowChoice,
     receiptClassification: effectiveClassification,
-    warnings: Array.isArray(extracted.warnings)
-      ? Array.from(
-          new Set(
-            [
-              ...extracted.warnings.map((warning) => calmMessage(asString(warning))).filter(Boolean),
-              ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
-                ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
-                : [])
-            ].filter(Boolean)
-          )
-        )
-      : extractedLines.length === 0 && requisitionFallbackLines.length > 0
-        ? ["No receipt line items were extracted. Prefilled requisition line items for manual review."]
-        : [],
+    warnings,
     extractionMethod: asString(extracted.extractionMethod) || "UNKNOWN",
     scanStatus: normalizeScanStatus(extracted.scanStatus),
     receiptType: normalizeReceiptType(extracted.receiptType),
-    fieldConfidence: supplierFieldMaps.fieldConfidence,
-    fieldSource: supplierFieldMaps.fieldSource,
+    fieldConfidence: withDerivedFinancialFieldMaps.fieldConfidence,
+    fieldSource: withDerivedFinancialFieldMaps.fieldSource,
     rawTextPreview: asString(extracted.rawTextPreview),
     debugFlags: readDebugFlags(payload),
     debugCandidates: readDebugCandidates(extracted.debug),
@@ -526,7 +581,7 @@ export function buildReviewStateFromPayload({
       supplierName: resolvedSupplierName,
       receiptNumber: scannedReceiptNumber,
       receiptDate: scannedReceiptDate,
-      total: scannedTotal,
+      total: effectiveScannedTotal,
       lines: scannedSnapshotLines
     },
     scanDiagnostics: readScanDiagnostics(payload, extracted),
@@ -565,6 +620,9 @@ export function buildManualAssistReview({
   const qrParsedFields = asRecord(qr?.parsedFields);
   const qrStages = asRecord(qr?.stages);
   const qrLookup = asRecord(qrStages?.verificationLookup);
+  const qrLookupStatus = normalizeQrLookupStatus(qrLookup?.status);
+  const qrFieldsParseStatus = normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus);
+  const qrLineItemsParseStatus = normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus);
   const scanStatus = extracted ? normalizeScanStatus(extracted?.scanStatus) : "UNREADABLE";
   const fromQrParsedSupplier = asString(qrParsedFields?.supplierName);
   const payloadSupplierName = asString(root?.supplierName);
@@ -643,18 +701,55 @@ export function buildManualAssistReview({
     qrParsedFields,
     keys: ["receiptDate", "date"]
   });
+  const scannedSubtotal = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["subtotal", "subTotal", "amountBeforeTax"]
+  });
+  const scannedTax = readNumericFieldValueOptional({
+    header: extractedHeader,
+    qrParsedFields,
+    keys: ["tax", "vat"]
+  });
   const scannedTotal = readNumericFieldValueOptional({
     header: extractedHeader,
     qrParsedFields,
     keys: ["total", "amount", "grossTotal"]
   });
-  const scannedSnapshotLines = extractedLines.map((line) => ({
+  const derivedTotalFromRequisition =
+    !scannedTotal &&
+    Number.isFinite(requisitionEstimatedTotal) &&
+    requisitionEstimatedTotal > 0;
+  const derivedScannedLinesFromRequisition =
+    extractedLines.length === 0 &&
+    requisitionFallbackLines.length > 0;
+  const scannedSnapshotLinesFromExtraction = extractedLines.map((line) => ({
     id: line.id,
     description: line.description,
     quantity: line.quantity,
     unitPrice: line.unitPrice,
     lineTotal: line.lineTotal
   }));
+  const scannedSnapshotLines = derivedScannedLinesFromRequisition
+    ? requisitionFallbackLines.map((line, index) => ({
+        id: line.id || `rq-scan-${index + 1}`,
+        description: line.description,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        lineTotal: line.lineTotal
+      }))
+    : scannedSnapshotLinesFromExtraction;
+  const effectiveScannedTotal = derivedTotalFromRequisition ? String(requisitionEstimatedTotal) : scannedTotal;
+  const effectiveScannedSubtotal =
+    derivedTotalFromRequisition && !scannedSubtotal ? String(requisitionEstimatedTotal) : scannedSubtotal;
+  const effectiveScannedTax = derivedTotalFromRequisition && !scannedTax ? "0" : scannedTax;
+  const withDerivedFinancialFieldMaps = applyDerivedFinancialFieldOverrides({
+    fieldConfidence: supplierFieldMaps.fieldConfidence,
+    fieldSource: supplierFieldMaps.fieldSource,
+    derivedTotalFromRequisition,
+    derivedSubtotalFromRequisition: derivedTotalFromRequisition && !scannedSubtotal,
+    derivedTaxFromRequisition: derivedTotalFromRequisition && !scannedTax
+  });
 
   const defaultClientForWorkflow =
     workflowChoice === "PROJECT_PURCHASE" || workflowChoice === "MAINTENANCE_PURCHASE"
@@ -669,6 +764,12 @@ export function buildManualAssistReview({
     calmMessage(warning),
     ...(extractedLines.length === 0 && requisitionFallbackLines.length > 0
       ? ["Receipt lines could not be extracted. Prefilled line items from the approved requisition."]
+      : []),
+    ...(derivedTotalFromRequisition
+      ? ["Scanned receipt total was inferred from approved requisition; verify before saving."]
+      : []),
+    ...(derivedScannedLinesFromRequisition
+      ? ["Scanned receipt lines were inferred from approved requisition; verify before saving."]
       : []),
     ...(Array.isArray(extracted?.warnings)
       ? extracted?.warnings.map((entry) => calmMessage(asString(entry))).filter(Boolean)
@@ -717,10 +818,10 @@ export function buildManualAssistReview({
     qrDecodePass: asString(qr?.decodePass),
     qrParseStatus: normalizeQrParseStatus(qr?.parseStatus),
     qrFailureReason: asString(qr?.failureReason),
-    qrLookupStatus: normalizeQrLookupStatus(qrLookup?.status),
+    qrLookupStatus,
     qrLookupReason: asString(qrLookup?.reason),
-    qrFieldsParseStatus: normalizeQrParseDetailStatus(qrLookup?.fieldsParseStatus),
-    qrLineItemsParseStatus: normalizeQrParseDetailStatus(qrLookup?.lineItemsParseStatus),
+    qrFieldsParseStatus,
+    qrLineItemsParseStatus,
     receiptDate:
       readStringFieldValue({
         header: extractedHeader,
@@ -758,24 +859,9 @@ export function buildManualAssistReview({
         qrParsedFields,
         keys: ["currency"]
       }) || "USD",
-    subtotal: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["subtotal", "subTotal", "amountBeforeTax"],
-      fallback: requisitionEstimatedTotal
-    }),
-    tax: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["tax", "vat"],
-      fallback: 0
-    }),
-    total: readNumericFieldValue({
-      header: extractedHeader,
-      qrParsedFields,
-      keys: ["total", "amount", "grossTotal"],
-      fallback: requisitionEstimatedTotal
-    }),
+    subtotal: effectiveScannedSubtotal,
+    tax: effectiveScannedTax,
+    total: effectiveScannedTotal,
     clientId: requisitionLink.clientId || defaultClientForWorkflow,
     projectId: requisitionLink.projectId || "",
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
@@ -793,8 +879,8 @@ export function buildManualAssistReview({
       (requisitionFallbackLines.length > 0 ? "REQUISITION_FALLBACK" : "UNKNOWN"),
     scanStatus,
     receiptType: normalizeReceiptType(extracted?.receiptType),
-    fieldConfidence: supplierFieldMaps.fieldConfidence,
-    fieldSource: supplierFieldMaps.fieldSource,
+    fieldConfidence: withDerivedFinancialFieldMaps.fieldConfidence,
+    fieldSource: withDerivedFinancialFieldMaps.fieldSource,
     rawTextPreview: asString(extracted?.rawTextPreview),
     debugFlags: readDebugFlags(root),
     debugCandidates: readDebugCandidates(extracted?.debug),
@@ -802,7 +888,7 @@ export function buildManualAssistReview({
       supplierName: resolvedSupplierName,
       receiptNumber: scannedReceiptNumber,
       receiptDate: scannedReceiptDate,
-      total: scannedTotal,
+      total: effectiveScannedTotal,
       lines: scannedSnapshotLines
     },
     scanDiagnostics: readScanDiagnostics(root, extracted),
@@ -853,6 +939,39 @@ export function applySupplierFieldOverrides({
     if (!nextSource.supplierName || nextSource.supplierName === "NONE") {
       nextSource.supplierName = supplierSourceHint !== "NONE" ? supplierSourceHint : supplierFromQrParsed ? "QR" : "OCR";
     }
+  }
+  return {
+    fieldConfidence: nextConfidence,
+    fieldSource: nextSource
+  };
+}
+
+function applyDerivedFinancialFieldOverrides({
+  fieldConfidence,
+  fieldSource,
+  derivedTotalFromRequisition,
+  derivedSubtotalFromRequisition,
+  derivedTaxFromRequisition
+}: {
+  fieldConfidence: Record<string, ReadabilityConfidence>;
+  fieldSource: Record<string, "QR" | "OCR" | "DERIVED" | "NONE">;
+  derivedTotalFromRequisition: boolean;
+  derivedSubtotalFromRequisition: boolean;
+  derivedTaxFromRequisition: boolean;
+}) {
+  const nextConfidence = { ...fieldConfidence };
+  const nextSource = { ...fieldSource };
+  if (derivedSubtotalFromRequisition) {
+    nextConfidence.subtotal = "LOW";
+    nextSource.subtotal = "DERIVED";
+  }
+  if (derivedTaxFromRequisition) {
+    nextConfidence.tax = "LOW";
+    nextSource.tax = "DERIVED";
+  }
+  if (derivedTotalFromRequisition) {
+    nextConfidence.total = "LOW";
+    nextSource.total = "DERIVED";
   }
   return {
     fieldConfidence: nextConfidence,

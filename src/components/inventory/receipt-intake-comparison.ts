@@ -59,6 +59,25 @@ export function evaluateRequisitionComparison(
 
   const approvedLines = mapRequisitionSnapshotLines(initialRequisition);
   const scannedLines = review.scannedSnapshot.lines.filter((line) => isMeaningfulSnapshotLine(line));
+  const normalizedWarnings = review.warnings.map((warning) => warning.toLowerCase());
+  const scannedTotalWasDerived =
+    review.fieldSource.total === "DERIVED" ||
+    normalizedWarnings.some((warning) =>
+      warning.includes("scanned receipt total was inferred from approved requisition")
+    );
+  const scannedLinesWereDerived =
+    normalizedWarnings.some((warning) =>
+      warning.includes("scanned receipt lines were inferred from approved requisition")
+    ) ||
+    normalizedWarnings.some((warning) =>
+      warning.includes("prefilled line items from the approved requisition")
+    );
+  const displayScannedLines = scannedLinesWereDerived
+    ? scannedLines.map((line) => ({
+        ...line,
+        description: `${line.description || "Line item"} (inferred from approved requisition; verify)`
+      }))
+    : scannedLines;
   const approvedSupplier = normalizeSupplierName(asString(initialRequisition?.requestedVendorName));
   const scannedSupplier = normalizeSupplierName(review.scannedSnapshot.supplierName);
   const approvedTotalValue = resolveRequisitionEstimatedTotal(initialRequisition);
@@ -81,6 +100,19 @@ export function evaluateRequisitionComparison(
   if (inferredTraToken?.traReceiptNumber) {
     inferredFields.push("control / TRA number");
   }
+  if (scannedTotalWasDerived) {
+    inferredFields.push("total amount");
+  }
+  if (scannedLinesWereDerived) {
+    inferredFields.push("line items");
+  }
+  const scannedTotalDisplay = review.scannedSnapshot.total
+    ? formatCurrency(Number(review.scannedSnapshot.total || 0))
+    : "-";
+  const scannedTotalDisplayWithSource =
+    scannedTotalWasDerived && scannedTotalDisplay !== "-"
+      ? `${scannedTotalDisplay} (inferred from approved requisition; verify)`
+      : scannedTotalDisplay;
   const scannedControlDisplay = formatInferredScanField({
     scannedValue: review.traReceiptNumber,
     inferredValue: inferredTraToken?.traReceiptNumber || ""
@@ -96,7 +128,7 @@ export function evaluateRequisitionComparison(
     !review.scannedSnapshot.total ? "total amount" : ""
   ].filter(Boolean);
   const approvedRequestedItem = approvedLines[0]?.description || "-";
-  const scannedRequestedItem = scannedLines[0]?.description || "-";
+  const scannedRequestedItem = displayScannedLines[0]?.description || "-";
 
   const headerRows: RequisitionComparisonResult["headerRows"] = [
     {
@@ -150,9 +182,7 @@ export function evaluateRequisitionComparison(
     {
       label: "Total Amount",
       approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
-      scanned: review.scannedSnapshot.total
-        ? formatCurrency(Number(review.scannedSnapshot.total || 0))
-        : "-",
+      scanned: scannedTotalDisplayWithSource,
       mismatch: totalComparison.level === "MISMATCH"
     }
   ];
@@ -176,7 +206,7 @@ export function evaluateRequisitionComparison(
     {
       label: "Total amount",
       approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
-      scanned: scannedTotalValue > 0 ? formatCurrency(scannedTotalValue) : "-"
+      scanned: scannedTotalValue > 0 ? scannedTotalDisplayWithSource : "-"
     },
     {
       label: "Requested item",
@@ -191,7 +221,7 @@ export function evaluateRequisitionComparison(
     differenceRows: [],
     headerRows,
     approvedLines,
-    scannedLines
+    scannedLines: displayScannedLines
   };
 
   if (review.scanFallbackMode === "SCAN_FAILURE") {
@@ -246,7 +276,9 @@ export function evaluateRequisitionComparison(
     lineComparison.level === "CLOSE_MATCH" ||
     review.scanStatus !== "COMPLETE" ||
     missingCriticalFields.length > 0 ||
-    inferredFields.length > 0;
+    inferredFields.length > 0 ||
+    scannedTotalWasDerived ||
+    scannedLinesWereDerived;
 
   if (closeMatchSignals) {
     const inferredFieldsMessage =
