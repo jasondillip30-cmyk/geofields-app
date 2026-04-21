@@ -288,8 +288,8 @@ export default function InventoryExpensesPage() {
                   </Link>
                 </>
               ) : null}
-              <Link href="/inventory" className="gf-btn-secondary px-3 py-1.5 text-xs">
-                Back to Overview
+              <Link href="/inventory/items" className="gf-btn-secondary px-3 py-1.5 text-xs">
+                Back to Items
               </Link>
             </div>
           </div>

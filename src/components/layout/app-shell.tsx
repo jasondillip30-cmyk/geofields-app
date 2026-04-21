@@ -7,10 +7,12 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AiCopilotProvider } from "@/components/layout/ai-copilot-context";
 import { AnalyticsFiltersProvider } from "@/components/layout/analytics-filters-provider";
 import { ChunkLoadRecovery } from "@/components/layout/chunk-load-recovery";
+import { useRole } from "@/components/layout/role-provider";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 import { WorkspaceLaunchLayer } from "@/components/layout/workspace-launch-layer";
 import { WorkspaceModeRouteGuard } from "@/components/layout/workspace-mode-route-guard";
+import { canUseLaunchGlobe } from "@/lib/auth/workspace-launch-access";
 import { isAssistantExperienceEnabled, isWorkspaceLaunchEnabled } from "@/lib/feature-flags";
 
 const SIDEBAR_HIDDEN_STORAGE_KEY = "gf:sidebar-hidden";
@@ -30,11 +32,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { role } = useRole();
   const [sidebarHidden, setSidebarHidden] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [workspaceLaunchOpen, setWorkspaceLaunchOpen] = useState(false);
   const assistantExperienceEnabled = isAssistantExperienceEnabled();
   const workspaceLaunchEnabled = isWorkspaceLaunchEnabled();
+  const canOpenLaunchGlobe = canUseLaunchGlobe(role);
 
   useEffect(() => {
     if (typeof document === "undefined") {
@@ -103,13 +107,24 @@ export function AppShell({ children }: { children: ReactNode }) {
       return;
     }
     if (searchParams.get("launch") === "1") {
-      setWorkspaceLaunchOpen(true);
+      if (canOpenLaunchGlobe) {
+        setWorkspaceLaunchOpen(true);
+      } else {
+        setWorkspaceLaunchOpen(false);
+      }
       const params = new URLSearchParams(searchParams.toString());
       params.delete("launch");
       const query = params.toString();
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     }
-  }, [pathname, router, searchParams, workspaceLaunchEnabled]);
+  }, [canOpenLaunchGlobe, pathname, router, searchParams, workspaceLaunchEnabled]);
+
+  useEffect(() => {
+    if (canOpenLaunchGlobe || !workspaceLaunchOpen) {
+      return;
+    }
+    setWorkspaceLaunchOpen(false);
+  }, [canOpenLaunchGlobe, workspaceLaunchOpen]);
 
   const handleSidebarToggle = () => {
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
@@ -124,7 +139,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <AnalyticsFiltersProvider>
         <AiCopilotProvider>
           <ChunkLoadRecovery />
-          {workspaceLaunchEnabled ? (
+          {workspaceLaunchEnabled && canOpenLaunchGlobe ? (
             <WorkspaceLaunchLayer
               open={workspaceLaunchOpen}
               onRequestClose={() => setWorkspaceLaunchOpen(false)}
@@ -150,7 +165,9 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Topbar
                 sidebarHidden={sidebarHidden}
                 onToggleSidebar={handleSidebarToggle}
-                onOpenWorkspaceLaunch={() => setWorkspaceLaunchOpen(true)}
+                onOpenWorkspaceLaunch={
+                  canOpenLaunchGlobe ? () => setWorkspaceLaunchOpen(true) : undefined
+                }
               />
               <main
                 id="gf-app-main-scroll"

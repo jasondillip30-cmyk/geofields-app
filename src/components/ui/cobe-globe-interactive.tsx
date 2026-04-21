@@ -243,16 +243,18 @@ export function GlobeInteractive({
           }}
         />
 
-        <button
-          type="button"
-          onClick={onWorkshopClick}
-          data-testid="workspace-launch-workshop-button"
-          className="absolute left-1/2 top-1/2 z-30 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-brand-200 bg-white/95 text-brand-700 shadow-[0_8px_28px_rgba(37,99,235,0.28)] transition hover:scale-105 hover:bg-white"
-          aria-label="Open workshop workspace"
-          title="Workshop"
-        >
-          <Home size={20} />
-        </button>
+        {onWorkshopClick ? (
+          <button
+            type="button"
+            onClick={onWorkshopClick}
+            data-testid="workspace-launch-workshop-button"
+            className="absolute left-1/2 top-1/2 z-30 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-brand-200 bg-white/95 text-brand-700 shadow-[0_8px_28px_rgba(37,99,235,0.28)] transition hover:scale-105 hover:bg-white"
+            aria-label="Open workshop workspace"
+            title="Workshop"
+          >
+            <Home size={20} />
+          </button>
+        ) : null}
       </div>
 
       <div className="pointer-events-none absolute inset-0 z-30">

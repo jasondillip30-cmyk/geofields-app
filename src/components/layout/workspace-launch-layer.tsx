@@ -19,6 +19,13 @@ import {
 } from "@/lib/analytics-scope";
 import { canAccess } from "@/lib/auth/permissions";
 import {
+  buildWorkshopScopedHref,
+  canUseWorkshopFromLaunch,
+  canUnlockAllProjectsFromLaunch,
+  resolveProjectLaunchDestination,
+  resolveWorkshopLaunchDestination
+} from "@/lib/auth/workspace-launch-access";
+import {
   buildDeterministicProjectMarkers,
   FALLBACK_WORKSPACE_MARKERS,
   type WorkspaceLaunchMarker
@@ -161,14 +168,10 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   }, [role]);
 
   const workshopDestination = useMemo(() => {
-    if (role && canAccess(role, "inventory:view")) {
-      return "/inventory";
-    }
-    if (role && canAccess(role, "maintenance:view")) {
-      return "/maintenance";
-    }
-    return "/rigs";
+    return resolveWorkshopLaunchDestination(role);
   }, [role]);
+  const canUseWorkshopEntry = useMemo(() => canUseWorkshopFromLaunch(role), [role]);
+  const canUnlockAllProjects = useMemo(() => canUnlockAllProjectsFromLaunch(role), [role]);
 
   const withSharedDateQuery = useCallback(
     (baseParams?: URLSearchParams) => {
@@ -232,20 +235,24 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   }, [allProjectsDestination, closeAndNavigate, filters.from, filters.to, withSharedDateQuery]);
 
   const handleOpenWorkshop = useCallback(() => {
-    const params = withSharedDateQuery();
-    params.set("workspace", "workshop");
-    params.set("projectId", "all");
-    params.set("clientId", "all");
-    params.set("rigId", "all");
-    closeAndNavigate(`${workshopDestination}?${params.toString()}`, {
+    if (!canUseWorkshopEntry) {
+      return;
+    }
+    closeAndNavigate(
+      buildWorkshopScopedHref(workshopDestination, {
+        from: filters.from,
+        to: filters.to
+      }),
+      {
       workspaceMode: "workshop",
       projectId: "all",
       clientId: "all",
       rigId: "all",
       from: filters.from,
       to: filters.to
-    });
-  }, [closeAndNavigate, filters.from, filters.to, withSharedDateQuery, workshopDestination]);
+      }
+    );
+  }, [canUseWorkshopEntry, closeAndNavigate, filters.from, filters.to, workshopDestination]);
 
   const handleOpenProjectOperations = useCallback(
     (markerId: string) => {
@@ -261,7 +268,8 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       params.set("projectId", marker.id);
       params.set("clientId", "all");
       params.set("rigId", "all");
-      closeAndNavigate(`/spending?${params.toString()}`, {
+      const destination = resolveProjectLaunchDestination(role);
+      closeAndNavigate(`${destination}?${params.toString()}`, {
         workspaceMode: "project",
         projectId: marker.id,
         clientId: "all",
@@ -270,7 +278,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
         to: filters.to
       });
     },
-    [closeAndNavigate, filters.from, filters.to, hasLiveProjectMarkers, markers, withSharedDateQuery]
+    [closeAndNavigate, filters.from, filters.to, hasLiveProjectMarkers, markers, role, withSharedDateQuery]
   );
 
   const finalizeGesture = useCallback(() => {
@@ -278,6 +286,12 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       return;
     }
     setIsInteracting(false);
+    if (!canUnlockAllProjects) {
+      setProgress(0);
+      progressRef.current = 0;
+      wheelUnlockDirectionRef.current = 0;
+      return;
+    }
     if (progressRef.current >= UNLOCK_THRESHOLD) {
       handleUnlockToAllProjects();
       return;
@@ -285,7 +299,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
     setProgress(0);
     progressRef.current = 0;
     wheelUnlockDirectionRef.current = 0;
-  }, [handleUnlockToAllProjects, open]);
+  }, [canUnlockAllProjects, handleUnlockToAllProjects, open]);
 
   const scheduleFinalizeGesture = useCallback(() => {
     if (finalizeTimerRef.current !== null) {
@@ -306,6 +320,9 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
   const processWheelIntent = useCallback(
     (deltaY: number, clientY: number, target: EventTarget | null, preventDefault?: () => void) => {
       if (!open || commitInFlightRef.current) {
+        return;
+      }
+      if (!canUnlockAllProjects) {
         return;
       }
       if (isInteractiveGestureTarget(target)) {
@@ -335,11 +352,16 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       }
       scheduleFinalizeGesture();
     },
-    [adjustProgress, handleUnlockToAllProjects, open, scheduleFinalizeGesture]
+    [adjustProgress, canUnlockAllProjects, handleUnlockToAllProjects, open, scheduleFinalizeGesture]
   );
 
   const handleTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     if (!open || commitInFlightRef.current) {
+      return;
+    }
+    if (!canUnlockAllProjects) {
+      setIsInteracting(false);
+      touchGestureArmedRef.current = false;
       return;
     }
     touchStartedOnInteractiveControlRef.current = isInteractiveGestureTarget(event.target);
@@ -359,7 +381,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
     }
     touchGestureArmedRef.current = true;
     setIsInteracting(true);
-  }, [open]);
+  }, [canUnlockAllProjects, open]);
 
   const handleTouchMove = useCallback(
     (event: React.TouchEvent<HTMLDivElement>) => {
@@ -390,6 +412,15 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       if (!open || commitInFlightRef.current) {
         return;
       }
+      if (!canUnlockAllProjects) {
+        touchMovedRef.current = false;
+        touchLastYRef.current = null;
+        touchStartYRef.current = null;
+        touchStartedOnInteractiveControlRef.current = false;
+        touchGestureArmedRef.current = false;
+        setIsInteracting(false);
+        return;
+      }
       const touchStartY = touchStartYRef.current;
       const resolvedTouchEndY =
         typeof touchEndY === "number" ? touchEndY : touchLastYRef.current;
@@ -417,7 +448,7 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
       }
       finalizeGesture();
     },
-    [finalizeGesture, handleUnlockToAllProjects, open]
+    [canUnlockAllProjects, finalizeGesture, handleUnlockToAllProjects, open]
   );
 
   const handleTouchEnd = useCallback(
@@ -523,30 +554,34 @@ export function WorkspaceLaunchLayer({ open, onRequestClose }: WorkspaceLaunchLa
             markers={markers}
             markerSelectableById={markerSelectableById}
             isMarkerClickSuppressed={isMarkerClickSuppressed}
-            onWorkshopClick={handleOpenWorkshop}
+            onWorkshopClick={canUseWorkshopEntry ? handleOpenWorkshop : undefined}
             onMarkerSelect={handleOpenProjectOperations}
             className="mx-auto"
           />
         </div>
       </main>
-      <div
-        data-testid="workspace-launch-gesture-zone"
-        className="absolute inset-x-0 bottom-0 z-40"
-        style={{
-          height: `calc(${BOTTOM_EDGE_SWIPE_ZONE_PX}px + env(safe-area-inset-bottom) + 16px)`,
-          touchAction: "none"
-        }}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-50 flex justify-center pb-3"
-        style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
-      >
-        <span
-          data-testid="workspace-launch-swipe-handle"
-          className="h-1.5 w-28 rounded-full bg-slate-900/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]"
-        />
-      </div>
+      {canUnlockAllProjects ? (
+        <>
+          <div
+            data-testid="workspace-launch-gesture-zone"
+            className="absolute inset-x-0 bottom-0 z-40"
+            style={{
+              height: `calc(${BOTTOM_EDGE_SWIPE_ZONE_PX}px + env(safe-area-inset-bottom) + 16px)`,
+              touchAction: "none"
+            }}
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-50 flex justify-center pb-3"
+            style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
+          >
+            <span
+              data-testid="workspace-launch-swipe-handle"
+              className="h-1.5 w-28 rounded-full bg-slate-900/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]"
+            />
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -111,7 +111,7 @@ export function normalizePageKey(pathname: string) {
     return "inventory-locations";
   }
   if (pathname.startsWith("/inventory")) {
-    return "inventory-overview";
+    return "inventory-items";
   }
   return pathname.replace(/^\//, "").replace(/\//g, "-") || "company-dashboard";
 }
@@ -179,7 +179,7 @@ export function inferPageKeyFromHref(href: string) {
     return "inventory-locations";
   }
   if (path.startsWith("/inventory")) {
-    return "inventory-overview";
+    return "inventory-items";
   }
   return normalizePageKey(path);
 }
@@ -246,7 +246,7 @@ export function resolvePageName(pathname: string) {
     return "Inventory Locations";
   }
   if (pathname.startsWith("/inventory")) {
-    return "Inventory Overview";
+    return "Inventory Items";
   }
   return pathname
     .replace(/^\//, "")

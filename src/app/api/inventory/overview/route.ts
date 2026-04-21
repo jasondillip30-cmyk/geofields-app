@@ -130,6 +130,14 @@ export async function GET(request: NextRequest) {
   const totalItems = items.length;
   const totalUnitsInStock = roundCurrency(items.reduce((sum, item) => sum + item.quantityInStock, 0));
   const totalInventoryValue = roundCurrency(items.reduce((sum, item) => sum + item.quantityInStock * item.unitCost, 0));
+  const inventoryValueByCategoryMap = new Map<string, number>();
+  for (const item of items) {
+    const categoryValue = item.quantityInStock * item.unitCost;
+    inventoryValueByCategoryMap.set(
+      item.category,
+      (inventoryValueByCategoryMap.get(item.category) || 0) + categoryValue
+    );
+  }
   const lowStockItems = items
     .filter((item) => item.quantityInStock > 0 && item.quantityInStock <= item.minimumStockLevel)
     .map((item) => ({
@@ -332,6 +340,17 @@ export async function GET(request: NextRequest) {
           totalCost: roundCurrency(row.totalCost)
         })),
       deadStockItems: deadStockItems.slice(0, 15),
+      inventoryValueByCategory: Array.from(inventoryValueByCategoryMap.entries())
+        .map(([category, value]) => ({
+          category,
+          label: formatInventoryCategoryLabel(category),
+          value: roundCurrency(value),
+          percent:
+            totalInventoryValue > 0
+              ? roundCurrency((value / totalInventoryValue) * 100)
+              : 0
+        }))
+        .sort((a, b) => b.value - a.value),
       highestCostCategories: Array.from(costByCategory.entries())
         .map(([category, cost]) => ({
           category,
@@ -375,4 +394,11 @@ export async function GET(request: NextRequest) {
       recommendations: recommendations.slice(0, 5)
     }
   });
+}
+
+function formatInventoryCategoryLabel(value: string) {
+  return value
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/(^|\s)\w/g, (char) => char.toUpperCase());
 }

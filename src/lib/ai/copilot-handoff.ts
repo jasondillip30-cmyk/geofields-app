@@ -42,7 +42,7 @@ export function inferCopilotPageKeyFromHref(href: string | undefined) {
   if (path.startsWith("/rigs")) return "rigs";
   if (path.startsWith("/expenses")) return "expenses";
   if (path.startsWith("/executive-overview")) return "executive-overview";
-  if (path.startsWith("/inventory")) return "inventory-overview";
+  if (path.startsWith("/inventory")) return "inventory-items";
   return null;
 }
 

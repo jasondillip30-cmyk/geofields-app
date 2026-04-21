@@ -56,7 +56,6 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Approvals: ClipboardList,
   "Purchase Requests": Gauge,
   Inventory: Boxes,
-  "Inventory Overview": Boxes,
   Items: Boxes,
   "Stock Movements": ClipboardList,
   Vendors: Factory,
@@ -605,18 +604,18 @@ function resolveActiveInventoryChildHref({
   pathname: string;
   children: Array<{ href: string }>;
 }) {
-  if (pathname === "/inventory/items") return "/inventory/items";
+  if (pathname === "/inventory" || pathname === "/inventory/items") {
+    const items = children.find((child) => child.href === "/inventory/items");
+    return items ? items.href : "";
+  }
   if (pathname === "/inventory/stock-movements") return "/inventory/stock-movements";
   if (pathname.startsWith("/inventory/suppliers")) return "/inventory/suppliers";
   if (pathname.startsWith("/inventory/locations")) return "/inventory/locations";
   if (pathname === "/inventory/expenses") {
-    const overview = children.find((child) => child.href === "/inventory");
-    return overview ? overview.href : "";
+    const items = children.find((child) => child.href === "/inventory/items");
+    return items ? items.href : "";
   }
-  if (pathname !== "/inventory") return "";
-
-  const overview = children.find((child) => child.href === "/inventory");
-  return overview ? overview.href : "";
+  return "";
 }
 
 function getInitials(value: string) {

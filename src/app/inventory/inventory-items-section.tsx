@@ -13,11 +13,13 @@ import {
   UsageRequestStatusBadge
 } from "@/components/inventory/inventory-page-shared";
 import { Card } from "@/components/ui/card";
+import { InventoryValueStatisticsCard } from "@/components/ui/statistics-card-5";
 import { DataTable } from "@/components/ui/table";
 import { formatInventoryCategory, inventoryCategoryOptions } from "@/lib/inventory";
 import { cn, formatCurrency, formatNumber } from "@/lib/utils";
 
 import type {
+  InventoryOverviewResponse,
   InventoryItemRow,
   InventoryLocation,
   InventorySupplier,
@@ -27,6 +29,7 @@ import type {
 
 export function InventoryItemsSection({
   showItems,
+  canViewInventoryValue,
   focusedSectionId,
   isSingleProjectScope,
   createFromDeepLinkBlocked,
@@ -47,6 +50,7 @@ export function InventoryItemsSection({
   locations,
   loading,
   items,
+  overview,
   focusedRowId,
   openItemDetail,
   projectUsageSummary,
@@ -62,6 +66,7 @@ export function InventoryItemsSection({
   openMovementDetail
 }: {
   showItems: boolean;
+  canViewInventoryValue: boolean;
   focusedSectionId: string | null;
   isSingleProjectScope: boolean;
   createFromDeepLinkBlocked: boolean;
@@ -82,6 +87,7 @@ export function InventoryItemsSection({
   locations: InventoryLocation[];
   loading: boolean;
   items: InventoryItemRow[];
+  overview: InventoryOverviewResponse;
   focusedRowId: string | null;
   openItemDetail: (itemId: string) => void;
   projectUsageSummary: {
@@ -120,6 +126,19 @@ export function InventoryItemsSection({
   const visibleItems = items.slice(0, 50);
   const visibleUsageRequests = myUsageRequests.slice(0, 20);
   const visibleUsageBatchRequests = myUsageBatchRequests.slice(0, 20);
+  const inventoryValueSegments =
+    overview.analytics.inventoryValueByCategory.length > 0
+      ? overview.analytics.inventoryValueByCategory
+      : overview.analytics.highestCostCategories.map((entry) => ({
+          category: entry.category,
+          label: formatInventoryCategory(entry.category),
+          value: entry.cost,
+          percent: entry.percentOfTotal
+        }));
+  const lowStockRows = overview.lowStockItems.map((item) => ({
+    ...item,
+    severity: item.quantityInStock <= Math.max(1, item.minimumStockLevel * 0.5) ? ("CRITICAL" as const) : ("LOW" as const)
+  }));
 
   return (
     <section
@@ -130,6 +149,16 @@ export function InventoryItemsSection({
     >
       <Card className="min-w-0">
         <div className="space-y-4">
+          {canViewInventoryValue ? (
+            <div id="inventory-value-card-section">
+              <InventoryValueStatisticsCard
+                totalValue={overview.overview.totalInventoryValue}
+                segments={inventoryValueSegments}
+                lowStockRows={lowStockRows}
+                outOfStockRows={overview.outOfStockItems}
+              />
+            </div>
+          ) : null}
           {isSingleProjectScope ? (
             <div className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3 text-sm text-brand-900">
               Showing project-approved items for this locked project. Stock on hand remains global warehouse stock.

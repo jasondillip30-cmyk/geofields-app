@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { CalendarDays, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import { roleLabels } from "@/lib/auth/roles";
+import { canUseLaunchGlobe } from "@/lib/auth/workspace-launch-access";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
 import { cn } from "@/lib/utils";
@@ -258,7 +259,7 @@ function isWorkspaceScrollAtTop() {
 
 export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }: TopbarProps) {
   const pathname = usePathname();
-  const { user, logout } = useRole();
+  const { user, role, logout } = useRole();
   const { filters, setFilters } = useAnalyticsFilters();
   const [projects, setProjects] = useState<ProjectScopeOption[]>([]);
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
@@ -399,6 +400,10 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
 
   const pageMeta = useMemo(() => resolvePageMeta(pathname), [pathname]);
   const workspaceLaunchEnabled = isWorkspaceLaunchEnabled();
+  const canOpenLaunchGlobe = useMemo(
+    () => workspaceLaunchEnabled && canUseLaunchGlobe(role),
+    [role, workspaceLaunchEnabled]
+  );
   const modeChipLabel = useMemo(() => {
     if (filters.workspaceMode === "workshop") {
       return "Workshop mode";
@@ -412,15 +417,15 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
     return `${workspaceModeLabel} mode`;
   }, [filters.workspaceMode, filters.projectId, isProjectMode, selectedProjectLabel, workspaceModeLabel]);
   const triggerOpenLaunch = useCallback(() => {
-    if (!workspaceLaunchEnabled) {
+    if (!canOpenLaunchGlobe) {
       return;
     }
     onOpenWorkspaceLaunch?.();
-  }, [onOpenWorkspaceLaunch, workspaceLaunchEnabled]);
+  }, [canOpenLaunchGlobe, onOpenWorkspaceLaunch]);
 
   const handleTopbarWheel = useCallback(
     (event: React.WheelEvent<HTMLElement>) => {
-      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+      if (!canOpenLaunchGlobe || pathname.startsWith("/workspace-launch")) {
         return;
       }
       if (desktopDateFiltersOpen || mobileFiltersOpen) {
@@ -462,22 +467,22 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
       lastGlobeScrollTriggerAt.current = now;
       triggerOpenLaunch();
     },
-    [desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch, workspaceLaunchEnabled]
+    [canOpenLaunchGlobe, desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch]
   );
 
   const handleTopbarTouchStart = useCallback(
     (event: React.TouchEvent<HTMLElement>) => {
-      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+      if (!canOpenLaunchGlobe || pathname.startsWith("/workspace-launch")) {
         return;
       }
       topbarTouchStartY.current = event.touches[0]?.clientY ?? null;
     },
-    [pathname, workspaceLaunchEnabled]
+    [canOpenLaunchGlobe, pathname]
   );
 
   const handleTopbarTouchEnd = useCallback(
     (event: React.TouchEvent<HTMLElement>) => {
-      if (!workspaceLaunchEnabled || pathname.startsWith("/workspace-launch")) {
+      if (!canOpenLaunchGlobe || pathname.startsWith("/workspace-launch")) {
         return;
       }
       if (desktopDateFiltersOpen || mobileFiltersOpen) {
@@ -503,7 +508,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
       lastGlobeScrollTriggerAt.current = now;
       triggerOpenLaunch();
     },
-    [desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch, workspaceLaunchEnabled]
+    [canOpenLaunchGlobe, desktopDateFiltersOpen, mobileFiltersOpen, pathname, triggerOpenLaunch]
   );
 
   useEffect(() => {
@@ -546,7 +551,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               {sidebarHidden ? <PanelLeft size={14} /> : <PanelLeftClose size={14} />}
               {sidebarHidden ? "Show menu" : "Hide menu"}
             </button>
-            {workspaceLaunchEnabled ? (
+            {canOpenLaunchGlobe ? (
               <button
                 type="button"
                 onClick={triggerOpenLaunch}

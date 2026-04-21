@@ -27,12 +27,11 @@ import {
   loadMyUsageRequestBatchesMine,
   loadMyUsageRequestsMine
 } from "./inventory-page-data";
-import { InventoryItemsSection, InventoryManualEntrySection, InventoryOverviewSection, InventorySuppliersLocationsSection, UsageRequestToast } from "./inventory-page-panels";
+import { InventoryItemsSection, InventoryManualEntrySection, InventorySuppliersLocationsSection, UsageRequestToast } from "./inventory-page-panels";
 import {
   defaultIssues,
   defaultOverview,
   defaultSuggestion,
-  resolveInventorySection,
   type BreakdownContextOption,
   type CategorySuggestionState,
   type InventoryIssueRow,
@@ -95,6 +94,7 @@ function InventoryPageContent() {
   const preselectedRigId = searchParams.get("rigId")?.trim() || "";
   const canManage = Boolean(user?.role && canAccess(user.role, "inventory:manage"));
   const canApproveMovement = Boolean(user?.role && canManageExpenseApprovalActions(user.role));
+  const canViewInventoryValue = user?.role ? user.role !== "MECHANIC" && user.role !== "FIELD" : true;
 
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
   const [projects, setProjects] = useState<
@@ -242,7 +242,6 @@ function InventoryPageContent() {
     stockAlertRows,
     filteredMovements,
     visibleMovements,
-    recognizedProjectCostRows,
     projectUsageSummary,
     movementLedgerSummary,
     selectedItemIssues,
@@ -559,6 +558,9 @@ function InventoryPageContent() {
   useEffect(() => {
     const movementItemId = searchParams.get("movementItemId") || "";
     const movementType = (searchParams.get("movementType") || "").toUpperCase();
+    const sectionFromQuery = (searchParams.get("section") || "").toLowerCase();
+    const movementSectionActive =
+      pathname === "/inventory/stock-movements" || sectionFromQuery === "stock-movements";
     if (!movementItemId && !movementType) {
       return;
     }
@@ -570,13 +572,14 @@ function InventoryPageContent() {
           ? (movementType as MovementFormState["movementType"])
           : current.movementType
     }));
-    if (canManage && resolveInventorySection(pathname, searchParams.get("section")) === "stock-movements") {
+    if (canManage && movementSectionActive) {
       setManualMovementModalOpen(true);
     }
   }, [canManage, pathname, searchParams]);
 
   useEffect(() => {
-    if (pathname !== "/inventory/items" || isSingleProjectScope) {
+    const itemsRouteActive = pathname === "/inventory/items" || pathname === "/inventory";
+    if (!itemsRouteActive || isSingleProjectScope) {
       setShowCreateItemForm(false);
       return;
     }
@@ -740,7 +743,6 @@ function InventoryPageContent() {
 
   const {
     lockedProjectSectionRedirected,
-    showOverview,
     showItems,
     showMovements,
     showIssues,
@@ -774,9 +776,9 @@ function InventoryPageContent() {
       return;
     }
     const nextQuery = new URLSearchParams(searchParams.toString());
-    nextQuery.set("section", "overview");
+    nextQuery.delete("section");
     const query = nextQuery.toString();
-    router.replace(query ? `/inventory?${query}` : "/inventory");
+    router.replace(query ? `/inventory/items?${query}` : "/inventory/items");
   }, [lockedProjectSectionRedirected, router, searchParams]);
 
   const copilotContext = useMemo<CopilotPageContext>(() => buildInventoryCopilotContext({
@@ -784,7 +786,7 @@ function InventoryPageContent() {
     pageTitle,
     filters,
     isSingleProjectScope,
-    showOverview,
+    canViewInventoryValue,
     showItems,
     showMovements,
     showIssuesWorkspace,
@@ -808,6 +810,7 @@ function InventoryPageContent() {
     filteredIssues,
     filteredMovements,
     isSingleProjectScope,
+    canViewInventoryValue,
     items,
     locations,
     movements.length,
@@ -819,7 +822,6 @@ function InventoryPageContent() {
     showLocations,
     showMovements,
     showItems,
-    showOverview,
     showSuppliers,
     stockAlertRows,
     suppliers
@@ -892,23 +894,7 @@ function InventoryPageContent() {
         showMovements={showMovements}
         pageTitle={pageTitle}
         pageSubtitle={pageSubtitle}
-        showOverview={showOverview}
-        canManage={canManage}
-        onOpenCreateItem={() => router.push("/inventory/items?create=1")}
-        onOpenManualAdjustment={() => setManualMovementModalOpen(true)}
-        onOpenRequestBatch={openRequestUseBatchModal}
       >
-
-        <InventoryOverviewSection
-          showOverview={showOverview}
-          isSingleProjectScope={isSingleProjectScope}
-          focusedSectionId={focusedSectionId}
-          overview={overview}
-          stockAlertRows={stockAlertRows}
-          movements={movements}
-          recognizedProjectCostRows={recognizedProjectCostRows}
-        />
-
         {showIssuesWorkspace && (
           <InventoryIssuesWorkspace
             isProjectLocked={isSingleProjectScope}
@@ -957,6 +943,7 @@ function InventoryPageContent() {
 
         <InventoryItemsSection
           showItems={showItems}
+          canViewInventoryValue={canViewInventoryValue}
           focusedSectionId={focusedSectionId}
           isSingleProjectScope={isSingleProjectScope}
           createFromDeepLinkBlocked={createFromDeepLinkBlocked}
@@ -977,6 +964,7 @@ function InventoryPageContent() {
           locations={locations}
           loading={loading}
           items={items}
+          overview={overview}
           focusedRowId={focusedRowId}
           openItemDetail={openItemDetail}
           projectUsageSummary={projectUsageSummary}

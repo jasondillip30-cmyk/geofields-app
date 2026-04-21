@@ -4,13 +4,11 @@ import {
   movementItemLabel,
   toIsoDate
 } from "@/components/inventory/inventory-page-utils";
-import {
-  StockSeverityBadge
-} from "@/components/inventory/inventory-page-shared";
 import { Card, MetricCard } from "@/components/ui/card";
+import { InventoryValueStatisticsCard } from "@/components/ui/statistics-card-5";
 import { DataTable } from "@/components/ui/table";
-import { formatMovementType } from "@/lib/inventory";
-import { cn, formatCurrency, formatNumber } from "@/lib/utils";
+import { formatInventoryCategory, formatMovementType } from "@/lib/inventory";
+import { formatCurrency, formatNumber } from "@/lib/utils";
 
 import type {
   InventoryMovementRow,
@@ -20,30 +18,35 @@ import type {
 export function InventoryOverviewSection({
   showOverview,
   isSingleProjectScope,
-  focusedSectionId,
+  canViewInventoryValue = true,
   overview,
-  stockAlertRows,
   movements,
   recognizedProjectCostRows
 }: {
   showOverview: boolean;
   isSingleProjectScope: boolean;
-  focusedSectionId: string | null;
+  canViewInventoryValue?: boolean;
   overview: InventoryOverviewResponse;
-  stockAlertRows: Array<{
-    id: string;
-    name: string;
-    sku: string;
-    quantityInStock: number;
-    minimumStockLevel: number;
-    severity: "LOW" | "CRITICAL";
-  }>;
   movements: InventoryMovementRow[];
   recognizedProjectCostRows: InventoryMovementRow[];
 }) {
   if (!showOverview) {
     return null;
   }
+
+  const inventoryValueSegments =
+    overview.analytics.inventoryValueByCategory.length > 0
+      ? overview.analytics.inventoryValueByCategory
+      : overview.analytics.highestCostCategories.map((entry) => ({
+          category: entry.category,
+          label: formatInventoryCategory(entry.category),
+          value: entry.cost,
+          percent: entry.percentOfTotal
+        }));
+  const lowStockRows = overview.lowStockItems.map((item) => ({
+    ...item,
+    severity: item.quantityInStock <= Math.max(1, item.minimumStockLevel * 0.5) ? "CRITICAL" as const : "LOW" as const
+  }));
 
   return (
     <>
@@ -143,6 +146,16 @@ export function InventoryOverviewSection({
               </span>
             </div>
           </section>
+          {canViewInventoryValue ? (
+            <section>
+              <InventoryValueStatisticsCard
+                totalValue={overview.overview.totalInventoryValue}
+                segments={inventoryValueSegments}
+                lowStockRows={lowStockRows}
+                outOfStockRows={overview.outOfStockItems}
+              />
+            </section>
+          ) : null}
         </>
       )}
 
@@ -151,11 +164,6 @@ export function InventoryOverviewSection({
           <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <MetricCard label="Total Items" value={String(overview.overview.totalItems)} />
             <MetricCard label="Units In Stock" value={formatNumber(overview.overview.totalUnitsInStock)} />
-            <MetricCard
-              label="Inventory Value"
-              value={formatCurrency(overview.overview.totalInventoryValue)}
-              tone="good"
-            />
             <MetricCard
               label="Low Stock"
               value={String(overview.overview.lowStockCount)}
@@ -168,51 +176,16 @@ export function InventoryOverviewSection({
             />
             <MetricCard label="Recent Movements" value={String(movements.length)} />
           </section>
-          <section
-            id="inventory-low-stock-section"
-            className={cn(
-              focusedSectionId === "inventory-low-stock-section" &&
-                "rounded-2xl ring-2 ring-indigo-100 ring-offset-2 ring-offset-slate-50"
-            )}
-          >
-            <Card
-              className="min-w-0"
-              title="Low Stock Alerts"
-              subtitle="Global warehouse stock items requiring replenishment."
-            >
-              <div className="space-y-3">
-                {stockAlertRows.length === 0 ? (
-                  <p className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-800">
-                    Global warehouse stock health is good.
-                  </p>
-                ) : (
-                  <div className="max-h-64 overflow-auto">
-                    <DataTable
-                      compact
-                      columns={["Item", "SKU", "Current", "Minimum", "Severity"]}
-                      rows={stockAlertRows.slice(0, 30).map((item) => [
-                        item.name,
-                        item.sku,
-                        <span key={`${item.id}-current`} className="inline-block w-full text-right">
-                          {formatNumber(item.quantityInStock)}
-                        </span>,
-                        <span key={`${item.id}-minimum`} className="inline-block w-full text-right">
-                          {formatNumber(item.minimumStockLevel)}
-                        </span>,
-                        <StockSeverityBadge key={`${item.id}-severity`} severity={item.severity} />
-                      ])}
-                    />
-                  </div>
-                )}
-
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  {overview.analytics.recommendations.length === 0
-                    ? "No global stock recommendations right now."
-                    : overview.analytics.recommendations.join(" ")}
-                </div>
-              </div>
-            </Card>
-          </section>
+          {canViewInventoryValue ? (
+            <section>
+              <InventoryValueStatisticsCard
+                totalValue={overview.overview.totalInventoryValue}
+                segments={inventoryValueSegments}
+                lowStockRows={lowStockRows}
+                outOfStockRows={overview.outOfStockItems}
+              />
+            </section>
+          ) : null}
         </>
       )}
 

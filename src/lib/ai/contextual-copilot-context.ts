@@ -155,7 +155,7 @@ export function resolveScopedPageHref(context: CopilotPageContext) {
     expenses: "/expenses",
     "drilling-reports": "/drilling-reports",
     breakdowns: "/breakdowns",
-    "inventory-overview": "/inventory",
+    "inventory-overview": "/inventory/items",
     "inventory-items": "/inventory/items",
     "inventory-stock-movements": "/inventory/stock-movements",
     "inventory-issues": "/inventory/issues",
@@ -257,7 +257,7 @@ export function inferPageKeyFromHref(href: string | undefined) {
     return "inventory-locations";
   }
   if (path.startsWith("/inventory")) {
-    return "inventory-overview";
+    return "inventory-items";
   }
   if (path.startsWith("/")) {
     return path.slice(1).replace(/\//g, "-") || "company-dashboard";

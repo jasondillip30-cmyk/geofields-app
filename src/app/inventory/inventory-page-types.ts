@@ -181,6 +181,12 @@ export interface InventoryOverviewResponse {
     topUsedItems: Array<{ id: string; name: string; quantity: number; totalCost: number }>;
     leastUsedItems: Array<{ id: string; name: string; quantity: number; totalCost: number }>;
     deadStockItems: Array<{ id: string; name: string; sku: string; inventoryValue: number; quantityInStock: number; lastUsedAt: string | null }>;
+    inventoryValueByCategory: Array<{
+      category: string;
+      label: string;
+      value: number;
+      percent: number;
+    }>;
     highestCostCategories: Array<{ category: string; cost: number; percentOfTotal: number }>;
     monthlyConsumption: Array<{ month: string; quantity: number; cost: number }>;
     movementTrend: Array<{ date: string; inQty: number; outQty: number; adjustmentQty: number; transferQty: number }>;
@@ -472,6 +478,7 @@ export const defaultOverview: InventoryOverviewResponse = {
     topUsedItems: [],
     leastUsedItems: [],
     deadStockItems: [],
+    inventoryValueByCategory: [],
     highestCostCategories: [],
     monthlyConsumption: [],
     movementTrend: [],
@@ -505,7 +512,7 @@ export const defaultIssues: InventoryIssuesResponse = {
   issues: []
 };
 
-export type InventorySection = "overview" | "items" | "stock-movements" | "issues" | "suppliers" | "locations";
+export type InventorySection = "items" | "stock-movements" | "issues" | "suppliers" | "locations";
 export type IssueTriageFilter = "ALL" | "HIGH_PRIORITY" | "NEEDS_LINKING" | "COST_NOT_RECOGNIZED" | "LOW_PRIORITY";
 
 export function resolveInventorySection(pathname: string | null, sectionQuery: string | null): InventorySection {
@@ -515,7 +522,10 @@ export function resolveInventorySection(pathname: string | null, sectionQuery: s
   if (pathname === "/inventory/suppliers") return "suppliers";
   if (pathname === "/inventory/locations") return "locations";
 
-  const requestedSection = (sectionQuery || "overview").toLowerCase();
+  const requestedSection = (sectionQuery || "items").toLowerCase();
+  if (requestedSection === "overview") {
+    return "items";
+  }
   if (
     requestedSection === "items" ||
     requestedSection === "stock-movements" ||
@@ -525,5 +535,5 @@ export function resolveInventorySection(pathname: string | null, sectionQuery: s
   ) {
     return requestedSection;
   }
-  return "overview";
+  return "items";
 }

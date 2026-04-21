@@ -26,7 +26,7 @@ type BuildInventoryCopilotContextParams = {
     to: string;
   };
   isSingleProjectScope: boolean;
-  showOverview: boolean;
+  canViewInventoryValue: boolean;
   showItems: boolean;
   showMovements: boolean;
   showIssuesWorkspace: boolean;
@@ -57,7 +57,7 @@ export function buildInventoryCopilotContext({
   pageTitle,
   filters,
   isSingleProjectScope,
-  showOverview,
+  canViewInventoryValue,
   showItems,
   showMovements,
   showIssuesWorkspace,
@@ -108,7 +108,7 @@ export function buildInventoryCopilotContext({
       ];
 
   const tablePreviews: CopilotPageContext["tablePreviews"] = [];
-  if (showOverview && !isSingleProjectScope) {
+  if (showItems && !isSingleProjectScope && canViewInventoryValue) {
     tablePreviews.push({
       key: "inventory-low-stock",
       title: "Low Stock Alerts",
@@ -121,9 +121,9 @@ export function buildInventoryCopilotContext({
         current: item.quantityInStock,
         minimum: item.minimumStockLevel,
         severity: item.severity,
-        href: buildHref("/inventory"),
-        sectionId: "inventory-low-stock-section",
-        targetPageKey: "inventory-overview"
+        href: buildHref("/inventory/items"),
+        sectionId: "inventory-value-card-section",
+        targetPageKey: "inventory-items"
       }))
     });
   }
@@ -220,7 +220,7 @@ export function buildInventoryCopilotContext({
   }
 
   const priorityItems: CopilotPageContext["priorityItems"] = [
-    ...(!isSingleProjectScope
+    ...(!isSingleProjectScope && canViewInventoryValue
       ? stockAlertRows.slice(0, 3).map((item) => ({
           id: item.id,
           label: `${item.name} (${item.sku})`,
@@ -230,10 +230,10 @@ export function buildInventoryCopilotContext({
               : `Low stock ${formatNumber(item.quantityInStock)} vs minimum ${formatNumber(item.minimumStockLevel)}.`,
           severity: item.severity === "CRITICAL" ? ("CRITICAL" as const) : ("MEDIUM" as const),
           amount: null,
-          href: buildHref(showOverview ? "/inventory" : "/inventory/items"),
+          href: buildHref("/inventory/items"),
           issueType: item.severity === "CRITICAL" ? "OUT_OF_STOCK" : "LOW_STOCK",
-          sectionId: "inventory-low-stock-section",
-          targetPageKey: "inventory-overview"
+          sectionId: "inventory-value-card-section",
+          targetPageKey: "inventory-items"
         }))
       : []),
     ...filteredMovements
@@ -276,12 +276,6 @@ export function buildInventoryCopilotContext({
       : [],
     priorityItems,
     navigationTargets: [
-      {
-        label: "Open Inventory Overview",
-        href: buildHref("/inventory"),
-        reason: "Review inventory-wide health and alerts.",
-        pageKey: "inventory-overview"
-      },
       {
         label: "Open Inventory Items",
         href: buildHref("/inventory/items"),

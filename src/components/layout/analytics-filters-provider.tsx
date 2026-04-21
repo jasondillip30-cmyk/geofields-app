@@ -27,6 +27,7 @@ import {
   type AnalyticsScopeFilters,
   type AnalyticsScopeIntent
 } from "@/lib/analytics-scope";
+import { useRole } from "@/components/layout/role-provider";
 
 export type AnalyticsFilters = AnalyticsScopeFilters;
 
@@ -45,6 +46,7 @@ const AnalyticsFiltersContext = createContext<AnalyticsFiltersContextValue | nul
 
 export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { role } = useRole();
   const [filters, setFilters] = useState<AnalyticsFilters>(defaultFilters);
   const [rememberedProjectId, setRememberedProjectId] = useState("");
   const [scopeBootstrapped, setScopeBootstrapped] = useState(false);
@@ -171,6 +173,31 @@ export function AnalyticsFiltersProvider({ children }: { children: ReactNode }) 
       );
     }
   }, [filters.clientId, filters.projectId, filters.rigId, filters.workspaceMode]);
+
+  useEffect(() => {
+    if (!role) {
+      return;
+    }
+    setFilters((current) => {
+      if (role === "MECHANIC") {
+        const next = normalizeScopeFilters(
+          { workspaceMode: "workshop" },
+          current,
+          rememberedProjectId
+        );
+        return areScopeFiltersEqual(current, next) ? current : next;
+      }
+      if (role === "FIELD" && current.workspaceMode === "workshop") {
+        const next = normalizeScopeFilters(
+          { workspaceMode: "project" },
+          current,
+          rememberedProjectId
+        );
+        return areScopeFiltersEqual(current, next) ? current : next;
+      }
+      return current;
+    });
+  }, [rememberedProjectId, role]);
 
   const setWorkspaceMode = useCallback(
     (mode: WorkspaceMode) => {

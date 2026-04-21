@@ -6,6 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AccessGate } from "@/components/layout/access-gate";
 import { GlobeInteractive } from "@/components/ui/cobe-globe-interactive";
 import { canAccess } from "@/lib/auth/permissions";
+import {
+  buildWorkshopScopedHref,
+  canUseWorkshopFromLaunch,
+  canUnlockAllProjectsFromLaunch,
+  resolveProjectLaunchDestination,
+  resolveWorkshopLaunchDestination
+} from "@/lib/auth/workspace-launch-access";
 import { useRole } from "@/components/layout/role-provider";
 import { navigateWithSheetTransition } from "@/lib/sheet-transition";
 import { applyScopeIntentToSession } from "@/lib/analytics-scope";
@@ -99,6 +106,8 @@ export function WorkspaceLaunchClient() {
     const serialized = query.toString();
     return serialized ? `&${serialized}` : "";
   }, [from, to]);
+  const canUseWorkshopEntry = useMemo(() => canUseWorkshopFromLaunch(role), [role]);
+  const canUnlockAllProjects = useMemo(() => canUnlockAllProjectsFromLaunch(role), [role]);
 
   const getAllProjectsDestination = useCallback(() => {
     if (role && canAccess(role, "dashboard:view")) {
@@ -131,6 +140,9 @@ export function WorkspaceLaunchClient() {
   }, [from, getAllProjectsHref, router, to]);
 
   const handleOpenWorkshop = useCallback(() => {
+    if (!canUseWorkshopEntry) {
+      return;
+    }
     applyScopeIntentToSession({
       workspaceMode: "workshop",
       projectId: "all",
@@ -139,16 +151,11 @@ export function WorkspaceLaunchClient() {
       from,
       to
     });
-    const destination =
-      role && canAccess(role, "inventory:view")
-        ? "/inventory"
-        : role && canAccess(role, "maintenance:view")
-          ? "/maintenance"
-          : "/rigs";
-    router.push(`${destination}?workspace=workshop&projectId=all&clientId=all&rigId=all${querySuffix}`);
-  }, [from, querySuffix, role, router, to]);
+    const destination = resolveWorkshopLaunchDestination(role);
+    router.push(buildWorkshopScopedHref(destination, { from, to }));
+  }, [canUseWorkshopEntry, from, role, router, to]);
 
-  const buildProjectOperationsHref = useCallback(
+  const buildProjectScopedHref = useCallback(
     (projectId: string) => {
       const params = new URLSearchParams();
       params.set("workspace", "project");
@@ -161,9 +168,10 @@ export function WorkspaceLaunchClient() {
       if (to) {
         params.set("to", to);
       }
-      return `/spending?${params.toString()}`;
+      const destination = resolveProjectLaunchDestination(role);
+      return `${destination}?${params.toString()}`;
     },
-    [from, to]
+    [from, role, to]
   );
 
   const markerSelectableById = useMemo(
@@ -191,14 +199,17 @@ export function WorkspaceLaunchClient() {
       });
       navigateWithSheetTransition({
         direction: "up",
-        onNavigate: () => router.push(buildProjectOperationsHref(projectId))
+        onNavigate: () => router.push(buildProjectScopedHref(projectId))
       });
     },
-    [buildProjectOperationsHref, from, hasLiveProjectMarkers, markers, router, to]
+    [buildProjectScopedHref, from, hasLiveProjectMarkers, markers, router, to]
   );
 
   const processWheelUnlock = useCallback(
     (deltaY: number, clientY: number, target: EventTarget | null) => {
+      if (!canUnlockAllProjects) {
+        return;
+      }
       if (hasTriggeredWheelNavigation.current || isInteractiveGestureTarget(target)) {
         return;
       }
@@ -243,10 +254,18 @@ export function WorkspaceLaunchClient() {
         wheelUnlockDirectionRef.current = 0;
       }, 600);
     },
-    [handleOpenAllProjectsWithTransition]
+    [canUnlockAllProjects, handleOpenAllProjectsWithTransition]
   );
 
   const handleTouchStart = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
+    if (!canUnlockAllProjects) {
+      touchStartY.current = null;
+      touchLastY.current = null;
+      touchMoved.current = false;
+      touchStartedOnInteractiveControl.current = false;
+      touchGestureArmed.current = false;
+      return;
+    }
     const startY = event.touches[0]?.clientY ?? null;
     touchStartY.current = startY;
     touchLastY.current = startY;
@@ -262,7 +281,7 @@ export function WorkspaceLaunchClient() {
       return;
     }
     touchGestureArmed.current = true;
-  }, []);
+  }, [canUnlockAllProjects]);
 
   const handleTouchMove = useCallback((event: React.TouchEvent<HTMLDivElement>) => {
     const currentY = event.touches[0]?.clientY ?? null;
@@ -278,6 +297,14 @@ export function WorkspaceLaunchClient() {
 
   const finalizeTouchUnlock = useCallback(
     (touchEndY: number | null) => {
+      if (!canUnlockAllProjects) {
+        touchMoved.current = false;
+        touchStartY.current = null;
+        touchLastY.current = null;
+        touchStartedOnInteractiveControl.current = false;
+        touchGestureArmed.current = false;
+        return;
+      }
       if (hasTriggeredWheelNavigation.current) {
         return;
       }
@@ -308,7 +335,7 @@ export function WorkspaceLaunchClient() {
         wheelUnlockDirectionRef.current = 0;
       }, 700);
     },
-    [handleOpenAllProjectsWithTransition]
+    [canUnlockAllProjects, handleOpenAllProjectsWithTransition]
   );
 
   const handleTouchEnd = useCallback(
@@ -402,29 +429,33 @@ export function WorkspaceLaunchClient() {
             markers={markers}
             markerSelectableById={markerSelectableById}
             isMarkerClickSuppressed={isMarkerClickSuppressed}
-            onWorkshopClick={handleOpenWorkshop}
+            onWorkshopClick={canUseWorkshopEntry ? handleOpenWorkshop : undefined}
             onMarkerSelect={handleProjectMarkerSelect}
             className="mx-auto"
           />
         </div>
-        <div
-          data-testid="workspace-launch-gesture-zone"
-          className="absolute inset-x-0 bottom-0 z-40"
-          style={{
-            height: `calc(${BOTTOM_EDGE_SWIPE_ZONE_PX}px + env(safe-area-inset-bottom) + 16px)`,
-            touchAction: "none"
-          }}
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-50 flex justify-center pb-3"
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
-        >
-          <span
-            data-testid="workspace-launch-swipe-handle"
-            className="h-1.5 w-28 rounded-full bg-slate-900/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]"
-          />
-        </div>
+        {canUnlockAllProjects ? (
+          <>
+            <div
+              data-testid="workspace-launch-gesture-zone"
+              className="absolute inset-x-0 bottom-0 z-40"
+              style={{
+                height: `calc(${BOTTOM_EDGE_SWIPE_ZONE_PX}px + env(safe-area-inset-bottom) + 16px)`,
+                touchAction: "none"
+              }}
+            />
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-x-0 bottom-0 z-50 flex justify-center pb-3"
+              style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
+            >
+              <span
+                data-testid="workspace-launch-swipe-handle"
+                className="h-1.5 w-28 rounded-full bg-slate-900/35 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.35)]"
+              />
+            </div>
+          </>
+        ) : null}
       </main>
     </AccessGate>
   );
