@@ -59,7 +59,8 @@ export function ReceiptIntakeScanStep({
   setCameraSessionError,
   cameraDetectedPayload,
   setCameraDetectedPayload,
-  handleCameraPayloadConfirm
+  handleCameraPayloadConfirm,
+  cancelPendingCameraConfirm
 }: {
   manualInputSelected: boolean;
   handleReceiptCaptureModeChange: (mode: ReceiptCaptureMode) => void;
@@ -109,6 +110,7 @@ export function ReceiptIntakeScanStep({
   cameraDetectedPayload: string;
   setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
   handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
+  cancelPendingCameraConfirm: () => void;
 }) {
   const [showCameraScanner, setShowCameraScanner] = useState(false);
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
@@ -467,6 +469,7 @@ export function ReceiptIntakeScanStep({
         onSessionErrorChange={setCameraSessionError}
         onDetectedPayloadChange={setCameraDetectedPayload}
         onConfirmPayload={handleCameraPayloadConfirm}
+        onCancelPendingConfirm={cancelPendingCameraConfirm}
         onClose={() => setShowCameraScanner(false)}
         onEnterManually={() => handleReceiptCaptureModeChange("MANUAL")}
         onUseUploadFallback={() => handleReceiptCaptureModeChange("SCAN")}

@@ -95,6 +95,7 @@ interface ReceiptIntakeGuidedStagesProps {
   cameraDetectedPayload: string;
   setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
   handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
+  cancelPendingCameraConfirm: () => void;
 }
 
 export function ReceiptIntakeGuidedStages({
@@ -170,7 +171,8 @@ export function ReceiptIntakeGuidedStages({
   setCameraSessionError,
   cameraDetectedPayload,
   setCameraDetectedPayload,
-  handleCameraPayloadConfirm
+  handleCameraPayloadConfirm,
+  cancelPendingCameraConfirm
 }: ReceiptIntakeGuidedStagesProps) {
   return (
     <>
@@ -247,6 +249,7 @@ export function ReceiptIntakeGuidedStages({
           cameraDetectedPayload={cameraDetectedPayload}
           setCameraDetectedPayload={setCameraDetectedPayload}
           handleCameraPayloadConfirm={handleCameraPayloadConfirm}
+          cancelPendingCameraConfirm={cancelPendingCameraConfirm}
         />
       )}
 

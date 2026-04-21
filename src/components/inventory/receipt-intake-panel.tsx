@@ -93,6 +93,13 @@ export function ReceiptIntakePanel({
   }
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cameraConfirmAbortRef = useRef<AbortController | null>(null);
+  const cancelPendingCameraConfirm = useCallback(() => {
+    if (cameraConfirmAbortRef.current) {
+      cameraConfirmAbortRef.current.abort();
+      cameraConfirmAbortRef.current = null;
+    }
+  }, []);
   const clearQrAssistSelection = useCallback(() => {
     setQrAssistSelection(null);
     setDrawingQrSelection(false);
@@ -133,6 +140,11 @@ export function ReceiptIntakePanel({
       }
     };
   }, [receiptPreviewUrl]);
+  useEffect(() => {
+    return () => {
+      cancelPendingCameraConfirm();
+    };
+  }, [cancelPendingCameraConfirm]);
   useEffect(() => {
     if (!initialRequisition || review || activeSubmission) {
       return;
@@ -330,6 +342,7 @@ export function ReceiptIntakePanel({
     );
   }
   function handleReceiptCaptureModeChange(mode: ReceiptCaptureMode) {
+    cancelPendingCameraConfirm();
     handleReceiptCaptureModeSwitch({
       mode,
       setReceiptCaptureMode,
@@ -359,6 +372,7 @@ export function ReceiptIntakePanel({
     });
   }
   function resetScanSessionState() {
+    cancelPendingCameraConfirm();
     resetScanSessionStateValues({
       setHasScanAttempted,
       setLastScanDiagnostics,
@@ -672,10 +686,14 @@ export function ReceiptIntakePanel({
     setLastSavedAllocationStatus(null);
     setInventoryActionEditorByLine({});
     setShowMismatchInventoryHandling(false);
+    cancelPendingCameraConfirm();
+    const controller = new AbortController();
+    cameraConfirmAbortRef.current = controller;
     try {
       const response = await fetch("/api/inventory/receipt-intake/scan-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           rawPayload,
           context: {
@@ -685,6 +703,13 @@ export function ReceiptIntakePanel({
         })
       });
       const payload = await readJsonPayload(response);
+      if (!response.ok || !isReceiptExtractSuccessPayload(payload)) {
+        throw new Error(
+          response.ok
+            ? readPayloadMessage(payload, "Camera scan could not read a valid receipt QR. Try scanning again.")
+            : readApiError(response, payload, "Camera scan could not be completed. Please retry.")
+        );
+      }
       await processExtractionPayload({
         response,
         payload,
@@ -695,35 +720,20 @@ export function ReceiptIntakePanel({
       setCameraSessionState("idle");
       return true;
     } catch (scanError) {
-      const fallbackReview = buildManualAssistReview({
-        payload: null,
-        receiptFileName: "camera-qr-scan",
-        defaultClientId,
-        defaultRigId,
-        warning:
-          scanError instanceof Error && scanError.message
-            ? scanError.message
-            : "Camera scan could not be completed. You can retry, upload, or continue manually.",
-        fallbackMode: "SCAN_FAILURE",
-        receiptClassification: selectedWorkflowConfig.classification,
-        receiptWorkflowChoice,
-        initialRequisition
-      });
-      setReview(fallbackReview);
-      setLastScanDiagnostics(fallbackReview.scanDiagnostics);
-      setNoticeTone("WARNING");
-      setNotice(resolveScanFailureNotice(fallbackReview));
-      setError(null);
-      setExtractState("FAILED");
-      setFollowUpStage("SCAN");
+      if (scanError instanceof DOMException && scanError.name === "AbortError") {
+        return false;
+      }
       setCameraSessionState("error");
       setCameraSessionError(
         scanError instanceof Error && scanError.message
           ? scanError.message
-          : "Camera scan failed. Use upload/manual fallback."
+          : "Camera scan failed. You can retry, upload, or continue manually."
       );
-      return true;
+      return false;
     } finally {
+      if (cameraConfirmAbortRef.current === controller) {
+        cameraConfirmAbortRef.current = null;
+      }
       setExtractState((current) => (current === "PROCESSING" ? "FAILED" : current));
     }
   }
@@ -1148,7 +1158,8 @@ export function ReceiptIntakePanel({
         setCameraSessionError,
         cameraDetectedPayload,
         setCameraDetectedPayload,
-        handleCameraPayloadConfirm
+        handleCameraPayloadConfirm,
+        cancelPendingCameraConfirm
       }}
       focusedOverlayProps={{
         focusedOverlayMounted,

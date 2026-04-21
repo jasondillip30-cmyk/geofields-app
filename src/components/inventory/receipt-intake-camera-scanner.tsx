@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname } from "next/navigation";
 import jsQR from "jsqr";
 
 import type { CameraSessionState } from "@/components/inventory/receipt-intake-panel-types";
@@ -38,6 +37,7 @@ interface ReceiptIntakeCameraScannerProps {
   onSessionErrorChange: (message: string | null) => void;
   onDetectedPayloadChange: (payload: string) => void;
   onConfirmPayload: (payload: string) => Promise<boolean>;
+  onCancelPendingConfirm: () => void;
   onClose: () => void;
   onEnterManually: () => void;
   onUseUploadFallback: () => void;
@@ -52,11 +52,11 @@ export function ReceiptIntakeCameraScanner({
   onSessionErrorChange,
   onDetectedPayloadChange,
   onConfirmPayload,
+  onCancelPendingConfirm,
   onClose,
   onEnterManually,
   onUseUploadFallback
 }: ReceiptIntakeCameraScannerProps) {
-  const pathname = usePathname();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -65,6 +65,9 @@ export function ReceiptIntakeCameraScanner({
   const barcodeDetectorRef = useRef<BarcodeDetectorInstance | null>(null);
   const lastCandidateRef = useRef("");
   const stableHitsRef = useRef(0);
+  const sessionStateRef = useRef<CameraSessionState>(sessionState);
+  const openRef = useRef(open);
+  const activeStartAttemptRef = useRef(0);
   const [submitting, setSubmitting] = useState(false);
 
   const statusText = useMemo(() => {
@@ -97,7 +100,12 @@ export function ReceiptIntakeCameraScanner({
       video.pause();
       video.srcObject = null;
     }
+    barcodeDetectorRef.current = null;
     scanBusyRef.current = false;
+  }, []);
+
+  const cancelPendingStart = useCallback(() => {
+    activeStartAttemptRef.current += 1;
   }, []);
 
   const resetDetectionStability = useCallback(() => {
@@ -185,7 +193,7 @@ export function ReceiptIntakeCameraScanner({
   );
 
   const runScanTick = useCallback(async () => {
-    if (scanBusyRef.current || sessionState !== "ready") {
+    if (scanBusyRef.current || sessionStateRef.current !== "ready") {
       return;
     }
     scanBusyRef.current = true;
@@ -214,12 +222,19 @@ export function ReceiptIntakeCameraScanner({
       if (stableHitsRef.current >= 3) {
         handleStableDetection(candidate);
       }
+    } catch (error) {
+      resetDetectionStability();
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("Receipt scanner tick failed", error);
+      }
     } finally {
       scanBusyRef.current = false;
     }
-  }, [detectCandidateWithBarcodeDetector, detectCandidateWithJsQr, handleStableDetection, resetDetectionStability, sessionState]);
+  }, [detectCandidateWithBarcodeDetector, detectCandidateWithJsQr, handleStableDetection, resetDetectionStability]);
 
   const startCameraSession = useCallback(async () => {
+    const attemptId = activeStartAttemptRef.current + 1;
+    activeStartAttemptRef.current = attemptId;
     stopCameraStream();
     resetDetectionStability();
     onDetectedPayloadChange("");
@@ -233,13 +248,19 @@ export function ReceiptIntakeCameraScanner({
 
     onSessionStateChange("requesting");
 
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: { ideal: "environment" }
         },
         audio: false
       });
+
+      if (activeStartAttemptRef.current !== attemptId || !openRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       streamRef.current = stream;
       const video = videoRef.current;
@@ -248,6 +269,13 @@ export function ReceiptIntakeCameraScanner({
       }
       video.srcObject = stream;
       await video.play();
+
+      if (activeStartAttemptRef.current !== attemptId || !openRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        video.pause();
+        video.srcObject = null;
+        return;
+      }
 
       const BarcodeDetector = getBarcodeDetectorCtor();
       if (BarcodeDetector) {
@@ -258,14 +286,26 @@ export function ReceiptIntakeCameraScanner({
 
       onSessionStateChange("ready");
       scanIntervalRef.current = window.setInterval(() => {
-        void runScanTick();
+        void runScanTick().catch((error) => {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("Receipt scanner tick promise rejected", error);
+          }
+        });
       }, 220);
     } catch (error) {
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      if (activeStartAttemptRef.current !== attemptId || !openRef.current) {
+        return;
+      }
       stopCameraStream();
       onSessionStateChange("error");
       const message =
         error instanceof DOMException && error.name === "NotAllowedError"
           ? "Camera permission denied. Allow camera access or use upload/manual fallback."
+          : error instanceof DOMException && error.name === "AbortError"
+            ? "Camera start was interrupted. Please retry scan."
           : error instanceof DOMException && error.name === "NotFoundError"
             ? "No rear camera found on this device."
             : error instanceof Error
@@ -293,20 +333,36 @@ export function ReceiptIntakeCameraScanner({
   }, [detectedPayload, onClose, onConfirmPayload, onSessionStateChange, stopCameraStream, submitting]);
 
   const handleScanAgain = useCallback(() => {
+    onCancelPendingConfirm();
     void startCameraSession();
-  }, [startCameraSession]);
+  }, [onCancelPendingConfirm, startCameraSession]);
 
   const closeOverlay = useCallback(() => {
+    onCancelPendingConfirm();
+    cancelPendingStart();
     stopCameraStream();
     resetDetectionStability();
     onSessionStateChange("idle");
     onSessionErrorChange(null);
     onDetectedPayloadChange("");
     onClose();
-  }, [onClose, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, stopCameraStream]);
+  }, [cancelPendingStart, onCancelPendingConfirm, onClose, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, stopCameraStream]);
+
+  useEffect(() => {
+    sessionStateRef.current = sessionState;
+  }, [sessionState]);
+
+  useEffect(() => {
+    openRef.current = open;
+    if (!open) {
+      cancelPendingStart();
+    }
+  }, [cancelPendingStart, open]);
 
   useEffect(() => {
     if (!open) {
+      onCancelPendingConfirm();
+      cancelPendingStart();
       stopCameraStream();
       resetDetectionStability();
       onSessionStateChange("idle");
@@ -314,22 +370,19 @@ export function ReceiptIntakeCameraScanner({
     }
     void startCameraSession();
     return () => {
+      onCancelPendingConfirm();
+      cancelPendingStart();
       stopCameraStream();
     };
-  }, [open, onSessionStateChange, resetDetectionStability, startCameraSession, stopCameraStream]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    stopCameraStream();
-  }, [open, pathname, stopCameraStream]);
+  }, [cancelPendingStart, onCancelPendingConfirm, open, onSessionStateChange, resetDetectionStability, startCameraSession, stopCameraStream]);
 
   useEffect(() => {
     return () => {
+      onCancelPendingConfirm();
+      cancelPendingStart();
       stopCameraStream();
     };
-  }, [stopCameraStream]);
+  }, [cancelPendingStart, onCancelPendingConfirm, stopCameraStream]);
 
   if (!open) {
     return null;
@@ -362,6 +415,9 @@ export function ReceiptIntakeCameraScanner({
           </div>
 
           <p className="mt-3 text-center text-sm text-slate-100">{statusText}</p>
+          <p className="mt-1 text-center text-xs text-slate-300">
+            Some mobile browsers may ask for camera permission each time you open this scanner.
+          </p>
 
           {detectedPayload ? (
             <div className="mt-3 rounded-lg border border-emerald-300/40 bg-emerald-500/10 p-3 text-xs text-emerald-100">
