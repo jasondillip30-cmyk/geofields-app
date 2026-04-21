@@ -8,7 +8,9 @@ import {
   isRequisitionPendingApproval,
   isRequisitionPostedComplete
 } from "@/lib/requisition-lifecycle";
+import { getRoleForcedRequisitionType } from "@/lib/auth/requisition-access";
 import { formatCurrency } from "@/lib/utils";
+import { useRole } from "@/components/layout/role-provider";
 import {
   buildReceiptIntakeHref,
   buildRequisitionRowSummary,
@@ -55,16 +57,19 @@ export function RequisitionWorkflowCard({
   initialContext,
   onWorkflowChanged
 }: RequisitionWorkflowCardProps) {
+  const { role } = useRole();
   const hasMaintenanceEntryContext = Boolean(initialContext?.maintenanceRequestId?.trim());
   const hasBreakdownEntryContext = Boolean(initialContext?.breakdownId?.trim());
   const isProjectMode = filters.workspaceMode === "project";
   const isWorkshopMode = filters.workspaceMode === "workshop";
   const isProjectLocked = isProjectMode && filters.projectId !== "all";
+  const roleForcedType = getRoleForcedRequisitionType(role);
   const forcedRequestType = deriveForcedRequestType({
     hasBreakdownEntryContext,
     hasMaintenanceEntryContext,
     isProjectMode,
-    isWorkshopMode
+    isWorkshopMode,
+    roleForcedType
   });
   const hasPrefilledContext = Boolean(
     initialContext?.projectId || initialContext?.maintenanceRequestId || initialContext?.breakdownId
@@ -110,7 +115,8 @@ export function RequisitionWorkflowCard({
   const historyTypeFilter = deriveHistoryTypeFilter({
     hasMaintenanceEntryContext,
     isProjectMode,
-    isWorkshopMode
+    isWorkshopMode,
+    roleForcedType
   });
   const lockedRequestTypeCard = useMemo(
     () =>

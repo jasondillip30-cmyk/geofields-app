@@ -17,7 +17,7 @@ export const navItems: NavItem[] = [
   { href: "/", label: "Dashboard", permission: "dashboard:view" },
   { href: "/projects", label: "Projects", permission: "projects:view" },
   { href: "/rigs", label: "Rigs", permission: "rigs:view" },
-  { href: "/expenses", label: "Purchase Requests", permission: "expenses:manual" },
+  { href: "/expenses", label: "Purchase Requests", permission: "requisitions:view" },
   { href: "/breakdowns", label: "Breakdowns", permission: "breakdowns:view" },
   { href: "/maintenance", label: "Maintenance", permission: "maintenance:view" },
   { href: "/inventory", label: "Inventory", permission: "inventory:view" },
@@ -48,6 +48,6 @@ export const setupNavChildren: NavChildItem[] = [
 
 // Backward-compatible export for older sidebar implementations.
 export const receiptProcessingChildren: NavChildItem[] = [
-  { href: "/purchasing/receipt-follow-up", label: "Complete Purchase", permission: "inventory:view" },
-  { href: "/purchasing/receipt-follow-up?view=history", label: "Intake History", permission: "inventory:view" }
+  { href: "/purchasing/receipt-follow-up", label: "Complete Purchase", permission: "requisitions:view" },
+  { href: "/purchasing/receipt-follow-up?view=history", label: "Intake History", permission: "requisitions:view" }
 ];

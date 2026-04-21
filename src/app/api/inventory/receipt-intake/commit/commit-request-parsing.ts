@@ -11,11 +11,29 @@ function parseOptionalString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function isHttpUrl(value: string) {
+  if (!value) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function parseReceiptSnapshot(body: IntakeCommitPayload | null) {
   const receipt = body?.receipt;
+  const parsedReceiptUrl = parseOptionalString(receipt?.url);
+  const parsedVerificationUrl = parseOptionalString(receipt?.verificationUrl);
+  const canonicalReceiptUrl = isHttpUrl(parsedVerificationUrl)
+    ? parsedVerificationUrl
+    : parsedReceiptUrl;
+
   return {
     intakeDate: parseDateOrNull(typeof receipt?.receiptDate === "string" ? receipt.receiptDate : null) || new Date(),
-    receiptUrl: parseOptionalString(receipt?.url),
+    receiptUrl: canonicalReceiptUrl,
     receiptFileName: parseOptionalString(receipt?.fileName),
     traReceiptNumber: parseOptionalString(receipt?.traReceiptNumber),
     receiptNumber: parseOptionalString(receipt?.receiptNumber),
@@ -23,7 +41,7 @@ export function parseReceiptSnapshot(body: IntakeCommitPayload | null) {
     receiptVrn: parseOptionalString(receipt?.vrn),
     serialNumber: parseOptionalString(receipt?.serialNumber),
     verificationCode: parseOptionalString(receipt?.verificationCode),
-    verificationUrl: parseOptionalString(receipt?.verificationUrl),
+    verificationUrl: parsedVerificationUrl,
     rawQrValue: parseOptionalString(receipt?.rawQrValue),
     receiptTime: parseOptionalString(receipt?.receiptTime),
     invoiceReference: parseOptionalString(receipt?.invoiceReference),

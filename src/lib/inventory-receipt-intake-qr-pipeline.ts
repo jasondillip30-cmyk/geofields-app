@@ -246,6 +246,23 @@ export async function extractQrDataFromReceipt({
   }
 }
 
+export async function extractQrDataFromRawPayload({
+  rawPayload,
+  decodePass = "camera-live",
+  sourceLabel = "camera"
+}: {
+  rawPayload: string;
+  decodePass?: string;
+  sourceLabel?: string;
+}): Promise<ReceiptQrResult> {
+  const parsed = parseQrPayload(rawPayload, {
+    decodePass,
+    attemptedPasses: [`${sourceLabel}|raw-payload`],
+    variantCount: 1
+  });
+  return finalizeQrResult(parsed);
+}
+
 async function resolveQrDecodedResult({
   rawValue,
   decodePass,

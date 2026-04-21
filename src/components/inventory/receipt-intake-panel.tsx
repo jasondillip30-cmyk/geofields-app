@@ -9,7 +9,7 @@ import { asString, buildManualAssistReview, buildReviewStateFromPayload, buildRe
 import { buildRequisitionMismatchReview, evaluateRequisitionComparison } from "@/components/inventory/receipt-intake-comparison";
 import { ReceiptIntakePanelContent } from "@/components/inventory/receipt-intake-panel-content";
 import { applyReviewLinePatch, createManualSeededReview, fetchFocusedRecordPayload, handleReceiptCaptureModeSwitch, handleQrPointerDownSelection, handleQrPointerMoveSelection, handleQrPointerUpSelection, handleReceiptFileSelection, resetFocusedRecordOverlayState, resetScanSessionStateValues } from "@/components/inventory/receipt-intake-panel-actions";
-import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
+import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type CameraSessionState, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
 import { formatCurrency } from "@/lib/utils";
 export type { ExpenseOnlyCategory, FieldConfidence, QrDecodeStatus, QrLookupStatus, QrParseStatus, ReadabilityConfidence, ReceiptClassification, ReceiptFollowUpStage, ReceiptIntakePanelProps, ReceiptSnapshotLine, ReceiptWorkflowChoice, RequisitionComparisonResult, ReviewLineState, ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage, IntakeAllocationStatus, DuplicatePromptState, QrCropSelection, ExtractState, ReceiptPurpose } from "@/components/inventory/receipt-intake-panel-types";
 export function ReceiptIntakePanel({
@@ -34,6 +34,9 @@ export function ReceiptIntakePanel({
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreviewUrl, setReceiptPreviewUrl] = useState("");
   const [extractState, setExtractState] = useState<ExtractState>("IDLE");
+  const [cameraSessionState, setCameraSessionState] = useState<CameraSessionState>("idle");
+  const [cameraSessionError, setCameraSessionError] = useState<string | null>(null);
+  const [cameraDetectedPayload, setCameraDetectedPayload] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -344,6 +347,9 @@ export function ReceiptIntakePanel({
       setError,
       setFollowUpStage
     });
+    setCameraSessionState("idle");
+    setCameraSessionError(null);
+    setCameraDetectedPayload("");
   }
   function closeFocusedRecordOverlay() {
     resetFocusedRecordOverlayState({
@@ -364,6 +370,9 @@ export function ReceiptIntakePanel({
       setShowMismatchFinalizeConfirm,
       setShowScannedDetails
     });
+    setCameraSessionState("idle");
+    setCameraSessionError(null);
+    setCameraDetectedPayload("");
   }
   function handleReceiptFileChange(file: File | null) {
     handleReceiptFileSelection({
@@ -420,6 +429,130 @@ export function ReceiptIntakePanel({
       setDrawingQrSelection
     });
   }
+  async function processExtractionPayload({
+    response,
+    payload,
+    receiptFileName,
+    selectedWorkflowChoice,
+    selectedWorkflowConfig
+  }: {
+    response: Response;
+    payload: unknown;
+    receiptFileName: string;
+    selectedWorkflowChoice: ReceiptWorkflowChoice;
+    selectedWorkflowConfig: ReturnType<typeof resolveWorkflowSelectionConfig>;
+  }) {
+    if (response.ok && isReceiptExtractSuccessPayload(payload)) {
+      const nextReview = buildReviewStateFromPayload({
+        payload,
+        receiptFileName,
+        defaultClientId,
+        defaultRigId,
+        receiptClassification: selectedWorkflowConfig.classification,
+        receiptWorkflowChoice: selectedWorkflowChoice,
+        initialRequisition
+      });
+      const extractedHasUsableData = hasMeaningfulExtractedPayload(payload.extracted);
+      const mappedReviewHasUsableData = hasMeaningfulReviewData(nextReview);
+      const qrDecodeSucceeded =
+        nextReview.scanDiagnostics.qrDecodeStatus === "DECODED" ||
+        nextReview.scanDiagnostics.qrParseStatus === "PARSED" ||
+        nextReview.scanDiagnostics.qrLookupStatus === "SUCCESS";
+      const shouldFallbackToManual = (!extractedHasUsableData || !mappedReviewHasUsableData) && !qrDecodeSucceeded;
+      if (shouldFallbackToManual) {
+        const fallbackReview = buildManualAssistReview({
+          payload,
+          receiptFileName,
+          defaultClientId,
+          defaultRigId,
+          warning: SCAN_FALLBACK_MESSAGE,
+          fallbackMode: "SCAN_FAILURE",
+          receiptClassification: selectedWorkflowConfig.classification,
+          receiptWorkflowChoice: selectedWorkflowChoice,
+          initialRequisition
+        });
+        setReview(fallbackReview);
+        setLastScanDiagnostics(fallbackReview.scanDiagnostics);
+        setNoticeTone("WARNING");
+        setNotice(resolveScanFailureNotice(fallbackReview));
+        setError(null);
+        setExtractState("FAILED");
+        setFollowUpStage("SCAN");
+        return true;
+      }
+      const effectiveReview = !mappedReviewHasUsableData && qrDecodeSucceeded
+        ? markFrontendMappingGap(nextReview)
+        : nextReview;
+      const requisitionComparison = evaluateRequisitionComparison(effectiveReview, initialRequisition);
+      if (requisitionComparison?.status === "MISMATCH") {
+        const mismatchReview = buildRequisitionMismatchReview({
+          scannedReview: effectiveReview,
+          initialRequisition
+        });
+        setReview(mismatchReview);
+        setLastScanDiagnostics(mismatchReview.scanDiagnostics);
+        setNoticeTone("WARNING");
+        setNotice(null);
+        setError(null);
+        setExtractState("SUCCESS");
+        setFollowUpStage("SCAN");
+        return true;
+      }
+      setReview(effectiveReview);
+      setLastScanDiagnostics(effectiveReview.scanDiagnostics);
+      const intakeMessage = calmMessage(
+        payload.message ||
+          (effectiveReview.scanStatus === "COMPLETE"
+            ? "Captured from QR/TRA. Review and save."
+            : "Some fields still need review.")
+      );
+      const autoSaveReadiness = evaluateAutoSaveEligibility(effectiveReview);
+      if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
+        setNoticeTone("SUCCESS");
+        setNotice("Captured from QR/TRA. Finalizing automatically...");
+      } else if (canManage && autoSaveEnabled && !autoSaveReadiness.ready) {
+        setNoticeTone("WARNING");
+        setNotice(
+          `Review recommended before save. ${autoSaveReadiness.reasons[0] || "Some optional fields need confirmation."}`
+        );
+      } else {
+        setNoticeTone(effectiveReview.scanStatus === "COMPLETE" ? "SUCCESS" : "WARNING");
+        setNotice(
+          effectiveReview.scanDiagnostics.failureStage === "FRONTEND_MAPPING_EMPTY"
+            ? `${intakeMessage} Scan details were captured but field mapping needs manual review.`
+            : intakeMessage
+        );
+      }
+      setExtractState("SUCCESS");
+      setFollowUpStage("SCAN");
+      if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
+        await commitReview(effectiveReview, { auto: true });
+      }
+      return true;
+    }
+    const fallbackReview = buildManualAssistReview({
+      payload,
+      receiptFileName,
+      defaultClientId,
+      defaultRigId,
+      warning:
+        response.ok
+          ? readPayloadMessage(payload, SCAN_FALLBACK_MESSAGE)
+          : readApiError(response, payload, SCAN_FALLBACK_MESSAGE),
+      fallbackMode: "SCAN_FAILURE",
+      receiptClassification: selectedWorkflowConfig.classification,
+      receiptWorkflowChoice: selectedWorkflowChoice,
+      initialRequisition
+    });
+    setReview(fallbackReview);
+    setLastScanDiagnostics(fallbackReview.scanDiagnostics);
+    setNoticeTone("WARNING");
+    setNotice(resolveScanFailureNotice(fallbackReview));
+    setError(null);
+    setExtractState("FAILED");
+    setFollowUpStage("SCAN");
+    return true;
+  }
   async function handleExtract(options?: { userInitiated?: boolean }) {
     if (!options?.userInitiated) {
       return;
@@ -468,115 +601,13 @@ export function ReceiptIntakePanel({
       });
       setExtractState("PROCESSING");
       const payload = await readJsonPayload(response);
-      if (response.ok && isReceiptExtractSuccessPayload(payload)) {
-        const nextReview = buildReviewStateFromPayload({
-          payload,
-          receiptFileName: receiptFile.name,
-          defaultClientId,
-          defaultRigId,
-          receiptClassification: selectedWorkflowConfig.classification,
-          receiptWorkflowChoice,
-          initialRequisition
-        });
-        const extractedHasUsableData = hasMeaningfulExtractedPayload(payload.extracted);
-        const mappedReviewHasUsableData = hasMeaningfulReviewData(nextReview);
-        const qrDecodeSucceeded =
-          nextReview.scanDiagnostics.qrDecodeStatus === "DECODED" ||
-          nextReview.scanDiagnostics.qrParseStatus === "PARSED" ||
-          nextReview.scanDiagnostics.qrLookupStatus === "SUCCESS";
-        const shouldFallbackToManual = (!extractedHasUsableData || !mappedReviewHasUsableData) && !qrDecodeSucceeded;
-        if (shouldFallbackToManual) {
-          const fallbackReview = buildManualAssistReview({
-            payload,
-            receiptFileName: receiptFile.name,
-            defaultClientId,
-            defaultRigId,
-            warning: SCAN_FALLBACK_MESSAGE,
-            fallbackMode: "SCAN_FAILURE",
-            receiptClassification: selectedWorkflowConfig.classification,
-            receiptWorkflowChoice,
-            initialRequisition
-          });
-          setReview(fallbackReview);
-          setLastScanDiagnostics(fallbackReview.scanDiagnostics);
-          setNoticeTone("WARNING");
-          setNotice(resolveScanFailureNotice(fallbackReview));
-          setError(null);
-          setExtractState("FAILED");
-          setFollowUpStage("SCAN");
-          return;
-        }
-        const effectiveReview = !mappedReviewHasUsableData && qrDecodeSucceeded
-          ? markFrontendMappingGap(nextReview)
-          : nextReview;
-        const requisitionComparison = evaluateRequisitionComparison(effectiveReview, initialRequisition);
-        if (requisitionComparison?.status === "MISMATCH") {
-          const mismatchReview = buildRequisitionMismatchReview({
-            scannedReview: effectiveReview,
-            initialRequisition
-          });
-          setReview(mismatchReview);
-          setLastScanDiagnostics(mismatchReview.scanDiagnostics);
-          setNoticeTone("WARNING");
-          setNotice(null);
-          setError(null);
-          setExtractState("SUCCESS");
-          setFollowUpStage("SCAN");
-          return;
-        }
-        setReview(effectiveReview);
-        setLastScanDiagnostics(effectiveReview.scanDiagnostics);
-        const intakeMessage = calmMessage(
-          payload.message ||
-            (effectiveReview.scanStatus === "COMPLETE"
-              ? "Captured from QR/TRA. Review and save."
-              : "Some fields still need review.")
-        );
-        const autoSaveReadiness = evaluateAutoSaveEligibility(effectiveReview);
-        if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
-          setNoticeTone("SUCCESS");
-          setNotice("Captured from QR/TRA. Finalizing automatically...");
-        } else if (canManage && autoSaveEnabled && !autoSaveReadiness.ready) {
-          setNoticeTone("WARNING");
-          setNotice(
-            `Review recommended before save. ${autoSaveReadiness.reasons[0] || "Some optional fields need confirmation."}`
-          );
-        } else {
-          setNoticeTone(effectiveReview.scanStatus === "COMPLETE" ? "SUCCESS" : "WARNING");
-          setNotice(
-            effectiveReview.scanDiagnostics.failureStage === "FRONTEND_MAPPING_EMPTY"
-              ? `${intakeMessage} Scan details were captured but field mapping needs manual review.`
-              : intakeMessage
-          );
-        }
-        setExtractState("SUCCESS");
-        setFollowUpStage("SCAN");
-        if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
-          await commitReview(effectiveReview, { auto: true });
-        }
-        return;
-      }
-      const fallbackReview = buildManualAssistReview({
+      await processExtractionPayload({
+        response,
         payload,
         receiptFileName: receiptFile.name,
-        defaultClientId,
-        defaultRigId,
-        warning:
-          response.ok
-            ? readPayloadMessage(payload, SCAN_FALLBACK_MESSAGE)
-            : readApiError(response, payload, SCAN_FALLBACK_MESSAGE),
-        fallbackMode: "SCAN_FAILURE",
-        receiptClassification: selectedWorkflowConfig.classification,
-        receiptWorkflowChoice,
-        initialRequisition
+        selectedWorkflowChoice: receiptWorkflowChoice,
+        selectedWorkflowConfig
       });
-      setReview(fallbackReview);
-      setLastScanDiagnostics(fallbackReview.scanDiagnostics);
-      setNoticeTone("WARNING");
-      setNotice(resolveScanFailureNotice(fallbackReview));
-      setError(null);
-      setExtractState("FAILED");
-      setFollowUpStage("SCAN");
     } catch (scanError) {
       const timeoutMessage =
         scanError instanceof DOMException && scanError.name === "AbortError"
@@ -609,6 +640,91 @@ export function ReceiptIntakePanel({
       setExtractState((current) =>
         current === "UPLOADING" || current === "PROCESSING" ? "FAILED" : current
       );
+    }
+  }
+  async function handleCameraPayloadConfirm(rawPayload: string) {
+    if (!rawPayload.trim()) {
+      setCameraSessionError("No QR payload detected yet.");
+      setCameraSessionState("error");
+      return false;
+    }
+    if (!receiptWorkflowChoice) {
+      setError("Select a receipt workflow type before scanning.");
+      setCameraSessionState("error");
+      setCameraSessionError("Choose a workflow type first.");
+      return false;
+    }
+    const selectedWorkflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
+    setHasScanAttempted(true);
+    setFinalizeSuccess(null);
+    setShowScannedDetails(false);
+    setExtractState("PROCESSING");
+    setCameraSessionError(null);
+    setCameraSessionState("detected");
+    setError(null);
+    setNotice(null);
+    setNoticeTone("SUCCESS");
+    setDuplicatePrompt(null);
+    setShowDuplicateReview(false);
+    setDuplicateOverrideConfirmed(false);
+    setFocusedRecordPayload(null);
+    setFocusedRecordError(null);
+    setLastSavedAllocationStatus(null);
+    setInventoryActionEditorByLine({});
+    setShowMismatchInventoryHandling(false);
+    try {
+      const response = await fetch("/api/inventory/receipt-intake/scan-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rawPayload,
+          context: {
+            workflowChoice: receiptWorkflowChoice
+          },
+          debug: debugMode
+        })
+      });
+      const payload = await readJsonPayload(response);
+      await processExtractionPayload({
+        response,
+        payload,
+        receiptFileName: "camera-qr-scan",
+        selectedWorkflowChoice: receiptWorkflowChoice,
+        selectedWorkflowConfig
+      });
+      setCameraSessionState("idle");
+      return true;
+    } catch (scanError) {
+      const fallbackReview = buildManualAssistReview({
+        payload: null,
+        receiptFileName: "camera-qr-scan",
+        defaultClientId,
+        defaultRigId,
+        warning:
+          scanError instanceof Error && scanError.message
+            ? scanError.message
+            : "Camera scan could not be completed. You can retry, upload, or continue manually.",
+        fallbackMode: "SCAN_FAILURE",
+        receiptClassification: selectedWorkflowConfig.classification,
+        receiptWorkflowChoice,
+        initialRequisition
+      });
+      setReview(fallbackReview);
+      setLastScanDiagnostics(fallbackReview.scanDiagnostics);
+      setNoticeTone("WARNING");
+      setNotice(resolveScanFailureNotice(fallbackReview));
+      setError(null);
+      setExtractState("FAILED");
+      setFollowUpStage("SCAN");
+      setCameraSessionState("error");
+      setCameraSessionError(
+        scanError instanceof Error && scanError.message
+          ? scanError.message
+          : "Camera scan failed. Use upload/manual fallback."
+      );
+      return true;
+    } finally {
+      setExtractState((current) => (current === "PROCESSING" ? "FAILED" : current));
     }
   }
   async function handleCommit() {
@@ -1025,7 +1141,14 @@ export function ReceiptIntakePanel({
         showTechnicalDetails,
         setShowTechnicalDetails,
         handleCommit,
-        saving
+        saving,
+        cameraSessionState,
+        setCameraSessionState,
+        cameraSessionError,
+        setCameraSessionError,
+        cameraDetectedPayload,
+        setCameraDetectedPayload,
+        handleCameraPayloadConfirm
       }}
       focusedOverlayProps={{
         focusedOverlayMounted,

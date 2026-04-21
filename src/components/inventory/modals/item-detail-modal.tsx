@@ -32,6 +32,7 @@ export function ItemDetailModal({
 }) {
   const [isMounted, setIsMounted] = useState(open);
   const [isVisible, setIsVisible] = useState(open);
+  const [receiptDateFilter, setReceiptDateFilter] = useState("");
 
   useEffect(() => {
     let timeoutId: number | undefined;
@@ -50,20 +51,47 @@ export function ItemDetailModal({
     };
   }, [isMounted, open]);
 
+  useEffect(() => {
+    if (!open) {
+      setReceiptDateFilter("");
+    }
+  }, [open]);
+
   if (!isMounted) {
     return null;
   }
 
-  const receiptRows = (itemDetails?.movements || [])
+  const receiptEntries = (itemDetails?.movements || [])
     .filter((movement) => movement.receiptUrl || movement.traReceiptNumber || movement.supplierInvoiceNumber)
+    .map((movement) => ({
+      id: movement.id,
+      dateIso: toIsoDate(movement.date),
+      supplierSource: movement.supplier?.name || movement.expense?.category || "-",
+      traReceiptNumber: movement.traReceiptNumber || "-",
+      supplierInvoiceNumber: movement.supplierInvoiceNumber || "-",
+      expenseId: movement.expense?.id || "-",
+      receiptUrl: movement.receiptUrl
+    }));
+
+  const filteredReceiptEntries = receiptDateFilter
+    ? receiptEntries.filter((entry) => entry.dateIso === receiptDateFilter)
+    : receiptEntries;
+
+  const receiptRows = filteredReceiptEntries
     .map((movement) => [
-      toIsoDate(movement.date),
-      movement.supplier?.name || movement.expense?.category || "-",
-      movement.traReceiptNumber || "-",
-      movement.supplierInvoiceNumber || "-",
-      movement.expense?.id || "-",
+      movement.dateIso,
+      movement.supplierSource,
+      movement.traReceiptNumber,
+      movement.supplierInvoiceNumber,
+      movement.expenseId,
       movement.receiptUrl ? (
-        <a key={`${movement.id}-drawer-receipt`} href={movement.receiptUrl} target="_blank" rel="noreferrer" className="text-brand-700 underline">
+        <a
+          key={`${movement.id}-drawer-receipt`}
+          href={movement.receiptUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-brand-700 underline"
+        >
           Open Receipt
         </a>
       ) : (
@@ -249,10 +277,31 @@ export function ItemDetailModal({
                   <h4 className="gf-section-title">Receipts</h4>
                   <p className="gf-section-subtitle">Track which receipts created or updated stock.</p>
                 </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-700">
+                    <span className="sr-only">Filter receipts by date</span>
+                    <input
+                      type="date"
+                      value={receiptDateFilter}
+                      onChange={(event) => setReceiptDateFilter(event.target.value)}
+                      className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setReceiptDateFilter("")}
+                    disabled={!receiptDateFilter}
+                    className="gf-btn-secondary px-2.5 py-1 text-[11px] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
               <div className="mt-3">
-                {receiptRows.length === 0 ? (
+                {receiptEntries.length === 0 ? (
                   <p className="text-sm text-ink-600">No linked receipts for this item in current scope.</p>
+                ) : receiptRows.length === 0 ? (
+                  <p className="text-sm text-ink-600">No linked receipts for selected date.</p>
                 ) : (
                   <DataTable
                     className="border-slate-200/70"

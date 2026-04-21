@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { isRequisitionTypeAllowedForRole } from "@/lib/auth/requisition-access";
 import { parsePurchaseRequisitionPayload, PURCHASE_REQUISITION_REPORT_TYPE } from "@/lib/requisition-workflow";
 import { prisma } from "@/lib/prisma";
 
@@ -10,7 +11,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ requisitionId: string }> }
 ) {
-  const auth = await requireApiPermission(request, "expenses:manual");
+  const auth = await requireApiPermission(request, "requisitions:view");
   if (!auth.ok) {
     return auth.response;
   }
@@ -30,6 +31,9 @@ export async function GET(
   const parsed = parsePurchaseRequisitionPayload(row.payloadJson);
   if (!parsed) {
     return NextResponse.json({ message: "Requisition payload is invalid." }, { status: 422 });
+  }
+  if (!isRequisitionTypeAllowedForRole(auth.session.role, parsed.payload.type)) {
+    return NextResponse.json({ message: "Requisition not found." }, { status: 404 });
   }
 
   return NextResponse.json({

@@ -172,23 +172,6 @@ export default function RigsPage() {
       buildScopedHref(filters, path, overrides),
     [filters]
   );
-  const spendingHref = useMemo(() => {
-    const params = new URLSearchParams();
-    if (scopeProjectId) params.set("projectId", scopeProjectId);
-    if (filters.from) params.set("from", filters.from);
-    if (filters.to) params.set("to", filters.to);
-    const query = params.toString();
-    return query ? `/spending?${query}` : "/spending";
-  }, [filters.from, filters.to, scopeProjectId]);
-  const drillingReportsHref = useMemo(() => {
-    const params = new URLSearchParams();
-    if (scopeProjectId) params.set("projectId", scopeProjectId);
-    if (filters.from) params.set("from", filters.from);
-    if (filters.to) params.set("to", filters.to);
-    params.set("view", "drilling-reports");
-    return `/spending?${params.toString()}`;
-  }, [filters.from, filters.to, scopeProjectId]);
-
   const rigRevenueMap = useMemo(
     () => new Map(revenueByRig.map((entry) => [entry.id, entry.revenue])),
     [revenueByRig]
@@ -485,7 +468,7 @@ export default function RigsPage() {
                   href="/rigs/setup"
                   className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100"
                 >
-                  New
+                  Add a Rig Setup
                 </Link>
               </AccessGate>
             }
@@ -538,26 +521,6 @@ export default function RigsPage() {
                         ]}
                       />
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <AccessGate permission="rigs:manage">
-                          <Link
-                            href={`/rigs/setup?editRigId=${rig.id}`}
-                            className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-800 hover:bg-brand-100"
-                          >
-                            Edit rig setup
-                          </Link>
-                        </AccessGate>
-                        <Link
-                          href={spendingHref}
-                          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
-                        >
-                          Open spending
-                        </Link>
-                        <Link
-                          href={drillingReportsHref}
-                          className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
-                        >
-                          Open drilling reports
-                        </Link>
                         <Link
                           href={`/rigs/${rig.id}`}
                           className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"

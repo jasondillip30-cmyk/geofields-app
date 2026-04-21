@@ -9,6 +9,7 @@ import { ReceiptIntakeReviewStep } from "@/components/inventory/receipt-intake-r
 import { ReceiptIntakeScanStep } from "@/components/inventory/receipt-intake-scan-step";
 import { inventoryCategoryOptions, formatInventoryCategory } from "@/lib/inventory";
 import type {
+  CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
   QrCropSelection,
@@ -87,6 +88,13 @@ interface ReceiptIntakeGuidedStagesProps {
   setShowTechnicalDetails: Dispatch<SetStateAction<boolean>>;
   handleCommit: () => Promise<void>;
   saving: boolean;
+  cameraSessionState: CameraSessionState;
+  setCameraSessionState: Dispatch<SetStateAction<CameraSessionState>>;
+  cameraSessionError: string | null;
+  setCameraSessionError: Dispatch<SetStateAction<string | null>>;
+  cameraDetectedPayload: string;
+  setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
+  handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
 }
 
 export function ReceiptIntakeGuidedStages({
@@ -155,7 +163,14 @@ export function ReceiptIntakeGuidedStages({
   showTechnicalDetails,
   setShowTechnicalDetails,
   handleCommit,
-  saving
+  saving,
+  cameraSessionState,
+  setCameraSessionState,
+  cameraSessionError,
+  setCameraSessionError,
+  cameraDetectedPayload,
+  setCameraDetectedPayload,
+  handleCameraPayloadConfirm
 }: ReceiptIntakeGuidedStagesProps) {
   return (
     <>
@@ -225,6 +240,13 @@ export function ReceiptIntakeGuidedStages({
           setReview={setReview}
           setFollowUpStage={setFollowUpStage}
           resetScanSessionState={resetScanSessionState}
+          cameraSessionState={cameraSessionState}
+          setCameraSessionState={setCameraSessionState}
+          cameraSessionError={cameraSessionError}
+          setCameraSessionError={setCameraSessionError}
+          cameraDetectedPayload={cameraDetectedPayload}
+          setCameraDetectedPayload={setCameraDetectedPayload}
+          handleCameraPayloadConfirm={handleCameraPayloadConfirm}
         />
       )}
 

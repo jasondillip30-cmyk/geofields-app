@@ -11,6 +11,7 @@ export type QrParseStatus = "PARSED" | "PARTIAL" | "UNPARSED";
 export type QrLookupStatus = "NOT_ATTEMPTED" | "SUCCESS" | "FAILED";
 export type QrParseDetailStatus = "NOT_ATTEMPTED" | "SUCCESS" | "PARTIAL" | "FAILED";
 export type ExtractState = "IDLE" | "UPLOADING" | "PROCESSING" | "SUCCESS" | "FAILED";
+export type CameraSessionState = "idle" | "requesting" | "ready" | "detected" | "error";
 export type NoticeTone = "SUCCESS" | "WARNING";
 export type RequisitionComparisonStatus =
   | "MATCHED"

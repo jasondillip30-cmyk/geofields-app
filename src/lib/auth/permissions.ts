@@ -14,6 +14,7 @@ export type Permission =
   | "finance:view"
   | "finance:edit"
   | "expenses:manual"
+  | "requisitions:view"
   | "maintenance:view"
   | "maintenance:submit"
   | "maintenance:approve"
@@ -40,6 +41,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "finance:view",
     "finance:edit",
     "expenses:manual",
+    "requisitions:view",
     "maintenance:view",
     "maintenance:submit",
     "maintenance:approve",
@@ -64,6 +66,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "finance:view",
     "finance:edit",
     "expenses:manual",
+    "requisitions:view",
     "maintenance:view",
     "maintenance:approve",
     "mechanics:view",
@@ -87,14 +90,30 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "breakdowns:view",
     "finance:view",
     "expenses:manual",
+    "requisitions:view",
     "maintenance:view",
     "mechanics:view",
     "rigs:view",
     "inventory:view",
     "employees:view",
   ],
-  MECHANIC: ["maintenance:view", "maintenance:submit", "rigs:view", "mechanics:view", "inventory:view"],
-  FIELD: ["drilling:submit", "drilling:view", "projects:view", "rigs:view", "breakdowns:view", "breakdowns:submit"]
+  MECHANIC: [
+    "maintenance:view",
+    "maintenance:submit",
+    "rigs:view",
+    "mechanics:view",
+    "inventory:view",
+    "requisitions:view"
+  ],
+  FIELD: [
+    "drilling:submit",
+    "drilling:view",
+    "projects:view",
+    "rigs:view",
+    "breakdowns:view",
+    "breakdowns:submit",
+    "requisitions:view"
+  ]
 };
 
 export function canAccess(role: UserRole, permission: Permission) {

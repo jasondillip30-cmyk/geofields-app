@@ -12,7 +12,11 @@ export function deriveForcedRequestType(options: {
   hasMaintenanceEntryContext: boolean;
   isProjectMode: boolean;
   isWorkshopMode: boolean;
+  roleForcedType?: RequisitionType | null;
 }): RequisitionType | null {
+  if (options.roleForcedType) {
+    return options.roleForcedType;
+  }
   if (options.hasBreakdownEntryContext) {
     return "LIVE_PROJECT_PURCHASE";
   }
@@ -29,7 +33,11 @@ export function deriveHistoryTypeFilter(options: {
   hasMaintenanceEntryContext: boolean;
   isProjectMode: boolean;
   isWorkshopMode: boolean;
+  roleForcedType?: RequisitionType | null;
 }): RequisitionType | null {
+  if (options.roleForcedType) {
+    return options.roleForcedType;
+  }
   if (options.isProjectMode) {
     return "LIVE_PROJECT_PURCHASE";
   }

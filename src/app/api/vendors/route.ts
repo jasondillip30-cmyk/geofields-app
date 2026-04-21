@@ -13,7 +13,11 @@ const DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 20;
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAnyApiPermission(request, ["expenses:manual", "inventory:view"]);
+  const auth = await requireAnyApiPermission(request, [
+    "expenses:manual",
+    "inventory:view",
+    "requisitions:view"
+  ]);
   if (!auth.ok) {
     return auth.response;
   }
@@ -58,7 +62,11 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAnyApiPermission(request, ["expenses:manual", "inventory:manage"]);
+  const auth = await requireAnyApiPermission(request, [
+    "expenses:manual",
+    "inventory:manage",
+    "requisitions:view"
+  ]);
   if (!auth.ok) {
     return auth.response;
   }

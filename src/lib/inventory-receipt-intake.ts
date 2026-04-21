@@ -7,6 +7,7 @@ import { buildReceiptScanDiagnostics } from "@/lib/inventory-receipt-intake-payl
 import {
   buildEmptyHeaderResult,
   extractQrDataFromReceipt,
+  extractQrDataFromRawPayload,
   hasMeaningfulMetadataFromQr,
   listMissingHeaderFields,
   listPresentHeaderFields,
@@ -19,6 +20,7 @@ import type {
   InventoryReferenceItem,
   ReceiptExtractionResult,
   ReceiptFieldConfidence,
+  ReceiptLineCandidate,
   ReceiptHeaderExtraction,
   ReceiptQrAssistCrop
 } from "@/lib/inventory-receipt-intake-types";
@@ -75,6 +77,54 @@ function hasHeaderFieldValue(value: unknown) {
     return Number.isFinite(value) && value > 0;
   }
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function mapLineCandidatesToExtractionLines({
+  candidates,
+  inventoryItems
+}: {
+  candidates: ReceiptLineCandidate[];
+  inventoryItems: InventoryReferenceItem[];
+}) {
+  return candidates.map((candidate, index) => {
+    const matchSuggestion = suggestInventoryMatch(candidate.description, inventoryItems);
+    const category = inferCategorySuggestion({
+      name: candidate.description,
+      existingItems: inventoryItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        category: item.category
+      }))
+    });
+    const categoryConfidence: ReceiptFieldConfidence =
+      category.confidence === "HIGH"
+        ? "HIGH"
+        : category.confidence === "MEDIUM"
+          ? "MEDIUM"
+          : category.confidence === "LOW"
+            ? "LOW"
+            : "NONE";
+    const allowAutoCategorySuggestion = categoryConfidence === "HIGH" || categoryConfidence === "MEDIUM";
+    const safeSuggestedCategory = allowAutoCategorySuggestion ? category.suggestedCategory : null;
+    const categoryReason = allowAutoCategorySuggestion
+      ? category.reason
+      : "Category confidence is low. Keep as Uncategorized or confirm manually before creating inventory.";
+
+    return {
+      id: `line-${index + 1}`,
+      description: candidate.description,
+      quantity: candidate.quantity,
+      unitPrice: candidate.unitPrice,
+      lineTotal: candidate.lineTotal,
+      extractionConfidence: candidate.extractionConfidence,
+      matchSuggestion,
+      categorySuggestion: {
+        category: safeSuggestedCategory,
+        confidence: categoryConfidence,
+        reason: categoryReason
+      }
+    };
+  });
 }
 
 export async function extractReceiptData({
@@ -218,45 +268,7 @@ export async function extractReceiptData({
     warnings.push("No line items were detected automatically yet. Please add or confirm lines before saving.");
   }
 
-  const lines = candidates.map((candidate, index) => {
-    const matchSuggestion = suggestInventoryMatch(candidate.description, inventoryItems);
-    const category = inferCategorySuggestion({
-      name: candidate.description,
-      existingItems: inventoryItems.map((item) => ({
-        id: item.id,
-        name: item.name,
-        category: item.category
-      }))
-    });
-    const categoryConfidence: ReceiptFieldConfidence =
-      category.confidence === "HIGH"
-        ? "HIGH"
-        : category.confidence === "MEDIUM"
-          ? "MEDIUM"
-          : category.confidence === "LOW"
-            ? "LOW"
-            : "NONE";
-    const allowAutoCategorySuggestion = categoryConfidence === "HIGH" || categoryConfidence === "MEDIUM";
-    const safeSuggestedCategory = allowAutoCategorySuggestion ? category.suggestedCategory : null;
-    const categoryReason = allowAutoCategorySuggestion
-      ? category.reason
-      : "Category confidence is low. Keep as Uncategorized or confirm manually before creating inventory.";
-
-    return {
-      id: `line-${index + 1}`,
-      description: candidate.description,
-      quantity: candidate.quantity,
-      unitPrice: candidate.unitPrice,
-      lineTotal: candidate.lineTotal,
-      extractionConfidence: candidate.extractionConfidence,
-      matchSuggestion,
-      categorySuggestion: {
-        category: safeSuggestedCategory,
-        confidence: categoryConfidence,
-        reason: categoryReason
-      }
-    };
-  });
+  const lines = mapLineCandidatesToExtractionLines({ candidates, inventoryItems });
 
   if (lines.some((line) => line.extractionConfidence === "LOW")) {
     warnings.push("Some fields are low confidence. Review highlighted line items before confirming.");
@@ -329,6 +341,98 @@ export async function extractReceiptData({
             ocrCandidates: extraction.debugCandidates
           }
         : undefined
+  };
+}
+
+export async function extractReceiptDataFromRawPayload({
+  rawPayload,
+  inventoryItems
+}: {
+  rawPayload: string;
+  inventoryItems: InventoryReferenceItem[];
+}): Promise<ReceiptExtractionResult> {
+  const qrResult = await extractQrDataFromRawPayload({
+    rawPayload,
+    decodePass: "camera-live",
+    sourceLabel: "camera"
+  });
+  const warnings = [...qrResult.warnings];
+  const verificationLookup = qrResult.stages.verificationLookup;
+  const traLookupSucceeded =
+    verificationLookup.attempted && verificationLookup.status === "SUCCESS" && verificationLookup.success;
+  const traParseSucceeded =
+    traLookupSucceeded &&
+    (verificationLookup.parsed ||
+      verificationLookup.parsedFieldCount > 0 ||
+      verificationLookup.parsedLineItemsCount > 0);
+
+  const fallbackHeader = buildEmptyHeaderResult("camera-scan");
+  const mergedHeaderResult = mergeHeaderResults({
+    qrParsed: qrResult.parsedFields,
+    ocrHeader: fallbackHeader.header,
+    ocrConfidence: fallbackHeader.fieldConfidence
+  });
+
+  const candidates = qrResult.parsedLineCandidates.length > 0 ? qrResult.parsedLineCandidates : [];
+  const lines = mapLineCandidatesToExtractionLines({ candidates, inventoryItems });
+  if (lines.length === 0) {
+    warnings.push("No line items were detected automatically yet. Header fields were captured for review.");
+  }
+  if (lines.some((line) => line.extractionConfidence === "LOW")) {
+    warnings.push("Some fields are low confidence. Review highlighted line items before confirming.");
+  }
+
+  const receiptType = detectReceiptType({
+    text: qrResult.normalizedRawValue || qrResult.rawValue,
+    lines
+  });
+  if (receiptType === "UNCLEAR") {
+    warnings.push("Receipt type is unclear. You can still save as expense evidence after review.");
+  }
+
+  const scanStatus = resolveScanStatus({
+    text: qrResult.normalizedRawValue || qrResult.rawValue,
+    lines,
+    fieldConfidence: mergedHeaderResult.fieldConfidence,
+    qr: qrResult
+  });
+
+  const extractionMethod = resolveExtractionMethod({
+    qrDetected: qrResult.detected,
+    ocrMethod: "NONE"
+  });
+  const intakeDebug = {
+    qrDecoded: qrResult.decodeStatus === "DECODED",
+    traLookupSucceeded,
+    traParseSucceeded,
+    ocrAttempted: false,
+    ocrSucceeded: false,
+    ocrError: "",
+    enrichmentWarning: "",
+    returnedFrom: "qr_tra" as const,
+    partialEnrichment: false
+  };
+  const scanDiagnostics = buildReceiptScanDiagnostics({
+    qrResult,
+    intakeDebug,
+    scanStatus,
+    extractionMethod
+  });
+
+  return {
+    header: mergedHeaderResult.header,
+    fieldConfidence: mergedHeaderResult.fieldConfidence,
+    fieldSource: mergedHeaderResult.fieldSource,
+    lines,
+    warnings: Array.from(new Set(warnings)),
+    rawTextPreview: qrResult.normalizedRawValue || qrResult.rawValue,
+    extractionMethod,
+    scanStatus,
+    receiptType,
+    preprocessingApplied: [],
+    qr: qrResult,
+    intakeDebug,
+    scanDiagnostics
   };
 }
 

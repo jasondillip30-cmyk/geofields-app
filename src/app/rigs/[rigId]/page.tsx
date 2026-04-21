@@ -1,9 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { cookies } from "next/headers";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import { AuthConfigurationError } from "@/lib/auth/secret";
+import { SESSION_COOKIE_NAME } from "@/lib/auth/session-config";
+import { verifySessionToken } from "@/lib/auth/session";
 import { normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { prisma } from "@/lib/prisma";
 import {
@@ -13,6 +17,7 @@ import {
   type RequisitionStatus,
   type RequisitionType
 } from "@/lib/requisition-workflow";
+import type { UserRole } from "@/lib/types";
 import { formatCurrency, formatNumber, formatPercent } from "@/lib/utils";
 
 interface LinkedRequisitionRow {
@@ -31,6 +36,8 @@ export default async function RigProfilePage({
   params: Promise<{ rigId: string }>;
 }) {
   const { rigId } = await params;
+  const role = await resolveRigProfileRole();
+  const hideFinancials = role === "MECHANIC" || role === "FIELD";
 
   const rig = await prisma.rig.findUnique({
     where: { id: rigId }
@@ -46,8 +53,6 @@ export default async function RigProfilePage({
     inventoryUsageHistory,
     rigUsageHistory,
     requisitionSummaryRows,
-    revenueAgg,
-    expenseAgg,
     metersAgg
   ] = await Promise.all([
     prisma.maintenanceRequest.findMany({
@@ -169,19 +174,29 @@ export default async function RigProfilePage({
         payloadJson: true
       }
     }),
-    prisma.revenue.aggregate({
-      where: { rigId },
-      _sum: { amount: true }
-    }),
-    prisma.expense.aggregate({
-      where: { rigId },
-      _sum: { amount: true }
-    }),
     prisma.drillReport.aggregate({
       where: { rigId },
       _sum: { totalMetersDrilled: true }
     })
   ]);
+
+  let revenue = 0;
+  let expenses = 0;
+  if (!hideFinancials) {
+    const [revenueAgg, expenseAgg] = await Promise.all([
+      prisma.revenue.aggregate({
+        where: { rigId },
+        _sum: { amount: true }
+      }),
+      prisma.expense.aggregate({
+        where: { rigId },
+        _sum: { amount: true }
+      })
+    ]);
+    revenue = revenueAgg._sum.amount || 0;
+    expenses = expenseAgg._sum.amount || 0;
+  }
+  const profit = revenue - expenses;
 
   const linkedRequisitions: LinkedRequisitionRow[] = requisitionSummaryRows
     .map((row) => {
@@ -221,9 +236,6 @@ export default async function RigProfilePage({
     requisitionProjects.map((project) => [project.id, project.name])
   );
 
-  const revenue = revenueAgg._sum.amount || 0;
-  const expenses = expenseAgg._sum.amount || 0;
-  const profit = revenue - expenses;
   const utilization =
     rig.totalLifetimeDays > 0
       ? (rig.totalHoursWorked / (rig.totalLifetimeDays * 24)) * 100
@@ -264,13 +276,17 @@ export default async function RigProfilePage({
             label="Total Meters"
             value={formatNumber(metersAgg._sum.totalMetersDrilled || 0)}
           />
-          <MetricCard label="Revenue" value={formatCurrency(revenue)} tone="good" />
-          <MetricCard label="Expenses" value={formatCurrency(expenses)} tone="warn" />
-          <MetricCard
-            label="Profitability"
-            value={formatCurrency(profit)}
-            tone={profit >= 0 ? "good" : "danger"}
-          />
+          {!hideFinancials ? (
+            <>
+              <MetricCard label="Revenue" value={formatCurrency(revenue)} tone="good" />
+              <MetricCard label="Expenses" value={formatCurrency(expenses)} tone="warn" />
+              <MetricCard
+                label="Profitability"
+                value={formatCurrency(profit)}
+                tone={profit >= 0 ? "good" : "danger"}
+              />
+            </>
+          ) : null}
         </section>
 
         <section className="grid gap-5 lg:grid-cols-2">
@@ -291,17 +307,19 @@ export default async function RigProfilePage({
               )}
             </div>
           </Card>
-          <Card title="Profitability Snapshot">
-            <DataTable
-              columns={["Metric", "Value"]}
-              rows={[
-                ["Revenue", formatCurrency(revenue)],
-                ["Expenses", formatCurrency(expenses)],
-                ["Profit", formatCurrency(profit)],
-                ["Utilization", formatPercent(utilization)]
-              ]}
-            />
-          </Card>
+          {!hideFinancials ? (
+            <Card title="Profitability Snapshot">
+              <DataTable
+                columns={["Metric", "Value"]}
+                rows={[
+                  ["Revenue", formatCurrency(revenue)],
+                  ["Expenses", formatCurrency(expenses)],
+                  ["Profit", formatCurrency(profit)],
+                  ["Utilization", formatPercent(utilization)]
+                ]}
+              />
+            </Card>
+          ) : null}
         </section>
 
         <Card title="Maintenance History">
@@ -422,22 +440,21 @@ export default async function RigProfilePage({
             </p>
           ) : (
             <DataTable
-              columns={[
-                "Requisition",
-                "Type",
-                "Status",
-                "Submitted",
-                "Project",
-                "Estimated Total"
-              ]}
-              rows={linkedRequisitions.map((entry) => [
-                entry.requisitionCode,
-                requisitionTypeLabel(entry.type),
-                entry.status,
-                entry.submittedAt.slice(0, 10),
-                entry.projectId ? requisitionProjectNameById.get(entry.projectId) || entry.projectId : "-",
-                formatCurrency(entry.estimatedTotalCost)
-              ])}
+              columns={
+                hideFinancials
+                  ? ["Requisition", "Type", "Status", "Submitted", "Project"]
+                  : ["Requisition", "Type", "Status", "Submitted", "Project", "Estimated Total"]
+              }
+              rows={linkedRequisitions.map((entry) => {
+                const baseRow = [
+                  entry.requisitionCode,
+                  requisitionTypeLabel(entry.type),
+                  entry.status,
+                  entry.submittedAt.slice(0, 10),
+                  entry.projectId ? requisitionProjectNameById.get(entry.projectId) || entry.projectId : "-"
+                ];
+                return hideFinancials ? baseRow : [...baseRow, formatCurrency(entry.estimatedTotalCost)];
+              })}
             />
           )}
         </Card>
@@ -483,4 +500,22 @@ function formatMaintenanceTypeLabel(value: string | null | undefined) {
   if (normalized === "PREVENTIVE_SERVICE") return "Preventive Service";
   if (normalized === "OTHER") return "Other";
   return value || "Maintenance";
+}
+
+async function resolveRigProfileRole(): Promise<UserRole | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const session = await verifySessionToken(token);
+    return session?.role || null;
+  } catch (error) {
+    if (error instanceof AuthConfigurationError) {
+      return null;
+    }
+    throw error;
+  }
 }

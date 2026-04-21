@@ -1,11 +1,13 @@
 "use client";
 
-import type { Dispatch, PointerEvent as ReactPointerEvent, RefObject, SetStateAction } from "react";
+import { useEffect, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type RefObject, type SetStateAction } from "react";
 import Link from "next/link";
 
+import { ReceiptIntakeCameraScanner } from "@/components/inventory/receipt-intake-camera-scanner";
 import { InputField } from "@/components/inventory/receipt-intake-panel-fields";
 import { formatPercent } from "@/components/inventory/receipt-intake-scan-utils";
 import type {
+  CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
   QrCropSelection,
@@ -50,7 +52,14 @@ export function ReceiptIntakeScanStep({
   setShowScannedDetails,
   setReview,
   setFollowUpStage,
-  resetScanSessionState
+  resetScanSessionState,
+  cameraSessionState,
+  setCameraSessionState,
+  cameraSessionError,
+  setCameraSessionError,
+  cameraDetectedPayload,
+  setCameraDetectedPayload,
+  handleCameraPayloadConfirm
 }: {
   manualInputSelected: boolean;
   handleReceiptCaptureModeChange: (mode: ReceiptCaptureMode) => void;
@@ -93,7 +102,36 @@ export function ReceiptIntakeScanStep({
   setReview: Dispatch<SetStateAction<ReviewState | null>>;
   setFollowUpStage: (stage: ReceiptFollowUpStage) => void;
   resetScanSessionState: () => void;
+  cameraSessionState: CameraSessionState;
+  setCameraSessionState: Dispatch<SetStateAction<CameraSessionState>>;
+  cameraSessionError: string | null;
+  setCameraSessionError: Dispatch<SetStateAction<string | null>>;
+  cameraDetectedPayload: string;
+  setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
+  handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
 }) {
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  const [cameraSupported, setCameraSupported] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const pointerMedia = window.matchMedia("(pointer: coarse)");
+    const updateCapabilities = () => {
+      setIsCoarsePointer(pointerMedia.matches);
+      setCameraSupported(
+        Boolean(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function")
+      );
+    };
+    updateCapabilities();
+    pointerMedia.addEventListener("change", updateCapabilities);
+    return () => {
+      pointerMedia.removeEventListener("change", updateCapabilities);
+    };
+  }, []);
+
   return (
     <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
       <p className="text-sm font-semibold text-slate-900">Step 1: Enter receipt details</p>
@@ -187,6 +225,28 @@ export function ReceiptIntakeScanStep({
               {extractState === "UPLOADING" ? "Capturing..." : extractState === "PROCESSING" ? "Reading..." : "Scan Receipt"}
             </button>
           </div>
+          {isCoarsePointer && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCameraSessionError(null);
+                  setCameraDetectedPayload("");
+                  setCameraSessionState("idle");
+                  setShowCameraScanner(true);
+                }}
+                disabled={!cameraSupported || extracting}
+                className="rounded-md border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-900 hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Use camera
+              </button>
+              {!cameraSupported && (
+                <p className="text-xs text-slate-600">
+                  Camera scan is unavailable on this device. Use upload fallback or manual entry.
+                </p>
+              )}
+            </div>
+          )}
           {canManage ? (
             <label className="inline-flex items-center gap-2 text-xs text-slate-700">
               <input type="checkbox" checked={autoSaveEnabled} onChange={(event) => setAutoSaveEnabled(event.target.checked)} />
@@ -398,6 +458,19 @@ export function ReceiptIntakeScanStep({
           )}
         </div>
       )}
+      <ReceiptIntakeCameraScanner
+        open={showCameraScanner}
+        sessionState={cameraSessionState}
+        sessionError={cameraSessionError}
+        detectedPayload={cameraDetectedPayload}
+        onSessionStateChange={setCameraSessionState}
+        onSessionErrorChange={setCameraSessionError}
+        onDetectedPayloadChange={setCameraDetectedPayload}
+        onConfirmPayload={handleCameraPayloadConfirm}
+        onClose={() => setShowCameraScanner(false)}
+        onEnterManually={() => handleReceiptCaptureModeChange("MANUAL")}
+        onUseUploadFallback={() => handleReceiptCaptureModeChange("SCAN")}
+      />
     </div>
   );
 }

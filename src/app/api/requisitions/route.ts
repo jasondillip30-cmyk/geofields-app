@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import {
+  getAllowedRequisitionTypesForRole,
+  isRequisitionTypeAllowedForRole
+} from "@/lib/auth/requisition-access";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { roundCurrency } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
@@ -95,10 +99,11 @@ interface RequisitionRowOutput {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await requireApiPermission(request, "expenses:manual");
+  const auth = await requireApiPermission(request, "requisitions:view");
   if (!auth.ok) {
     return auth.response;
   }
+  const allowedTypes = new Set(getAllowedRequisitionTypesForRole(auth.session.role));
 
   const from = parseDateOrNull(request.nextUrl.searchParams.get("from"), false);
   const to = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
@@ -139,6 +144,9 @@ export async function GET(request: NextRequest) {
       Boolean(entry)
     )
     .filter((entry) => {
+      if (!allowedTypes.has(entry.payload.type)) {
+        return false;
+      }
       if (type && entry.payload.type !== type) {
         return false;
       }
@@ -301,7 +309,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireApiPermission(request, "expenses:manual");
+  const auth = await requireApiPermission(request, "requisitions:view");
   if (!auth.ok) {
     return auth.response;
   }
@@ -315,6 +323,16 @@ export async function POST(request: NextRequest) {
           "Requisition type is required (LIVE_PROJECT_PURCHASE, INVENTORY_STOCK_UP, MAINTENANCE_PURCHASE)."
       },
       { status: 400 }
+    );
+  }
+
+  if (!isRequisitionTypeAllowedForRole(auth.session.role, type)) {
+    return NextResponse.json(
+      {
+        message:
+          "Your role cannot submit this requisition type in the current workflow."
+      },
+      { status: 403 }
     );
   }
 

@@ -2,14 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import type { Prisma } from "@prisma/client";
 
 import { canAccess } from "@/lib/auth/permissions";
-import { requireApiPermission } from "@/lib/auth/api-guard";
+import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { prisma } from "@/lib/prisma";
 import { parseReceiptSubmissionPayload, type ReceiptSubmissionStatus } from "@/lib/receipt-intake-submission";
 
 const RECEIPT_SUBMISSION_REPORT_TYPE = "INVENTORY_RECEIPT_SUBMISSION";
 
 export async function GET(request: NextRequest) {
-  const auth = await requireApiPermission(request, "inventory:view");
+  const auth = await requireAnyApiPermission(request, ["inventory:view", "requisitions:view"]);
   if (!auth.ok) {
     return auth.response;
   }

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { requireApiPermission } from "@/lib/auth/api-guard";
+import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import {
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
   logRouteStage("request_started");
   logRouteStage("route_loaded");
   try {
-    const auth = await requireApiPermission(request, "inventory:view");
+    const auth = await requireAnyApiPermission(request, ["inventory:view", "requisitions:view"]);
     if (!auth.ok) {
       const status = auth.response.status;
       const message = status === 401 ? "Unauthorized" : "Forbidden";
@@ -357,4 +357,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-

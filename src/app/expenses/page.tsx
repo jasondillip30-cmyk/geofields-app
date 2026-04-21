@@ -118,7 +118,7 @@ function ExpensesPageContent() {
 
   if (filters.workspaceMode === "project" && filters.projectId === "all") {
     return (
-      <AccessGate denyBehavior="redirect" permission="expenses:manual">
+      <AccessGate denyBehavior="redirect" permission="requisitions:view">
         <div className="gf-page-stack">
           <Card title="Select one project">
             <p className="text-sm text-ink-600">
@@ -131,7 +131,7 @@ function ExpensesPageContent() {
   }
 
   return (
-    <AccessGate permission="expenses:manual">
+    <AccessGate permission="requisitions:view">
       <div className="gf-page-stack">
         {errorMessage && (
           <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
@@ -178,7 +178,7 @@ function ExpensesPageContent() {
 
 function ExpensesPageFallback() {
   return (
-    <AccessGate permission="expenses:manual">
+    <AccessGate permission="requisitions:view">
       <div className="gf-page-stack">
         <Card title="Purchase Requests">
           <p className="text-sm text-ink-600">Loading purchase request workflow...</p>
