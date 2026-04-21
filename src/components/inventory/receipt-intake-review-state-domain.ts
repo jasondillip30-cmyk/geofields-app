@@ -4,6 +4,7 @@ import type {
   ReceiptIntakePanelProps,
   ReviewLineState
 } from "@/components/inventory/receipt-intake-panel-types";
+import { isLikelyTraPlaceholderText } from "@/lib/inventory-receipt-intake-tra-supplier";
 
 export function mapRequisitionCategoryToInventoryCategory(value: string | null | undefined): string {
   if (!value) {
@@ -179,8 +180,12 @@ export function resolveRequisitionLink({
 }
 
 export function normalizeSupplierName(value: string) {
-  return value
+  const normalized = value
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
+  if (!normalized || isLikelyTraPlaceholderText(normalized)) {
+    return "";
+  }
+  return normalized;
 }

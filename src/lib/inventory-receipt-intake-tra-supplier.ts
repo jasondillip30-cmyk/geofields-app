@@ -74,6 +74,21 @@ export function extractTraSupplierFromRawText(text: string) {
   return extractFirstLikelySupplierFromLines(lines.slice(0, 20));
 }
 
+export function isLikelyTraPlaceholderText(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return (
+    normalized === "page is loading" ||
+    normalized.startsWith("page is loading") ||
+    normalized.includes("please wait") ||
+    normalized.includes("processing request") ||
+    normalized.includes("javascript is required") ||
+    normalized.includes("receipt verification portal")
+  );
+}
+
 function extractFirstLikelySupplierFromLines(lines: string[]) {
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+/g, " ").trim();
@@ -102,6 +117,7 @@ function looksLikeSupplierStopLine(lowerLine: string) {
     return true;
   }
   return (
+    isLikelyTraPlaceholderText(lowerLine) ||
     lowerLine.includes("tax office") ||
     lowerLine.includes("tin") ||
     lowerLine.includes("vrn") ||
@@ -127,10 +143,14 @@ function looksLikeSupplierStopLine(lowerLine: string) {
 }
 
 function normalizeSupplierCandidate(value: string) {
-  return value
+  const normalized = value
     .replace(/^(supplier|business|company)\s*[:\-]?\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
+  if (isLikelyTraPlaceholderText(normalized)) {
+    return "";
+  }
+  return normalized;
 }
 
 export function isLikelySupplierName(value: string) {
@@ -139,6 +159,9 @@ export function isLikelySupplierName(value: string) {
   }
   const normalized = value.trim();
   const lower = normalized.toLowerCase();
+  if (isLikelyTraPlaceholderText(lower)) {
+    return false;
+  }
   if (looksLikeSupplierStopLine(lower)) {
     return false;
   }

@@ -73,6 +73,22 @@ export function evaluateRequisitionComparison(
     closeToleranceRatio: 0.1
   });
   const lineComparison = evaluateLineComparison(approvedLines, scannedLines);
+  const inferredTraToken = inferTraTokenFromRawQrValue(review.rawQrValue || review.verificationUrl);
+  const inferredFields: string[] = [];
+  if (inferredTraToken?.verificationCode) {
+    inferredFields.push("verification code");
+  }
+  if (inferredTraToken?.traReceiptNumber) {
+    inferredFields.push("control / TRA number");
+  }
+  const scannedControlDisplay = formatInferredScanField({
+    scannedValue: review.traReceiptNumber,
+    inferredValue: inferredTraToken?.traReceiptNumber || ""
+  });
+  const scannedVerificationCodeDisplay = formatInferredScanField({
+    scannedValue: review.verificationCode,
+    inferredValue: inferredTraToken?.verificationCode || ""
+  });
   const missingCriticalFields = [
     !review.scannedSnapshot.supplierName ? "supplier" : "",
     !review.scannedSnapshot.receiptNumber ? "receipt number" : "",
@@ -98,13 +114,13 @@ export function evaluateRequisitionComparison(
     {
       label: "Control / TRA #",
       approved: "-",
-      scanned: review.traReceiptNumber || "-",
+      scanned: scannedControlDisplay,
       mismatch: false
     },
     {
       label: "Verification Code",
       approved: "-",
-      scanned: review.verificationCode || "-",
+      scanned: scannedVerificationCodeDisplay,
       mismatch: false
     },
     {
@@ -229,13 +245,20 @@ export function evaluateRequisitionComparison(
     totalComparison.level === "CLOSE_MATCH" ||
     lineComparison.level === "CLOSE_MATCH" ||
     review.scanStatus !== "COMPLETE" ||
-    missingCriticalFields.length > 0;
+    missingCriticalFields.length > 0 ||
+    inferredFields.length > 0;
 
   if (closeMatchSignals) {
+    const inferredFieldsMessage =
+      inferredFields.length > 0
+        ? `${joinFieldLabels(inferredFields)} inferred from QR URL and should be verified.`
+        : "";
     const missingFieldsMessage =
       missingCriticalFields.length > 0
-        ? `Some fields need manual review: ${missingCriticalFields.join(", ")}.`
-        : "Scanned details are close to the approved requisition. Quick review is recommended.";
+        ? `Some fields need manual review: ${missingCriticalFields.join(", ")}${inferredFieldsMessage ? `. ${inferredFieldsMessage}` : "."}`
+        : inferredFieldsMessage
+          ? inferredFieldsMessage
+          : "Scanned details are close to the approved requisition. Quick review is recommended.";
     return {
       status: "CLOSE_MATCH",
       label: "Manual review needed",
@@ -558,6 +581,83 @@ function levenshteinDistance(left: string, right: string) {
 
 function normalizeLineDescription(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function inferTraTokenFromRawQrValue(rawValue: string) {
+  const normalized = rawValue.trim();
+  if (!normalized) {
+    return null;
+  }
+  const candidateUrl = toLikelyUrl(normalized);
+  if (!candidateUrl) {
+    return null;
+  }
+  const host = candidateUrl.hostname.toLowerCase();
+  if (!(host === "tra.go.tz" || host.endsWith(".tra.go.tz"))) {
+    return null;
+  }
+  const segments = candidateUrl.pathname
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const token = segments[segments.length - 1] || "";
+  const matched = token.match(/^([0-9a-z\-]{6,32})[_]([0-9a-z\-]{1,16})$/i);
+  if (!matched) {
+    return null;
+  }
+  const verificationCode = matched[1]?.trim().toUpperCase() || "";
+  const traReceiptNumber = matched[2]?.trim().toUpperCase() || "";
+  if (!verificationCode || !traReceiptNumber) {
+    return null;
+  }
+  return { verificationCode, traReceiptNumber };
+}
+
+function toLikelyUrl(value: string) {
+  try {
+    if (/^https?:\/\//i.test(value)) {
+      return new URL(value);
+    }
+    if (/^(?:www\.)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/?#][^\s]*)?$/i.test(value)) {
+      return new URL(`https://${value}`);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function formatInferredScanField({
+  scannedValue,
+  inferredValue
+}: {
+  scannedValue: string;
+  inferredValue: string;
+}) {
+  const normalizedScanned = scannedValue.trim();
+  if (!inferredValue) {
+    return normalizedScanned || "-";
+  }
+  if (!normalizedScanned) {
+    return `${inferredValue} (inferred from QR URL; verify)`;
+  }
+  if (normalizedScanned.toUpperCase() === inferredValue.toUpperCase()) {
+    return `${normalizedScanned} (inferred from QR URL; verify)`;
+  }
+  return normalizedScanned;
+}
+
+function joinFieldLabels(fields: string[]) {
+  if (fields.length === 0) {
+    return "";
+  }
+  if (fields.length === 1) {
+    return fields[0];
+  }
+  if (fields.length === 2) {
+    return `${fields[0]} and ${fields[1]}`;
+  }
+  return `${fields.slice(0, -1).join(", ")}, and ${fields[fields.length - 1]}`;
 }
 
 function truncateComparisonValue(value: string, maxLength = 96) {

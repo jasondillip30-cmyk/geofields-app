@@ -160,12 +160,32 @@ export function parseQrPayload(
   const contentType = detectQrContentType(extractedUrlCandidate || normalizedRaw);
   let parsed: Partial<ReceiptHeaderExtraction> = {};
   let verificationUrl = "";
+  let inferredFromTraPath = false;
 
   if (contentType === "URL") {
     const asUrl = toUrl(extractedUrlCandidate || normalizedRaw);
     if (asUrl) {
       verificationUrl = asUrl.toString();
       parsed = mergeParsedFields(parsed, parseQrFromUrl(asUrl));
+      const pathToken = readTraTokenFromPath(asUrl);
+      const hasQueryVerification = Boolean(
+        asUrl.searchParams.get("verifyCode") ||
+          asUrl.searchParams.get("verificationCode") ||
+          asUrl.searchParams.get("code") ||
+          asUrl.searchParams.get("vcode") ||
+          asUrl.searchParams.get("verification")
+      );
+      const hasQueryTraNumber = Boolean(
+        asUrl.searchParams.get("zNo") ||
+          asUrl.searchParams.get("znumber") ||
+          asUrl.searchParams.get("zno") ||
+          asUrl.searchParams.get("traReceiptNumber") ||
+          asUrl.searchParams.get("controlNo") ||
+          asUrl.searchParams.get("controlNumber")
+      );
+      inferredFromTraPath =
+        (Boolean(pathToken.verificationCode) && !hasQueryVerification) ||
+        (Boolean(pathToken.traReceiptNumber) && !hasQueryTraNumber);
     } else {
       verificationUrl = extractVerificationUrlCandidate(normalizedRaw);
     }
@@ -223,6 +243,9 @@ export function parseQrPayload(
   }
   if (verificationUrl && !isTraVerification) {
     warnings.push("QR URL is non-TRA. Stored as a standard verification link.");
+  }
+  if (inferredFromTraPath) {
+    warnings.push("Verification/control IDs were inferred from the TRA QR URL path. Please verify before saving.");
   }
   const failureReason = parseStatus === "UNPARSED" ? "QR decoded but parse failed" : "";
 
@@ -397,6 +420,7 @@ export function parseQrFromUrl(url: URL): Partial<ReceiptHeaderExtraction> {
     const parsed = Number(value.replace(/,/g, ""));
     return Number.isFinite(parsed) ? roundCurrency(parsed) : 0;
   };
+  const inferredTraToken = readTraTokenFromPath(url);
 
   return {
     receiptNumber: valueFrom(
@@ -408,17 +432,59 @@ export function parseQrFromUrl(url: URL): Partial<ReceiptHeaderExtraction> {
       "receiptnumber",
       "receiptno"
     ),
-    verificationCode: valueFrom("verifyCode", "verificationCode", "code", "vcode", "verification"),
+    verificationCode:
+      valueFrom("verifyCode", "verificationCode", "code", "vcode", "verification") ||
+      inferredTraToken.verificationCode,
     supplierName: valueFrom("supplier", "merchant", "seller", "name", "supplierName", "businessName", "traderName"),
     tin: valueFrom("tin", "supplierTin", "merchantTin"),
     vrn: valueFrom("vrn", "vatNo", "vat"),
     serialNumber: valueFrom("serial", "serialNo", "sno", "serialNumber"),
     receiptDate: normalizeQrDate(valueFrom("date", "receiptDate", "issuedDate", "transactionDate")),
     receiptTime: valueFrom("time", "receiptTime", "issuedTime"),
+    traReceiptNumber:
+      valueFrom("zNo", "znumber", "zno", "traReceiptNumber", "controlNo", "controlNumber") ||
+      inferredTraToken.traReceiptNumber,
     taxOffice: valueFrom("office", "taxOffice", "taxAuthority"),
     subtotal: numberFrom("subtotal", "subTotal", "amountBeforeTax", "netAmount"),
     tax: numberFrom("tax", "vat", "vatAmount"),
     total: numberFrom("total", "amount", "grossTotal", "totalAmount", "grandTotal")
+  };
+}
+
+function readTraTokenFromPath(url: URL) {
+  if (!isTraVerificationUrl(url.toString())) {
+    return { verificationCode: "", traReceiptNumber: "" };
+  }
+  const segments = url.pathname
+    .split("/")
+    .map((segment) => {
+      try {
+        return decodeURIComponent(segment);
+      } catch {
+        return segment;
+      }
+    })
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const token = segments[segments.length - 1] || "";
+  const matched = token.match(/^([0-9a-z\-]{6,32})[_]([0-9a-z\-]{1,16})$/i);
+  if (!matched) {
+    return { verificationCode: "", traReceiptNumber: "" };
+  }
+  const verificationCode = matched[1]?.trim().toUpperCase() || "";
+  const traReceiptNumber = matched[2]?.trim().toUpperCase() || "";
+  if (!verificationCode || !traReceiptNumber) {
+    return { verificationCode: "", traReceiptNumber: "" };
+  }
+  if (!/[0-9]/.test(verificationCode) || !/[a-z]/i.test(verificationCode)) {
+    return { verificationCode: "", traReceiptNumber: "" };
+  }
+  if (!/[0-9]/.test(traReceiptNumber)) {
+    return { verificationCode: "", traReceiptNumber: "" };
+  }
+  return {
+    verificationCode,
+    traReceiptNumber
   };
 }
 

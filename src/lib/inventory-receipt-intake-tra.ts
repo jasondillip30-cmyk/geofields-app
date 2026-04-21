@@ -14,7 +14,8 @@ import {
   extractTraSupplierFromLegalReceiptHeader,
   extractTraSupplierFromRawText,
   extractTraSupplierName,
-  isLikelySupplierName
+  isLikelySupplierName,
+  isLikelyTraPlaceholderText
 } from "@/lib/inventory-receipt-intake-tra-supplier";
 import { debugLog } from "@/lib/observability";
 import type {
@@ -700,6 +701,9 @@ export function sanitizeTraFieldValue(
 
   cleaned = cleaned.replace(/^(receipt|verification|verify|code|portal)\s*[:\-#]?\s*/i, "").trim();
   if (!cleaned) {
+    return null;
+  }
+  if (isLikelyTraPlaceholderText(cleaned)) {
     return null;
   }
 

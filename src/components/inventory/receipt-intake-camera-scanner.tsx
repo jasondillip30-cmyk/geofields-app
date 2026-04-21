@@ -391,7 +391,7 @@ export function ReceiptIntakeCameraScanner({
   return (
     <div className="fixed inset-0 z-[120] bg-slate-950/95 text-white">
       <canvas ref={canvasRef} className="hidden" aria-hidden="true" />
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col h-[100dvh]">
         <div className="flex items-center justify-between border-b border-white/15 px-4 py-3">
           <div>
             <p className="text-base font-semibold">Scan Receipt QR</p>
@@ -406,68 +406,78 @@ export function ReceiptIntakeCameraScanner({
           </button>
         </div>
 
-        <div className="flex flex-1 flex-col px-4 py-4">
-          <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/20 bg-black">
-            <video ref={videoRef} playsInline muted autoPlay className="h-[60vh] min-h-[320px] w-full object-cover" />
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <div className="h-[52%] w-[68%] rounded-xl border-2 border-white/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]" />
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+            <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/20 bg-black">
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                autoPlay
+                className="h-[48svh] min-h-[220px] max-h-[440px] w-full object-cover sm:h-[56vh] sm:min-h-[300px]"
+              />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="h-[52%] w-[68%] rounded-xl border-2 border-white/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]" />
+              </div>
             </div>
+
+            <p className="mt-3 text-center text-sm text-slate-100">{statusText}</p>
+            <p className="mt-1 text-center text-xs text-slate-300">
+              Some mobile browsers may ask for camera permission each time you open this scanner.
+            </p>
+
+            {detectedPayload ? (
+              <div className="mt-3 rounded-lg border border-emerald-300/40 bg-emerald-500/10 p-3 text-xs text-emerald-100">
+                <p className="font-semibold text-emerald-200">Detected payload</p>
+                <p className="mt-1 max-h-20 overflow-auto break-all">{detectedPayload}</p>
+              </div>
+            ) : null}
+
+            {sessionError ? (
+              <div className="mt-3 rounded-lg border border-rose-300/40 bg-rose-500/10 p-3 text-xs text-rose-100">
+                {sessionError}
+              </div>
+            ) : null}
           </div>
 
-          <p className="mt-3 text-center text-sm text-slate-100">{statusText}</p>
-          <p className="mt-1 text-center text-xs text-slate-300">
-            Some mobile browsers may ask for camera permission each time you open this scanner.
-          </p>
-
-          {detectedPayload ? (
-            <div className="mt-3 rounded-lg border border-emerald-300/40 bg-emerald-500/10 p-3 text-xs text-emerald-100">
-              <p className="font-semibold text-emerald-200">Detected payload</p>
-              <p className="mt-1 max-h-20 overflow-auto break-all">{detectedPayload}</p>
+          <div className="border-t border-white/15 bg-slate-950/95 px-4 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] pt-3">
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={sessionState !== "detected" || !detectedPayload || submitting}
+                className="rounded-lg bg-emerald-500 px-3 py-2 font-semibold text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {submitting ? "Continuing..." : "Continue"}
+              </button>
+              <button
+                type="button"
+                onClick={handleScanAgain}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+              >
+                Scan again
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeOverlay();
+                  onEnterManually();
+                }}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+              >
+                Enter manually
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  closeOverlay();
+                  onUseUploadFallback();
+                }}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+              >
+                Upload fallback
+              </button>
             </div>
-          ) : null}
-
-          {sessionError ? (
-            <div className="mt-3 rounded-lg border border-rose-300/40 bg-rose-500/10 p-3 text-xs text-rose-100">
-              {sessionError}
-            </div>
-          ) : null}
-
-          <div className="mt-auto grid grid-cols-2 gap-2 pt-4 text-sm">
-            <button
-              type="button"
-              onClick={handleConfirm}
-              disabled={sessionState !== "detected" || !detectedPayload || submitting}
-              className="rounded-lg bg-emerald-500 px-3 py-2 font-semibold text-emerald-950 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submitting ? "Continuing..." : "Continue"}
-            </button>
-            <button
-              type="button"
-              onClick={handleScanAgain}
-              className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
-            >
-              Scan again
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                closeOverlay();
-                onEnterManually();
-              }}
-              className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
-            >
-              Enter manually
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                closeOverlay();
-                onUseUploadFallback();
-              }}
-              className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
-            >
-              Upload fallback
-            </button>
           </div>
         </div>
       </div>
