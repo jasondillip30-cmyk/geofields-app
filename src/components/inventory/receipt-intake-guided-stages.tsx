@@ -67,9 +67,11 @@ interface ReceiptIntakeGuidedStagesProps {
   showAdvancedLineItemEditor: boolean;
   items: ReceiptIntakePanelProps["items"];
   updateLine: (lineId: string, patch: Partial<ReviewLineState>) => void;
+  addScannedLineItem: () => void;
   inventoryActionEditorByLine: Record<string, boolean>;
   setInventoryActionEditorByLine: Dispatch<SetStateAction<Record<string, boolean>>>;
-  setShowMismatchFinalizeConfirm: Dispatch<SetStateAction<boolean>>;
+  mismatchOverrideAccepted: boolean;
+  requestMismatchOverride: () => void;
   requisitionComparison: ReturnType<typeof import("@/components/inventory/receipt-intake-comparison").evaluateRequisitionComparison>;
   showFinalizePostingOptions: boolean;
   setShowFinalizePostingOptions: Dispatch<SetStateAction<boolean>>;
@@ -88,6 +90,7 @@ interface ReceiptIntakeGuidedStagesProps {
   setShowTechnicalDetails: Dispatch<SetStateAction<boolean>>;
   handleCommit: () => Promise<void>;
   saving: boolean;
+  mismatchOverrideReady: boolean;
   cameraSessionState: CameraSessionState;
   setCameraSessionState: Dispatch<SetStateAction<CameraSessionState>>;
   cameraSessionError: string | null;
@@ -144,9 +147,11 @@ export function ReceiptIntakeGuidedStages({
   showAdvancedLineItemEditor,
   items,
   updateLine,
+  addScannedLineItem,
   inventoryActionEditorByLine,
   setInventoryActionEditorByLine,
-  setShowMismatchFinalizeConfirm,
+  mismatchOverrideAccepted,
+  requestMismatchOverride,
   requisitionComparison,
   showFinalizePostingOptions,
   setShowFinalizePostingOptions,
@@ -165,6 +170,7 @@ export function ReceiptIntakeGuidedStages({
   setShowTechnicalDetails,
   handleCommit,
   saving,
+  mismatchOverrideReady,
   cameraSessionState,
   setCameraSessionState,
   cameraSessionError,
@@ -269,11 +275,13 @@ export function ReceiptIntakeGuidedStages({
               mismatchDetected={mismatchDetected}
               items={items}
               updateLine={updateLine}
+              addScannedLineItem={addScannedLineItem}
               inventoryActionEditorByLine={inventoryActionEditorByLine}
               setInventoryActionEditorByLine={setInventoryActionEditorByLine}
               inventoryCategoryOptions={inventoryCategoryOptions}
               formatInventoryCategory={formatInventoryCategory}
-              setShowMismatchFinalizeConfirm={setShowMismatchFinalizeConfirm}
+              mismatchOverrideAccepted={mismatchOverrideAccepted}
+              requestMismatchOverride={requestMismatchOverride}
               setFollowUpStage={setFollowUpStage}
               manualInputSelected={manualInputSelected}
               setReview={setReview}
@@ -289,6 +297,9 @@ export function ReceiptIntakeGuidedStages({
               showScannedDetails={showScannedDetails}
               setShowScannedDetails={setShowScannedDetails}
               setReview={setReview}
+              addScannedLineItem={addScannedLineItem}
+              mismatchOverrideAccepted={mismatchOverrideAccepted}
+              requestMismatchOverride={requestMismatchOverride}
               showFinalizePostingOptions={showFinalizePostingOptions}
               setShowFinalizePostingOptions={setShowFinalizePostingOptions}
               formatMoneyText={formatMoneyText}
@@ -299,6 +310,9 @@ export function ReceiptIntakeGuidedStages({
             <ReceiptIntakeFinalizePosting
               review={review}
               mismatchDetected={mismatchDetected}
+              mismatchOverrideReady={mismatchOverrideReady}
+              mismatchOverrideAccepted={mismatchOverrideAccepted}
+              requestMismatchOverride={requestMismatchOverride}
               showFinalizePostingOptions={showFinalizePostingOptions}
               setShowFinalizePostingOptions={setShowFinalizePostingOptions}
               activeWorkflowChoice={activeWorkflowChoice}

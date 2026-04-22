@@ -99,6 +99,14 @@ const TRA_LOOKUP_ATTEMPT_PROFILES: Array<{
     waitForBodyMs: 5000,
     waitForSignalMs: 6500,
     fallbackTimeoutMs: 8500
+  },
+  {
+    label: "stabilize",
+    retryDelayMs: 2600,
+    gotoTimeoutMs: 16000,
+    waitForBodyMs: 6500,
+    waitForSignalMs: 9000,
+    fallbackTimeoutMs: 10000
   }
 ];
 
@@ -924,7 +932,13 @@ function parseTraLookupResponse({
 }) {
   const parseContext = buildTraParseContext(body);
   const text = parseContext.selectedText;
-  const lineCandidates = extractTraLineCandidates(parseContext.selectedHtml, text);
+  const selectedLineCandidates = extractTraLineCandidates(parseContext.selectedHtml, text);
+  const fullTextLineCandidates =
+    selectedLineCandidates.length === 0 && parseContext.selectedHtml !== body
+      ? extractTraLineCandidates(body, parseContext.fullText)
+      : [];
+  const lineCandidates =
+    selectedLineCandidates.length > 0 ? selectedLineCandidates : fullTextLineCandidates;
   const fieldCandidates: Array<{ field: keyof ReceiptHeaderExtraction; value: string | number; confidence: number; source: string }> =
     [];
 
@@ -960,6 +974,25 @@ function parseTraLookupResponse({
       confidence: pair.confidence,
       source: pair.source
     });
+  }
+  if (labelPairs.length === 0 && parseContext.selectedHtml !== body) {
+    const fullBodyLabelPairs = extractTraLabelValuePairs(body, parseContext.fullText);
+    for (const pair of fullBodyLabelPairs) {
+      const mappedField = mapTraLabelToField(pair.label);
+      if (!mappedField) {
+        continue;
+      }
+      const sanitized = sanitizeTraFieldValue(mappedField, pair.value, pair.label);
+      if (sanitized === null) {
+        continue;
+      }
+      fieldCandidates.push({
+        field: mappedField,
+        value: sanitized,
+        confidence: Math.max(0.35, pair.confidence - 0.08),
+        source: `${pair.source}-full-body`
+      });
+    }
   }
 
   const fromBodyStructured = parseQrKeyValueText(text);

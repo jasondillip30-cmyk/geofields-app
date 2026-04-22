@@ -6,7 +6,7 @@ import { buildEmptyScanDiagnostics } from "@/components/inventory/receipt-intake
 import { applyWorkflowSelectionUpdate, formatReceiptPurposeLabel, mapRequisitionTypeToReceiptClassification, mapRequisitionTypeToWorkflowChoice, resolveCreateExpenseForPurpose, resolveWorkflowChoiceFromReview, resolveWorkflowSelectionConfig } from "@/components/inventory/receipt-intake-workflow-utils";
 import { calmMessage, evaluateAutoSaveEligibility, evaluateSaveReadiness, markFrontendMappingGap, readApiError, readJsonPayload, readPayloadMessage, resolveScanFailureNotice } from "@/components/inventory/receipt-intake-save-readiness";
 import { asString, buildManualAssistReview, buildReviewStateFromPayload, buildReviewStateFromSubmission, deriveAllocationStatus, extractReceiptPurposeFromDetails, formatDateTimeText, formatMoneyText, hasMeaningfulExtractedPayload, hasMeaningfulReviewData, isReceiptCommitSuccessPayload, isReceiptExtractSuccessPayload, isDuplicateCommitPayload, normalizeAllocationStatus, readDuplicateReviewPayload } from "@/components/inventory/receipt-intake-review-state";
-import { buildRequisitionMismatchReview, evaluateRequisitionComparison } from "@/components/inventory/receipt-intake-comparison";
+import { evaluateRequisitionComparison } from "@/components/inventory/receipt-intake-comparison";
 import { ReceiptIntakePanelContent } from "@/components/inventory/receipt-intake-panel-content";
 import { applyReviewLinePatch, createManualSeededReview, fetchFocusedRecordPayload, handleReceiptCaptureModeSwitch, handleQrPointerDownSelection, handleQrPointerMoveSelection, handleQrPointerUpSelection, handleReceiptFileSelection, resetFocusedRecordOverlayState, resetScanSessionStateValues } from "@/components/inventory/receipt-intake-panel-actions";
 import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type CameraSessionState, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
@@ -73,6 +73,7 @@ export function ReceiptIntakePanel({
     preferredInputMethod === "MANUAL" ? "MANUAL" : "SCAN"
   );
   const [showMismatchFinalizeConfirm, setShowMismatchFinalizeConfirm] = useState(false);
+  const [mismatchOverrideAccepted, setMismatchOverrideAccepted] = useState(false);
   const [showScannedDetails, setShowScannedDetails] = useState(false);
   const [showFinalizePostingOptions, setShowFinalizePostingOptions] = useState(false);
   const [finalizeSuccess, setFinalizeSuccess] = useState<{
@@ -152,6 +153,7 @@ export function ReceiptIntakePanel({
     if (requisitionClassification && receiptClassification !== requisitionClassification) {
       setReceiptClassification(requisitionClassification);
       setReceiptWorkflowChoice(mapRequisitionTypeToWorkflowChoice(initialRequisition.type));
+      setMismatchOverrideAccepted(false);
     }
   }, [
     activeSubmission,
@@ -160,15 +162,6 @@ export function ReceiptIntakePanel({
     requisitionClassification,
     review
   ]);
-  useEffect(() => {
-    if (preferredInputMethod === "MANUAL") {
-      setReceiptCaptureMode("MANUAL");
-      return;
-    }
-    if (preferredInputMethod === "SCAN") {
-      setReceiptCaptureMode("SCAN");
-    }
-  }, [preferredInputMethod]);
   useEffect(() => {
     if (!manualInputSelected || review || activeSubmission) {
       return;
@@ -198,6 +191,7 @@ export function ReceiptIntakePanel({
       initialRequisition
     });
     setReview(seededReview);
+    setMismatchOverrideAccepted(false);
     setFinalizeSuccess(null);
     setNoticeTone("WARNING");
     setNotice("Manual receipt mode started. Fill details directly, then finalize posting.");
@@ -213,6 +207,15 @@ export function ReceiptIntakePanel({
     receiptWorkflowChoice,
     review
   ]);
+  useEffect(() => {
+    if (preferredInputMethod === "MANUAL") {
+      setReceiptCaptureMode("MANUAL");
+      return;
+    }
+    if (preferredInputMethod === "SCAN") {
+      setReceiptCaptureMode("SCAN");
+    }
+  }, [preferredInputMethod]);
   useEffect(() => {
     if (!activeSubmission) {
       setActiveSubmissionId(null);
@@ -231,6 +234,7 @@ export function ReceiptIntakePanel({
       initialRequisition
     });
     setReview(hydrated);
+    setMismatchOverrideAccepted(false);
     setFinalizeSuccess(null);
     setReceiptClassification(hydrated.receiptClassification);
     setReceiptWorkflowChoice(resolveWorkflowChoiceFromReview(hydrated));
@@ -337,6 +341,7 @@ export function ReceiptIntakePanel({
     const workflowConfig = resolveWorkflowSelectionConfig(choice);
     setReceiptWorkflowChoice(choice);
     setReceiptClassification(workflowConfig.classification);
+    setMismatchOverrideAccepted(false);
     setReview((current) =>
       current ? applyWorkflowSelectionUpdate(current, workflowConfig) : current
     );
@@ -363,6 +368,7 @@ export function ReceiptIntakePanel({
     setCameraSessionState("idle");
     setCameraSessionError(null);
     setCameraDetectedPayload("");
+    setMismatchOverrideAccepted(false);
   }
   function closeFocusedRecordOverlay() {
     resetFocusedRecordOverlayState({
@@ -382,7 +388,8 @@ export function ReceiptIntakePanel({
       setShowFinalizePostingOptions,
       setShowTechnicalDetails,
       setShowMismatchFinalizeConfirm,
-      setShowScannedDetails
+      setShowScannedDetails,
+      setMismatchOverrideAccepted
     });
     setCameraSessionState("idle");
     setCameraSessionError(null);
@@ -486,6 +493,7 @@ export function ReceiptIntakePanel({
           initialRequisition
         });
         setReview(fallbackReview);
+        setMismatchOverrideAccepted(false);
         setLastScanDiagnostics(fallbackReview.scanDiagnostics);
         setNoticeTone("WARNING");
         setNotice(resolveScanFailureNotice(fallbackReview));
@@ -498,30 +506,20 @@ export function ReceiptIntakePanel({
         ? markFrontendMappingGap(nextReview)
         : nextReview;
       const requisitionComparison = evaluateRequisitionComparison(effectiveReview, initialRequisition);
-      if (requisitionComparison?.status === "MISMATCH") {
-        const mismatchReview = buildRequisitionMismatchReview({
-          scannedReview: effectiveReview,
-          initialRequisition
-        });
-        setReview(mismatchReview);
-        setLastScanDiagnostics(mismatchReview.scanDiagnostics);
-        setNoticeTone("WARNING");
-        setNotice(null);
-        setError(null);
-        setExtractState("SUCCESS");
-        setFollowUpStage("SCAN");
-        return true;
-      }
       setReview(effectiveReview);
+      setMismatchOverrideAccepted(false);
       setLastScanDiagnostics(effectiveReview.scanDiagnostics);
-      const intakeMessage = calmMessage(
-        payload.message ||
-          (effectiveReview.scanStatus === "COMPLETE"
-            ? "Captured from QR/TRA. Review and save."
-            : "Some fields still need review.")
-      );
+      const mismatchDetectedFromScan = requisitionComparison?.status === "MISMATCH";
+      const intakeMessage = mismatchDetectedFromScan
+        ? "Scanned receipt differs from the approved requisition. Review differences, then use override if you want to save scanned values."
+        : calmMessage(
+            payload.message ||
+              (effectiveReview.scanStatus === "COMPLETE"
+                ? "Captured from QR/TRA. Review and save."
+                : "Some fields still need review.")
+          );
       const autoSaveReadiness = evaluateAutoSaveEligibility(effectiveReview);
-      if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
+      if (canManage && autoSaveEnabled && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
         setNoticeTone("SUCCESS");
         setNotice("Captured from QR/TRA. Finalizing automatically...");
       } else if (canManage && autoSaveEnabled && !autoSaveReadiness.ready) {
@@ -529,6 +527,9 @@ export function ReceiptIntakePanel({
         setNotice(
           `Review recommended before save. ${autoSaveReadiness.reasons[0] || "Some optional fields need confirmation."}`
         );
+      } else if (mismatchDetectedFromScan) {
+        setNoticeTone("WARNING");
+        setNotice(intakeMessage);
       } else {
         setNoticeTone(effectiveReview.scanStatus === "COMPLETE" ? "SUCCESS" : "WARNING");
         setNotice(
@@ -539,7 +540,7 @@ export function ReceiptIntakePanel({
       }
       setExtractState("SUCCESS");
       setFollowUpStage("SCAN");
-      if (canManage && autoSaveEnabled && autoSaveReadiness.ready) {
+      if (canManage && autoSaveEnabled && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
         await commitReview(effectiveReview, { auto: true });
       }
       return true;
@@ -559,6 +560,7 @@ export function ReceiptIntakePanel({
       initialRequisition
     });
     setReview(fallbackReview);
+    setMismatchOverrideAccepted(false);
     setLastScanDiagnostics(fallbackReview.scanDiagnostics);
     setNoticeTone("WARNING");
     setNotice(resolveScanFailureNotice(fallbackReview));
@@ -585,6 +587,7 @@ export function ReceiptIntakePanel({
     setHasScanAttempted(true);
     setFinalizeSuccess(null);
     setShowScannedDetails(false);
+    setMismatchOverrideAccepted(false);
     setExtractState("UPLOADING");
     setError(null);
     setNotice(null);
@@ -643,6 +646,7 @@ export function ReceiptIntakePanel({
         initialRequisition
       });
       setReview(fallbackReview);
+      setMismatchOverrideAccepted(false);
       setLastScanDiagnostics(fallbackReview.scanDiagnostics);
       setNoticeTone("WARNING");
       setNotice(resolveScanFailureNotice(fallbackReview));
@@ -672,6 +676,7 @@ export function ReceiptIntakePanel({
     setHasScanAttempted(true);
     setFinalizeSuccess(null);
     setShowScannedDetails(false);
+    setMismatchOverrideAccepted(false);
     setExtractState("PROCESSING");
     setCameraSessionError(null);
     setCameraSessionState("detected");
@@ -747,6 +752,20 @@ export function ReceiptIntakePanel({
     nextReview: ReviewState,
     options: { auto: boolean; allowDuplicateSave?: boolean }
   ) {
+    const comparison = evaluateRequisitionComparison(nextReview, initialRequisition);
+    const mismatchRequiresOverride =
+      comparison?.status === "MISMATCH" && !mismatchOverrideAccepted;
+    if (mismatchRequiresOverride) {
+      const mismatchMessage =
+        "Receipt does not match the approved requisition. Click 'Override and use scanned receipt data' before saving.";
+      if (options.auto) {
+        setNoticeTone("WARNING");
+        setNotice(mismatchMessage);
+      } else {
+        setError(mismatchMessage);
+      }
+      return;
+    }
     const readiness = evaluateSaveReadiness(nextReview);
     if (!readiness.ready) {
       setError(readiness.reasons[0] || "Complete required receipt context before saving.");
@@ -994,6 +1013,59 @@ export function ReceiptIntakePanel({
       return applyReviewLinePatch(current, lineId, patch);
     });
   }
+  function addScannedLineItem() {
+    const nextLineId = `manual-scan-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setReview((current) => {
+      if (!current) {
+        return current;
+      }
+      const initialMode: ReviewLineState["mode"] =
+        current.receiptClassification === "EXPENSE_ONLY"
+          ? "EXPENSE_ONLY"
+          : current.receiptClassification === "INTERNAL_TRANSFER"
+            ? "MATCH"
+            : "NEW";
+      const manualLine: ReviewLineState = {
+        id: nextLineId,
+        description: "Manual scanned line item",
+        quantity: "1",
+        unitPrice: "0",
+        lineTotal: "0",
+        extractionConfidence: "LOW",
+        selectedCategory: "OTHER",
+        suggestedCategory: null,
+        categoryReason: "Added manually while reviewing scanned receipt details.",
+        mode: initialMode,
+        selectedItemId: "",
+        matchConfidence: "NONE",
+        matchScore: 0,
+        newItemName: "Manual scanned line item",
+        newItemSku: "",
+        newItemMinimumStockLevel: "0"
+      };
+      return {
+        ...current,
+        lines: [...current.lines, manualLine]
+      };
+    });
+    setInventoryActionEditorByLine((current) => ({ ...current, [nextLineId]: true }));
+    setShowMismatchInventoryHandling(true);
+    setFollowUpStage("REVIEW");
+    setNoticeTone("WARNING");
+    setNotice("Manual scanned line item added. Complete qty, unit price, and totals before saving.");
+    setError(null);
+  }
+  function requestMismatchOverride() {
+    setShowMismatchFinalizeConfirm(true);
+  }
+  function acceptMismatchOverrideAndContinue() {
+    setMismatchOverrideAccepted(true);
+    setShowMismatchFinalizeConfirm(false);
+    setFollowUpStage("FINALIZE");
+    setNoticeTone("WARNING");
+    setNotice("Mismatch override accepted. Saving will keep scanned/manual receipt values.");
+    setError(null);
+  }
   async function openFocusedRecord(record: FocusedLinkedRecord) {
     setFocusedRecordLoading(true);
     setFocusedRecordError(null);
@@ -1018,6 +1090,7 @@ export function ReceiptIntakePanel({
       ? activeScanDiagnostics || buildEmptyScanDiagnostics()
       : null;
   const mismatchDetected = requisitionComparison?.status === "MISMATCH";
+  const mismatchOverrideReady = !mismatchDetected || mismatchOverrideAccepted;
   const inventoryActionNeeded = useMemo(() => {
     if (!review) {
       return false;
@@ -1080,10 +1153,10 @@ export function ReceiptIntakePanel({
       mismatchStepProps={{
         showMismatchFinalizeConfirm,
         setShowMismatchFinalizeConfirm,
-        setFollowUpStage,
         showScannedDetails,
         setShowScannedDetails,
-        requisitionComparison
+        requisitionComparison,
+        acceptMismatchOverrideAndContinue
       }}
       guidedStagesProps={{
         finalizeSuccess,
@@ -1131,9 +1204,11 @@ export function ReceiptIntakePanel({
         showAdvancedLineItemEditor,
         items,
         updateLine,
+        addScannedLineItem,
         inventoryActionEditorByLine,
         setInventoryActionEditorByLine,
-        setShowMismatchFinalizeConfirm,
+        mismatchOverrideAccepted,
+        requestMismatchOverride,
         requisitionComparison,
         showFinalizePostingOptions,
         setShowFinalizePostingOptions,
@@ -1152,6 +1227,7 @@ export function ReceiptIntakePanel({
         setShowTechnicalDetails,
         handleCommit,
         saving,
+        mismatchOverrideReady,
         cameraSessionState,
         setCameraSessionState,
         cameraSessionError,

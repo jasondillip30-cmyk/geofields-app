@@ -215,7 +215,8 @@ export function resetScanSessionStateValues({
   setShowFinalizePostingOptions,
   setShowTechnicalDetails,
   setShowMismatchFinalizeConfirm,
-  setShowScannedDetails
+  setShowScannedDetails,
+  setMismatchOverrideAccepted
 }: {
   setHasScanAttempted: Dispatch<SetStateAction<boolean>>;
   setLastScanDiagnostics: Dispatch<SetStateAction<ReviewState["scanDiagnostics"] | null>>;
@@ -226,6 +227,7 @@ export function resetScanSessionStateValues({
   setShowTechnicalDetails: Dispatch<SetStateAction<boolean>>;
   setShowMismatchFinalizeConfirm: Dispatch<SetStateAction<boolean>>;
   setShowScannedDetails: Dispatch<SetStateAction<boolean>>;
+  setMismatchOverrideAccepted: Dispatch<SetStateAction<boolean>>;
 }) {
   setHasScanAttempted(false);
   setLastScanDiagnostics(null);
@@ -236,6 +238,7 @@ export function resetScanSessionStateValues({
   setShowTechnicalDetails(false);
   setShowMismatchFinalizeConfirm(false);
   setShowScannedDetails(false);
+  setMismatchOverrideAccepted(false);
 }
 
 export function handleReceiptFileSelection({

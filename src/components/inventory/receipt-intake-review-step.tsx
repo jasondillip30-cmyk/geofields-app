@@ -27,13 +27,15 @@ export function ReceiptIntakeReviewStep({
   showAdvancedLineItemEditor,
   review,
   mismatchDetected,
+  mismatchOverrideAccepted,
   items,
   updateLine,
+  addScannedLineItem,
   inventoryActionEditorByLine,
   setInventoryActionEditorByLine,
   inventoryCategoryOptions,
   formatInventoryCategory,
-  setShowMismatchFinalizeConfirm,
+  requestMismatchOverride,
   setFollowUpStage,
   manualInputSelected,
   setReview,
@@ -49,13 +51,15 @@ export function ReceiptIntakeReviewStep({
   showAdvancedLineItemEditor: boolean;
   review: ReviewState;
   mismatchDetected: boolean;
+  mismatchOverrideAccepted: boolean;
   items: ItemLike[];
   updateLine: (lineId: string, patch: Partial<ReviewLineState>) => void;
+  addScannedLineItem: () => void;
   inventoryActionEditorByLine: Record<string, boolean>;
   setInventoryActionEditorByLine: Dispatch<SetStateAction<Record<string, boolean>>>;
   inventoryCategoryOptions: Array<{ value: string; label: string }>;
   formatInventoryCategory: (value: string) => string;
-  setShowMismatchFinalizeConfirm: Dispatch<SetStateAction<boolean>>;
+  requestMismatchOverride: () => void;
   setFollowUpStage: Dispatch<SetStateAction<ReceiptFollowUpStage>>;
   manualInputSelected: boolean;
   setReview: Dispatch<SetStateAction<ReviewState | null>>;
@@ -103,13 +107,51 @@ export function ReceiptIntakeReviewStep({
           </div>
         )}
 
+      {requisitionComparison?.status === "MISMATCH" && (
+        <div className="rounded-lg border border-rose-200/80 bg-rose-50/70 px-2.5 py-2 text-xs text-rose-900">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold">Receipt does not match requisition</span>
+            {requisitionComparison.canInspectScannedDetails && (
+              <button
+                type="button"
+                onClick={() => setShowScannedDetails((current) => !current)}
+                className="rounded border border-rose-300/80 bg-white px-2 py-0.5 text-[11px] font-semibold"
+              >
+                {showScannedDetails ? "Hide scanned receipt" : "Review scanned receipt"}
+              </button>
+            )}
+          </div>
+          <p className="mt-0.5 leading-4">
+            {mismatchOverrideAccepted
+              ? "Override accepted. Final save will use scanned/manual receipt values."
+              : "Use override to continue with scanned/manual receipt values."}
+          </p>
+          {!mismatchOverrideAccepted && (
+            <button
+              type="button"
+              onClick={requestMismatchOverride}
+              className="mt-2 rounded-md bg-brand-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-brand-700"
+            >
+              Override and use scanned receipt data
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="space-y-1.5 rounded-lg border border-slate-200/60 bg-white px-2.5 py-1.5">
         <p className="text-sm font-semibold text-slate-900">
-          {showMismatchInventoryHandling ? "Step 3: Link item to inventory" : "Step 2: Confirm items from requisition"}
+          {showMismatchInventoryHandling ? "Step 3: Link item to inventory" : "Step 2: Review scanned receipt items"}
         </p>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-ink-900">Requisition Line Items</p>
+          <p className="text-sm font-semibold text-ink-900">Scanned Receipt Line Items</p>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={addScannedLineItem}
+              className="text-[11px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-700"
+            >
+              Add scanned line item
+            </button>
             {requisitionComparison?.canInspectScannedDetails && (
               <button
                 type="button"
@@ -147,9 +189,7 @@ export function ReceiptIntakeReviewStep({
 
         {review.lines.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-300 bg-white px-2.5 py-3 text-xs text-slate-700">
-            {mismatchDetected
-              ? "No approved requisition line items are available for this mismatch review."
-              : "No requisition line items are currently available for review."}
+            No scanned receipt line items yet. Add one manually or rescan.
           </div>
         ) : (
           review.lines.map((line) =>
@@ -170,7 +210,7 @@ export function ReceiptIntakeReviewStep({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs text-slate-600">
                     {mismatchDetected
-                      ? "Requisition line item"
+                      ? "Scanned receipt line item"
                       : line.mode === "MATCH"
                         ? "Linked to existing inventory item"
                         : line.mode === "NEW"
@@ -184,6 +224,32 @@ export function ReceiptIntakeReviewStep({
                   <p className="mt-0.5">
                     Category context: {line.selectedCategory ? formatInventoryCategory(line.selectedCategory) : "Other"}
                   </p>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                  <InputField
+                    label="Description"
+                    value={line.description}
+                    onChange={(value) => updateLine(line.id, { description: value, newItemName: value || line.newItemName })}
+                  />
+                  <InputField
+                    label="Quantity"
+                    type="number"
+                    value={line.quantity}
+                    onChange={(value) => updateLine(line.id, { quantity: value })}
+                  />
+                  <InputField
+                    label="Unit Price"
+                    type="number"
+                    value={line.unitPrice}
+                    onChange={(value) => updateLine(line.id, { unitPrice: value })}
+                  />
+                  <InputField
+                    label="Line Total"
+                    type="number"
+                    value={line.lineTotal}
+                    onChange={(value) => updateLine(line.id, { lineTotal: value })}
+                  />
                 </div>
 
                 {(() => {
@@ -374,15 +440,17 @@ export function ReceiptIntakeReviewStep({
             <button
               type="button"
               onClick={() => {
-                if (mismatchDetected) {
-                  setShowMismatchFinalizeConfirm(true);
+                if (mismatchDetected && !mismatchOverrideAccepted) {
+                  requestMismatchOverride();
                   return;
                 }
                 setFollowUpStage("FINALIZE");
               }}
               className="gf-btn-primary"
             >
-              Continue to finalize
+              {mismatchDetected && !mismatchOverrideAccepted
+                ? "Override and continue"
+                : "Continue to finalize"}
             </button>
           </>
         )}

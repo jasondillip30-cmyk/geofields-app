@@ -58,30 +58,19 @@ export function evaluateRequisitionComparison(
   }
 
   const approvedLines = mapRequisitionSnapshotLines(initialRequisition);
-  const scannedLines = review.scannedSnapshot.lines.filter((line) => isMeaningfulSnapshotLine(line));
-  const normalizedWarnings = review.warnings.map((warning) => warning.toLowerCase());
-  const scannedTotalWasDerived =
-    review.fieldSource.total === "DERIVED" ||
-    normalizedWarnings.some((warning) =>
-      warning.includes("scanned receipt total was inferred from approved requisition")
-    );
-  const scannedLinesWereDerived =
-    normalizedWarnings.some((warning) =>
-      warning.includes("scanned receipt lines were inferred from approved requisition")
-    ) ||
-    normalizedWarnings.some((warning) =>
-      warning.includes("prefilled line items from the approved requisition")
-    );
-  const displayScannedLines = scannedLinesWereDerived
-    ? scannedLines.map((line) => ({
-        ...line,
-        description: `${line.description || "Line item"} (inferred from approved requisition; verify)`
-      }))
-    : scannedLines;
+  const scannedLines = review.lines
+    .map((line) => ({
+      id: line.id,
+      description: line.description,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+      lineTotal: line.lineTotal
+    }))
+    .filter((line) => isMeaningfulSnapshotLine(line));
   const approvedSupplier = normalizeSupplierName(asString(initialRequisition?.requestedVendorName));
-  const scannedSupplier = normalizeSupplierName(review.scannedSnapshot.supplierName);
+  const scannedSupplier = normalizeSupplierName(review.supplierName || review.scannedSnapshot.supplierName);
   const approvedTotalValue = resolveRequisitionEstimatedTotal(initialRequisition);
-  const scannedTotalValue = Number(review.scannedSnapshot.total || 0);
+  const scannedTotalValue = Number(review.total || review.scannedSnapshot.total || 0);
   const scanTrust = resolveScanTrustState(review, scannedLines);
   const supplierComparison = compareTextSimilarity(approvedSupplier, scannedSupplier, {
     matchedThreshold: 0.84,
@@ -94,25 +83,15 @@ export function evaluateRequisitionComparison(
   const lineComparison = evaluateLineComparison(approvedLines, scannedLines);
   const inferredTraToken = inferTraTokenFromRawQrValue(review.rawQrValue || review.verificationUrl);
   const inferredFields: string[] = [];
-  if (inferredTraToken?.verificationCode) {
+  if (!review.verificationCode && inferredTraToken?.verificationCode) {
     inferredFields.push("verification code");
   }
-  if (inferredTraToken?.traReceiptNumber) {
+  if (!review.traReceiptNumber && inferredTraToken?.traReceiptNumber) {
     inferredFields.push("control / TRA number");
   }
-  if (scannedTotalWasDerived) {
-    inferredFields.push("total amount");
-  }
-  if (scannedLinesWereDerived) {
-    inferredFields.push("line items");
-  }
-  const scannedTotalDisplay = review.scannedSnapshot.total
-    ? formatCurrency(Number(review.scannedSnapshot.total || 0))
+  const scannedTotalDisplay = scannedTotalValue > 0
+    ? formatCurrency(scannedTotalValue)
     : "-";
-  const scannedTotalDisplayWithSource =
-    scannedTotalWasDerived && scannedTotalDisplay !== "-"
-      ? `${scannedTotalDisplay} (inferred from approved requisition; verify)`
-      : scannedTotalDisplay;
   const scannedControlDisplay = formatInferredScanField({
     scannedValue: review.traReceiptNumber,
     inferredValue: inferredTraToken?.traReceiptNumber || ""
@@ -122,25 +101,25 @@ export function evaluateRequisitionComparison(
     inferredValue: inferredTraToken?.verificationCode || ""
   });
   const missingCriticalFields = [
-    !review.scannedSnapshot.supplierName ? "supplier" : "",
-    !review.scannedSnapshot.receiptNumber ? "receipt number" : "",
-    !review.scannedSnapshot.receiptDate ? "receipt date" : "",
-    !review.scannedSnapshot.total ? "total amount" : ""
+    !review.supplierName.trim() ? "supplier" : "",
+    !review.receiptNumber.trim() ? "receipt number" : "",
+    !review.receiptDate.trim() ? "receipt date" : "",
+    scannedTotalValue <= 0 ? "total amount" : ""
   ].filter(Boolean);
   const approvedRequestedItem = approvedLines[0]?.description || "-";
-  const scannedRequestedItem = displayScannedLines[0]?.description || "-";
+  const scannedRequestedItem = scannedLines[0]?.description || "-";
 
   const headerRows: RequisitionComparisonResult["headerRows"] = [
     {
       label: "Supplier",
       approved: approvedSupplier || "-",
-      scanned: review.scannedSnapshot.supplierName || "-",
+      scanned: review.supplierName || review.scannedSnapshot.supplierName || "-",
       mismatch: supplierComparison.level === "MISMATCH"
     },
     {
       label: "Receipt Number",
       approved: "-",
-      scanned: review.scannedSnapshot.receiptNumber || "-",
+      scanned: review.receiptNumber || review.scannedSnapshot.receiptNumber || "-",
       mismatch: false
     },
     {
@@ -176,37 +155,37 @@ export function evaluateRequisitionComparison(
     {
       label: "Receipt Date",
       approved: "-",
-      scanned: review.scannedSnapshot.receiptDate || "-",
+      scanned: review.receiptDate || review.scannedSnapshot.receiptDate || "-",
       mismatch: false
     },
     {
       label: "Total Amount",
       approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
-      scanned: scannedTotalDisplayWithSource,
+      scanned: scannedTotalDisplay,
       mismatch: totalComparison.level === "MISMATCH"
     }
   ];
 
   const canInspectScannedDetails =
-    scanTrust.meaningfulData &&
-    (scannedLines.length > 0 ||
-      review.scannedSnapshot.receiptNumber.trim().length > 0 ||
+      scanTrust.meaningfulData &&
+      (scannedLines.length > 0 ||
+      review.receiptNumber.trim().length > 0 ||
       review.traReceiptNumber.trim().length > 0 ||
       review.verificationCode.trim().length > 0 ||
       review.verificationUrl.trim().length > 0 ||
       review.rawQrValue.trim().length > 0 ||
       review.tin.trim().length > 0 ||
-      Number(review.scannedSnapshot.total || 0) > 0);
+      scannedTotalValue > 0);
   const differenceRows: RequisitionComparisonResult["differenceRows"] = [
     {
       label: "Supplier",
       approved: approvedSupplier || "-",
-      scanned: review.scannedSnapshot.supplierName || "-"
+      scanned: review.supplierName || review.scannedSnapshot.supplierName || "-"
     },
     {
       label: "Total amount",
       approved: approvedTotalValue > 0 ? formatCurrency(approvedTotalValue) : "-",
-      scanned: scannedTotalValue > 0 ? scannedTotalDisplayWithSource : "-"
+      scanned: scannedTotalValue > 0 ? scannedTotalDisplay : "-"
     },
     {
       label: "Requested item",
@@ -221,7 +200,7 @@ export function evaluateRequisitionComparison(
     differenceRows: [],
     headerRows,
     approvedLines,
-    scannedLines: displayScannedLines
+    scannedLines
   };
 
   if (review.scanFallbackMode === "SCAN_FAILURE") {
@@ -276,9 +255,7 @@ export function evaluateRequisitionComparison(
     lineComparison.level === "CLOSE_MATCH" ||
     review.scanStatus !== "COMPLETE" ||
     missingCriticalFields.length > 0 ||
-    inferredFields.length > 0 ||
-    scannedTotalWasDerived ||
-    scannedLinesWereDerived;
+    inferredFields.length > 0;
 
   if (closeMatchSignals) {
     const inferredFieldsMessage =
@@ -496,10 +473,10 @@ function resolveScanTrustState(review: ReviewState, scannedLines: ReceiptSnapsho
   }
 
   const hasKeyFields =
-    review.scannedSnapshot.receiptNumber.trim().length > 0 ||
-    review.scannedSnapshot.supplierName.trim().length > 0 ||
-    review.scannedSnapshot.receiptDate.trim().length > 0 ||
-    Number(review.scannedSnapshot.total || 0) > 0;
+    review.receiptNumber.trim().length > 0 ||
+    review.supplierName.trim().length > 0 ||
+    review.receiptDate.trim().length > 0 ||
+    Number(review.total || 0) > 0;
   const hasQrMetadata =
     review.verificationCode.trim().length > 0 ||
     review.traReceiptNumber.trim().length > 0 ||

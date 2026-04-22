@@ -6,20 +6,26 @@ import type { ReviewState } from "@/components/inventory/receipt-intake-panel-ty
 export function ReceiptIntakeFinalizeStep({
   review,
   mismatchDetected,
+  mismatchOverrideAccepted,
+  requestMismatchOverride,
   canInspectScannedDetails,
   showScannedDetails,
   setShowScannedDetails,
   setReview,
+  addScannedLineItem,
   showFinalizePostingOptions,
   setShowFinalizePostingOptions,
   formatMoneyText
 }: {
   review: ReviewState;
   mismatchDetected: boolean;
+  mismatchOverrideAccepted: boolean;
+  requestMismatchOverride: () => void;
   canInspectScannedDetails: boolean;
   showScannedDetails: boolean;
   setShowScannedDetails: (updater: (current: boolean) => boolean) => void;
   setReview: (updater: (current: ReviewState | null) => ReviewState | null) => void;
+  addScannedLineItem: () => void;
   showFinalizePostingOptions: boolean;
   setShowFinalizePostingOptions: (updater: (current: boolean) => boolean) => void;
   formatMoneyText: (value: string, currency: string) => string;
@@ -30,7 +36,20 @@ export function ReceiptIntakeFinalizeStep({
       {mismatchDetected && (
         <div className="rounded-lg border border-rose-200/70 bg-rose-50/70 px-3 py-2 text-xs text-rose-900">
           <p className="font-semibold">Receipt does not match requisition</p>
-          <p className="mt-0.5">Manual receipt details are being used for final posting.</p>
+          <p className="mt-0.5">
+            {mismatchOverrideAccepted
+              ? "Override accepted. Final save will use scanned/manual receipt values."
+              : "Override is required before saving scanned/manual receipt values."}
+          </p>
+          {!mismatchOverrideAccepted && (
+            <button
+              type="button"
+              onClick={requestMismatchOverride}
+              className="mt-1 rounded border border-rose-300/80 bg-white px-2 py-0.5 text-[11px] font-semibold hover:bg-rose-100/70"
+            >
+              Override and use scanned receipt data
+            </button>
+          )}
           {canInspectScannedDetails && (
             <button
               type="button"
@@ -44,7 +63,7 @@ export function ReceiptIntakeFinalizeStep({
       )}
       {mismatchDetected && (
         <div className="space-y-1 rounded-lg border border-slate-200/55 bg-white px-2.5 py-1.5">
-          <p className="text-[13px] font-semibold text-slate-900">Manual Receipt Details</p>
+          <p className="text-[13px] font-semibold text-slate-900">Scanned Receipt Details</p>
           <div className="grid gap-1.5 md:grid-cols-2 xl:grid-cols-3">
             <InputField
               label="Receipt Number"
@@ -88,9 +107,18 @@ export function ReceiptIntakeFinalizeStep({
       )}
       {mismatchDetected && (
         <div className="space-y-1 rounded-lg border border-slate-200/55 bg-white px-2.5 py-1.5">
-          <p className="text-sm font-semibold text-ink-900">Requisition Line Items</p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-ink-900">Scanned Receipt Line Items</p>
+            <button
+              type="button"
+              onClick={addScannedLineItem}
+              className="text-[11px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-700"
+            >
+              Add scanned line item
+            </button>
+          </div>
           {review.lines.length === 0 ? (
-            <p className="text-xs text-slate-600">No approved requisition line items are available for this mismatch review.</p>
+            <p className="text-xs text-slate-600">No scanned receipt line items yet. Add one manually.</p>
           ) : (
             <div className="space-y-1">
               {review.lines.map((line) => (

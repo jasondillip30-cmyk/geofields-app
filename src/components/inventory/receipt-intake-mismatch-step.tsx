@@ -2,23 +2,23 @@
 
 import type { Dispatch, SetStateAction } from "react";
 
-import type { ReceiptFollowUpStage, RequisitionComparisonResult } from "@/components/inventory/receipt-intake-panel-types";
+import type { RequisitionComparisonResult } from "@/components/inventory/receipt-intake-panel-types";
 import { DataTable } from "@/components/ui/table";
 
 export function ReceiptIntakeMismatchStep({
   showMismatchFinalizeConfirm,
   setShowMismatchFinalizeConfirm,
-  setFollowUpStage,
   showScannedDetails,
   setShowScannedDetails,
-  requisitionComparison
+  requisitionComparison,
+  acceptMismatchOverrideAndContinue
 }: {
   showMismatchFinalizeConfirm: boolean;
   setShowMismatchFinalizeConfirm: Dispatch<SetStateAction<boolean>>;
-  setFollowUpStage: Dispatch<SetStateAction<ReceiptFollowUpStage>>;
   showScannedDetails: boolean;
   setShowScannedDetails: Dispatch<SetStateAction<boolean>>;
   requisitionComparison: RequisitionComparisonResult | null;
+  acceptMismatchOverrideAndContinue: () => void;
 }) {
   return (
     <>
@@ -31,11 +31,10 @@ export function ReceiptIntakeMismatchStep({
             aria-label="Close mismatch confirmation"
           />
           <div className="relative w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-[0_16px_40px_rgba(15,23,42,0.24)]">
-            <p className="text-base font-semibold text-slate-900">Receipt does not match requisition</p>
+            <p className="text-base font-semibold text-slate-900">Override with scanned receipt data?</p>
             <p className="mt-1 text-sm text-slate-600">
-              This receipt does not match the approved requisition.
-              You are about to continue using manually entered receipt details.
-              Proceed?
+              The scanned receipt does not match the approved requisition. Confirm override to save the
+              scanned/manual receipt values as entered.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
@@ -47,13 +46,10 @@ export function ReceiptIntakeMismatchStep({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setShowMismatchFinalizeConfirm(false);
-                  setFollowUpStage("FINALIZE");
-                }}
+                onClick={acceptMismatchOverrideAndContinue}
                 className="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-700"
               >
-                Continue to finalize
+                Override and continue
               </button>
             </div>
           </div>

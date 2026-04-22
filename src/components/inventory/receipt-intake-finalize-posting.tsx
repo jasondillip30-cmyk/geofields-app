@@ -47,6 +47,9 @@ const receiptFieldLabels: Array<{ key: keyof ReviewState["fieldConfidence"]; lab
 interface ReceiptIntakeFinalizePostingProps {
   review: ReviewState;
   mismatchDetected: boolean;
+  mismatchOverrideReady: boolean;
+  mismatchOverrideAccepted: boolean;
+  requestMismatchOverride: () => void;
   showFinalizePostingOptions: boolean;
   setShowFinalizePostingOptions: Dispatch<SetStateAction<boolean>>;
   activeWorkflowChoice: ReceiptWorkflowChoice | "";
@@ -77,6 +80,9 @@ interface ReceiptIntakeFinalizePostingProps {
 export function ReceiptIntakeFinalizePosting({
   review,
   mismatchDetected,
+  mismatchOverrideReady,
+  mismatchOverrideAccepted,
+  requestMismatchOverride,
   showFinalizePostingOptions,
   activeWorkflowChoice,
   applyWorkflowChoice,
@@ -589,6 +595,18 @@ export function ReceiptIntakeFinalizePosting({
       )}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-slate-200/70 pt-2">
+        {mismatchDetected && !mismatchOverrideAccepted && (
+          <div className="mr-2 rounded border border-rose-200/80 bg-rose-50 px-2 py-1 text-[11px] text-rose-900">
+            <span className="font-semibold">Override required.</span> Accept override to save scanned/manual values.
+            <button
+              type="button"
+              onClick={requestMismatchOverride}
+              className="ml-2 rounded border border-rose-300/80 bg-white px-2 py-0.5 font-semibold hover:bg-rose-100/70"
+            >
+              Override now
+            </button>
+          </div>
+        )}
         <button
           type="button"
           onClick={() => setFollowUpStage("REVIEW")}
@@ -599,11 +617,13 @@ export function ReceiptIntakeFinalizePosting({
         <button
           type="button"
           onClick={() => void handleCommit()}
-          disabled={saving}
+          disabled={saving || !mismatchOverrideReady}
           className="gf-btn-primary"
         >
           {saving
             ? "Saving..."
+            : !mismatchOverrideReady
+              ? "Accept override to finalize"
             : !canManage
               ? "Submit for review"
               : "Finalize posting"}
