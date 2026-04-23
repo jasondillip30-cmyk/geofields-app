@@ -54,6 +54,7 @@
     "cobe": "^2.0.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.38.0",
+    "heic-convert": "^2.1.0",
     "jose": "^6.2.2",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.511.0",

@@ -3,10 +3,15 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import { NextResponse } from "next/server";
+import sharp from "sharp";
 
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { buildFallbackExtraction } from "@/app/api/inventory/receipt-intake/extract/extract-fallback";
+
+const MAX_IMAGE_LONG_EDGE_PX = 3200;
+const NORMALIZED_JPEG_QUALITY = 92;
+const OVERSIZED_IMAGE_BYTES = 8 * 1024 * 1024;
 
 const acceptedMimeTypes = new Set([
   "application/pdf",
@@ -18,15 +23,87 @@ const acceptedMimeTypes = new Set([
   "image/heif"
 ]);
 
-export function isAcceptedMimeType(file: File) {
-  if (!file.type) {
-    return true;
-  }
-  return acceptedMimeTypes.has(file.type.toLowerCase());
+const heicFileBrands = new Set([
+  "heic",
+  "heix",
+  "hevc",
+  "hevx",
+  "heim",
+  "heis"
+]);
+
+const heifFileBrands = new Set([
+  "mif1",
+  "msf1",
+  "heif"
+]);
+
+const supportedFileExtensions = new Map<string, string>([
+  [".pdf", "application/pdf"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+  [".heic", "image/heic"],
+  [".heif", "image/heif"]
+]);
+
+export type UploadNormalizationPath =
+  | "NONE"
+  | "HEIC_TO_JPEG_ONLY"
+  | "ROTATE_ONLY"
+  | "RESIZE_ONLY"
+  | "ROTATE_AND_RESIZE"
+  | "HEIC_TO_JPEG_AND_ROTATE"
+  | "HEIC_TO_JPEG_AND_RESIZE"
+  | "HEIC_TO_JPEG_ROTATE_AND_RESIZE";
+
+export interface ReceiptUploadAuditMetadata {
+  original: {
+    fileName: string;
+    declaredMimeType: string;
+    effectiveMimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+  };
+  normalized: {
+    mimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+  };
+  normalization: {
+    path: UploadNormalizationPath;
+    applied: boolean;
+    heicConverted: boolean;
+    orientationCorrected: boolean;
+    resized: boolean;
+    pngConvertedForStability: boolean;
+  };
 }
 
+interface ReceiptUploadIngestionFailure {
+  ok: false;
+  status: 400 | 415;
+  stage: string;
+  message: string;
+}
+
+export interface ReceiptUploadIngestionSuccess {
+  ok: true;
+  uploadKind: "pdf" | "image";
+  effectiveMimeType: string;
+  fileBuffer: Buffer;
+  normalizationPath: UploadNormalizationPath;
+  normalizationApplied: boolean;
+  auditMetadata: ReceiptUploadAuditMetadata;
+}
+
+export type ReceiptUploadIngestionResult = ReceiptUploadIngestionSuccess | ReceiptUploadIngestionFailure;
+
 export function detectUploadKind(file: File): "pdf" | "image" | "unknown" {
-  const lowerMime = (file.type || "").toLowerCase();
+  const lowerMime = normalizeDeclaredMimeType(file.type);
   const lowerName = (file.name || "").toLowerCase();
   if (lowerMime.includes("pdf") || lowerName.endsWith(".pdf")) {
     return "pdf";
@@ -35,6 +112,412 @@ export function detectUploadKind(file: File): "pdf" | "image" | "unknown" {
     return "image";
   }
   return "unknown";
+}
+
+export async function resolveReceiptUploadIngestion(receipt: File): Promise<ReceiptUploadIngestionResult> {
+  const declaredMimeType = normalizeDeclaredMimeType(receipt.type);
+  const originalFileBuffer = Buffer.from(await receipt.arrayBuffer());
+
+  if (originalFileBuffer.length <= 0) {
+    return {
+      ok: false,
+      status: 400,
+      stage: "empty_upload",
+      message: "Receipt file is empty."
+    };
+  }
+
+  const effectiveMimeType = detectEffectiveMimeType({
+    fileBuffer: originalFileBuffer,
+    declaredMimeType,
+    fileName: receipt.name
+  });
+  if (!effectiveMimeType) {
+    return {
+      ok: false,
+      status: 415,
+      stage: "unsupported_upload",
+      message: "Unsupported file type. Please upload a PDF or image receipt."
+    };
+  }
+
+  const uploadKind = classifyUploadKindFromMimeType(effectiveMimeType);
+  if (uploadKind === "unknown") {
+    return {
+      ok: false,
+      status: 415,
+      stage: "unsupported_upload",
+      message: "Unsupported file type. Please upload a PDF or image receipt."
+    };
+  }
+
+  if (uploadKind === "pdf") {
+    const auditMetadata: ReceiptUploadAuditMetadata = {
+      original: {
+        fileName: receipt.name,
+        declaredMimeType,
+        effectiveMimeType,
+        size: originalFileBuffer.length,
+        width: null,
+        height: null
+      },
+      normalized: {
+        mimeType: effectiveMimeType,
+        size: originalFileBuffer.length,
+        width: null,
+        height: null
+      },
+      normalization: {
+        path: "NONE",
+        applied: false,
+        heicConverted: false,
+        orientationCorrected: false,
+        resized: false,
+        pngConvertedForStability: false
+      }
+    };
+
+    return {
+      ok: true,
+      uploadKind,
+      effectiveMimeType,
+      fileBuffer: originalFileBuffer,
+      normalizationPath: "NONE",
+      normalizationApplied: false,
+      auditMetadata
+    };
+  }
+
+  const originalMetadata = await readImageMetadataSafe(originalFileBuffer);
+
+  let workingBuffer = originalFileBuffer;
+  let workingMimeType = effectiveMimeType;
+  let heicConverted = false;
+  let heicConversionFailed = false;
+
+  if (effectiveMimeType === "image/heic" || effectiveMimeType === "image/heif") {
+    try {
+      const convertedBuffer = await convertHeicToJpeg(originalFileBuffer);
+      workingBuffer = Buffer.from(convertedBuffer);
+      workingMimeType = "image/jpeg";
+      heicConverted = true;
+    } catch {
+      heicConversionFailed = true;
+    }
+  }
+
+  if (heicConversionFailed) {
+    return {
+      ok: false,
+      status: 415,
+      stage: "heic_conversion_failed",
+      message:
+        "HEIC/HEIF image could not be processed in this environment. Please upload or share it as JPEG or PNG."
+    };
+  }
+
+  try {
+    const preNormalize = sharp(workingBuffer, { failOn: "none" });
+    const preMetadata = await preNormalize.metadata();
+    if (!preMetadata.width || !preMetadata.height) {
+      return {
+        ok: false,
+        status: 415,
+        stage: "image_decode_failed",
+        message: "Image file could not be processed. Please upload a JPEG, PNG, WEBP, or PDF receipt."
+      };
+    }
+
+    const orientationCorrected = Number(preMetadata.orientation || 1) > 1;
+    const longEdge = Math.max(preMetadata.width, preMetadata.height);
+    const resized = longEdge > MAX_IMAGE_LONG_EDGE_PX;
+    const pngConvertedForStability =
+      workingMimeType === "image/png" &&
+      (resized || workingBuffer.length > OVERSIZED_IMAGE_BYTES);
+    const normalizationPath = classifyNormalizationPath({
+      heicConverted,
+      orientationCorrected,
+      resized
+    });
+
+    let normalizedPipeline = preNormalize.rotate();
+    if (resized) {
+      normalizedPipeline = normalizedPipeline.resize({
+        width: MAX_IMAGE_LONG_EDGE_PX,
+        height: MAX_IMAGE_LONG_EDGE_PX,
+        fit: "inside",
+        withoutEnlargement: true
+      });
+    }
+
+    let normalizedMimeType = workingMimeType;
+    if (heicConverted || pngConvertedForStability || workingMimeType === "image/jpeg" || workingMimeType === "image/jpg") {
+      normalizedPipeline = normalizedPipeline.jpeg({
+        quality: NORMALIZED_JPEG_QUALITY,
+        mozjpeg: true
+      });
+      normalizedMimeType = "image/jpeg";
+    } else if (workingMimeType === "image/webp") {
+      normalizedPipeline = normalizedPipeline.webp({
+        quality: NORMALIZED_JPEG_QUALITY
+      });
+      normalizedMimeType = "image/webp";
+    } else {
+      normalizedPipeline = normalizedPipeline.png({
+        compressionLevel: 8
+      });
+      normalizedMimeType = "image/png";
+    }
+
+    const normalizedBuffer = await normalizedPipeline.toBuffer();
+    const normalizedMetadata = await readImageMetadataSafe(normalizedBuffer);
+    const normalizationApplied =
+      normalizationPath !== "NONE" || pngConvertedForStability || normalizedMimeType !== effectiveMimeType;
+
+    const auditMetadata: ReceiptUploadAuditMetadata = {
+      original: {
+        fileName: receipt.name,
+        declaredMimeType,
+        effectiveMimeType,
+        size: originalFileBuffer.length,
+        width: originalMetadata.width,
+        height: originalMetadata.height
+      },
+      normalized: {
+        mimeType: normalizedMimeType,
+        size: normalizedBuffer.length,
+        width: normalizedMetadata.width,
+        height: normalizedMetadata.height
+      },
+      normalization: {
+        path: normalizationPath,
+        applied: normalizationApplied,
+        heicConverted,
+        orientationCorrected,
+        resized,
+        pngConvertedForStability
+      }
+    };
+
+    return {
+      ok: true,
+      uploadKind,
+      effectiveMimeType: normalizedMimeType,
+      fileBuffer: normalizedBuffer,
+      normalizationPath,
+      normalizationApplied,
+      auditMetadata
+    };
+  } catch {
+    return {
+      ok: false,
+      status: 415,
+      stage: "image_decode_failed",
+      message: "Image file could not be processed. Please upload a JPEG, PNG, WEBP, or PDF receipt."
+    };
+  }
+}
+
+function normalizeDeclaredMimeType(value: string | null | undefined) {
+  const normalized = (value || "").trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "image/jpg") {
+    return "image/jpeg";
+  }
+  return normalized;
+}
+
+function detectEffectiveMimeType({
+  fileBuffer,
+  declaredMimeType,
+  fileName
+}: {
+  fileBuffer: Buffer;
+  declaredMimeType: string;
+  fileName: string;
+}) {
+  const fromBuffer = detectMimeTypeFromBufferSignature(fileBuffer);
+  if (fromBuffer) {
+    return fromBuffer;
+  }
+
+  if (declaredMimeType && acceptedMimeTypes.has(declaredMimeType)) {
+    return declaredMimeType;
+  }
+
+  const fromExtension = detectMimeTypeFromExtension(fileName);
+  if (fromExtension) {
+    return fromExtension;
+  }
+
+  return "";
+}
+
+function detectMimeTypeFromExtension(fileName: string) {
+  const lowerName = (fileName || "").toLowerCase().trim();
+  if (!lowerName) {
+    return "";
+  }
+  const lastDot = lowerName.lastIndexOf(".");
+  if (lastDot < 0) {
+    return "";
+  }
+  const extension = lowerName.slice(lastDot);
+  return supportedFileExtensions.get(extension) || "";
+}
+
+function detectMimeTypeFromBufferSignature(fileBuffer: Buffer) {
+  if (fileBuffer.length >= 5 && fileBuffer.subarray(0, 5).toString("utf8") === "%PDF-") {
+    return "application/pdf";
+  }
+
+  if (
+    fileBuffer.length >= 3 &&
+    fileBuffer[0] === 0xff &&
+    fileBuffer[1] === 0xd8 &&
+    fileBuffer[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+
+  if (
+    fileBuffer.length >= 8 &&
+    fileBuffer[0] === 0x89 &&
+    fileBuffer[1] === 0x50 &&
+    fileBuffer[2] === 0x4e &&
+    fileBuffer[3] === 0x47 &&
+    fileBuffer[4] === 0x0d &&
+    fileBuffer[5] === 0x0a &&
+    fileBuffer[6] === 0x1a &&
+    fileBuffer[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+
+  if (
+    fileBuffer.length >= 12 &&
+    fileBuffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    fileBuffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+
+  if (fileBuffer.length >= 12 && fileBuffer.subarray(4, 8).toString("ascii") === "ftyp") {
+    const majorBrand = fileBuffer.subarray(8, 12).toString("ascii").toLowerCase();
+    if (heicFileBrands.has(majorBrand)) {
+      return "image/heic";
+    }
+    if (heifFileBrands.has(majorBrand)) {
+      return "image/heif";
+    }
+  }
+
+  return "";
+}
+
+function classifyUploadKindFromMimeType(mimeType: string): "pdf" | "image" | "unknown" {
+  if (!mimeType) {
+    return "unknown";
+  }
+  if (mimeType === "application/pdf") {
+    return "pdf";
+  }
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  return "unknown";
+}
+
+function classifyNormalizationPath({
+  heicConverted,
+  orientationCorrected,
+  resized
+}: {
+  heicConverted: boolean;
+  orientationCorrected: boolean;
+  resized: boolean;
+}): UploadNormalizationPath {
+  if (heicConverted && orientationCorrected && resized) {
+    return "HEIC_TO_JPEG_ROTATE_AND_RESIZE";
+  }
+  if (heicConverted && orientationCorrected) {
+    return "HEIC_TO_JPEG_AND_ROTATE";
+  }
+  if (heicConverted && resized) {
+    return "HEIC_TO_JPEG_AND_RESIZE";
+  }
+  if (heicConverted) {
+    return "HEIC_TO_JPEG_ONLY";
+  }
+  if (orientationCorrected && resized) {
+    return "ROTATE_AND_RESIZE";
+  }
+  if (orientationCorrected) {
+    return "ROTATE_ONLY";
+  }
+  if (resized) {
+    return "RESIZE_ONLY";
+  }
+  return "NONE";
+}
+
+async function readImageMetadataSafe(fileBuffer: Buffer) {
+  try {
+    const metadata = await sharp(fileBuffer, { failOn: "none" }).metadata();
+    return {
+      width: metadata.width ?? null,
+      height: metadata.height ?? null
+    };
+  } catch {
+    return {
+      width: null,
+      height: null
+    };
+  }
+}
+
+async function convertHeicToJpeg(fileBuffer: Buffer) {
+  try {
+    const heicModule = await import("heic-convert");
+    const converter = ("default" in heicModule ? heicModule.default : heicModule) as unknown;
+    if (typeof converter !== "function") {
+      throw new Error("HEIC converter module did not expose a conversion function.");
+    }
+    const converted = await (
+      converter as (options: {
+        buffer: Buffer;
+        format: "JPEG";
+        quality: number;
+      }) => Promise<Buffer | Uint8Array | ArrayBuffer>
+    )({
+      buffer: fileBuffer,
+      format: "JPEG",
+      quality: NORMALIZED_JPEG_QUALITY / 100
+    });
+    if (Buffer.isBuffer(converted)) {
+      return converted;
+    }
+    if (converted instanceof Uint8Array) {
+      return Buffer.from(converted);
+    }
+    if (converted instanceof ArrayBuffer) {
+      return Buffer.from(new Uint8Array(converted));
+    }
+    return Buffer.from(converted as ArrayBufferLike);
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? error.message : "HEIC/HEIF conversion failed."
+    );
+  }
+}
+
+export function isAcceptedMimeType(file: File) {
+  if (!file.type) {
+    return true;
+  }
+  return acceptedMimeTypes.has(file.type.toLowerCase());
 }
 
 export function logRouteStage(stage: string, extra?: Record<string, unknown>) {
@@ -487,6 +970,30 @@ export function readScanDiagnosticsFromExtraction(extraction: Record<string, unk
   };
 }
 
+export function resolveNormalizationQualityOutcome({
+  normalizationApplied,
+  extraction
+}: {
+  normalizationApplied: boolean;
+  extraction: {
+    header?: unknown;
+    lines?: unknown;
+    scanStatus?: unknown;
+  };
+}) {
+  if (!normalizationApplied) {
+    return "NOT_APPLICABLE" as const;
+  }
+  const scanStatus = typeof extraction.scanStatus === "string" ? extraction.scanStatus : "UNREADABLE";
+  const header = extraction.header && typeof extraction.header === "object" ? (extraction.header as Record<string, unknown>) : null;
+  const headerFieldCount = countPopulatedFields(header);
+  const lineCount = Array.isArray(extraction.lines) ? extraction.lines.length : 0;
+  const completeEnough =
+    scanStatus === "COMPLETE" ||
+    (scanStatus === "PARTIAL" && (headerFieldCount >= 4 || lineCount > 0));
+  return completeEnough ? ("IMPROVED" as const) : ("STILL_FAILED" as const);
+}
+
 function resolveQrFailureStageFromRoute({
   decodeStatus,
   parseStatus,
@@ -615,19 +1122,67 @@ function formatErrorForDebug(error: unknown) {
   };
 }
 
-export async function saveReceiptFile(receipt: File) {
+export async function saveReceiptFile({
+  originalFile,
+  normalizedFileBuffer,
+  normalizedMimeType,
+  auditMetadata
+}: {
+  originalFile: File;
+  normalizedFileBuffer: Buffer;
+  normalizedMimeType: string;
+  auditMetadata: ReceiptUploadAuditMetadata;
+}) {
   const uploadsDir = path.join(process.cwd(), "public", "uploads", "inventory-receipts");
   await mkdir(uploadsDir, { recursive: true });
-  const extension = receipt.name.includes(".") ? receipt.name.split(".").pop() : "bin";
-  const safeFileName = `${Date.now()}-${randomUUID()}.${extension}`;
+  const normalizedExtension =
+    extensionFromMimeType(normalizedMimeType) ||
+    (originalFile.name.includes(".") ? originalFile.name.split(".").pop() : "bin") ||
+    "bin";
+  const safeFileBase = `${Date.now()}-${randomUUID()}`;
+  const safeFileName = `${safeFileBase}.${normalizedExtension}`;
   const absoluteFilePath = path.join(uploadsDir, safeFileName);
-  const arrayBuffer = await receipt.arrayBuffer();
-  await writeFile(absoluteFilePath, Buffer.from(arrayBuffer));
+  const metadataFileName = `${safeFileBase}.meta.json`;
+  const metadataPath = path.join(uploadsDir, metadataFileName);
+  await writeFile(absoluteFilePath, normalizedFileBuffer);
+  await writeFile(
+    metadataPath,
+    JSON.stringify(
+      {
+        ...auditMetadata,
+        stored: {
+          createdAt: new Date().toISOString(),
+          storedFileName: safeFileName,
+          storedMimeType: normalizedMimeType,
+          storedSize: normalizedFileBuffer.length
+        }
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
 
   return {
     receiptUrl: `/uploads/inventory-receipts/${safeFileName}`,
-    receiptFileName: receipt.name
+    receiptFileName: originalFile.name
   };
+}
+
+function extensionFromMimeType(mimeType: string) {
+  if (mimeType === "application/pdf") {
+    return "pdf";
+  }
+  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
+    return "jpg";
+  }
+  if (mimeType === "image/png") {
+    return "png";
+  }
+  if (mimeType === "image/webp") {
+    return "webp";
+  }
+  return "";
 }
 
 export async function suggestSupplier({

@@ -6,9 +6,7 @@ import { prisma } from "@/lib/prisma";
 import {
   apiError,
   buildSafeFailureResponse,
-  detectUploadKind,
   hydrateSupplierInExtraction,
-  isAcceptedMimeType,
   isDebugRequested,
   isExtractionResult,
   isQrExtractionResult,
@@ -19,6 +17,8 @@ import {
   parseQrAssistCrop,
   readDebugFlagsFromExtraction,
   readScanDiagnosticsFromExtraction,
+  resolveNormalizationQualityOutcome,
+  resolveReceiptUploadIngestion,
   resolveReceiptIntakeMessage,
   saveReceiptFile,
   suggestSupplier,
@@ -48,27 +48,66 @@ export async function POST(request: NextRequest) {
     if (!(receiptFileEntry instanceof File)) {
       return apiError(400, "Receipt file is required.");
     }
-    if (receiptFileEntry.size <= 0) {
-      return apiError(400, "Receipt file is empty.");
-    }
-    if (!isAcceptedMimeType(receiptFileEntry)) {
-      return apiError(415, "Unsupported file type. Please upload a PDF or image receipt.");
+
+    const ingestedUpload = await resolveReceiptUploadIngestion(receiptFileEntry);
+    if (!ingestedUpload.ok) {
+      logRouteStage("ingestion_rejected", {
+        stage: ingestedUpload.stage,
+        reason: ingestedUpload.message
+      });
+      return apiError(ingestedUpload.status, ingestedUpload.message);
     }
 
-    const uploadKind = detectUploadKind(receiptFileEntry);
+    const uploadKind = ingestedUpload.uploadKind;
     const isPdfUpload = uploadKind === "pdf";
     const isImageUpload = uploadKind === "image";
     logRouteStage("file_type_detected", {
       mimeType: receiptFileEntry.type || "unknown",
+      effectiveMimeType: ingestedUpload.effectiveMimeType,
       uploadKind
+    });
+    logRouteStage("upload_normalization_path", {
+      normalizationPath: ingestedUpload.normalizationPath,
+      normalizationApplied: ingestedUpload.normalizationApplied,
+      heicConverted: ingestedUpload.auditMetadata.normalization.heicConverted,
+      orientationCorrected: ingestedUpload.auditMetadata.normalization.orientationCorrected,
+      resized: ingestedUpload.auditMetadata.normalization.resized,
+      pngConvertedForStability: ingestedUpload.auditMetadata.normalization.pngConvertedForStability
     });
     logRouteStage(isPdfUpload ? "pdf_branch_entered" : "image_branch_entered");
 
-    savedFile = await saveReceiptFile(receiptFileEntry);
-    const fileBuffer = Buffer.from(await receiptFileEntry.arrayBuffer());
-    logRouteStage("file_loaded", {
-      bytes: receiptFileEntry.size
+    savedFile = await saveReceiptFile({
+      originalFile: receiptFileEntry,
+      normalizedFileBuffer: ingestedUpload.fileBuffer,
+      normalizedMimeType: ingestedUpload.effectiveMimeType,
+      auditMetadata: ingestedUpload.auditMetadata
     });
+    const fileBuffer = ingestedUpload.fileBuffer;
+    logRouteStage("file_loaded", {
+      bytes: fileBuffer.length,
+      originalBytes: ingestedUpload.auditMetadata.original.size
+    });
+    debugLog(
+      "[inventory][receipt-intake][ingestion]",
+      {
+        originalFileName: ingestedUpload.auditMetadata.original.fileName,
+        originalMimeType: ingestedUpload.auditMetadata.original.declaredMimeType || "unknown",
+        effectiveMimeType: ingestedUpload.auditMetadata.original.effectiveMimeType,
+        normalizedMimeType: ingestedUpload.auditMetadata.normalized.mimeType,
+        originalBytes: ingestedUpload.auditMetadata.original.size,
+        normalizedBytes: ingestedUpload.auditMetadata.normalized.size,
+        originalWidth: ingestedUpload.auditMetadata.original.width,
+        originalHeight: ingestedUpload.auditMetadata.original.height,
+        normalizedWidth: ingestedUpload.auditMetadata.normalized.width,
+        normalizedHeight: ingestedUpload.auditMetadata.normalized.height,
+        normalizationPath: ingestedUpload.auditMetadata.normalization.path,
+        orientationCorrected: ingestedUpload.auditMetadata.normalization.orientationCorrected,
+        heicConverted: ingestedUpload.auditMetadata.normalization.heicConverted,
+        resized: ingestedUpload.auditMetadata.normalization.resized,
+        pngConvertedForStability: ingestedUpload.auditMetadata.normalization.pngConvertedForStability
+      },
+      { channel: "inventory-receipt" }
+    );
 
     const extractionModule = await import("@/lib/inventory-receipt-intake").catch((error) => {
       logExtractError(routeLabel, "module_import", error);
@@ -124,7 +163,7 @@ export async function POST(request: NextRequest) {
       logRouteStage("qr_decode_started", { mode: "decode-only", uploadKind });
       const qrOnly = await extractQrOnlyFn({
         fileBuffer,
-        mimeType: receiptFileEntry.type,
+        mimeType: ingestedUpload.effectiveMimeType,
         qrAssistCrop
       }).catch((error: unknown) => {
         logExtractError(routeLabel, "extract_qr_only", error);
@@ -165,8 +204,8 @@ export async function POST(request: NextRequest) {
         receipt: {
           url: savedFile.receiptUrl,
           fileName: savedFile.receiptFileName,
-          mimeType: receiptFileEntry.type,
-          size: receiptFileEntry.size
+          mimeType: receiptFileEntry.type || ingestedUpload.effectiveMimeType,
+          size: ingestedUpload.auditMetadata.original.size
         },
         qrDecode: {
           success: qrOnly.decodeStatus === "DECODED",
@@ -219,7 +258,7 @@ export async function POST(request: NextRequest) {
 
     const extraction = await extractFn({
       fileBuffer,
-      mimeType: receiptFileEntry.type,
+      mimeType: ingestedUpload.effectiveMimeType,
       fileName: receiptFileEntry.name,
       inventoryItems,
       qrAssistCrop,
@@ -262,6 +301,21 @@ export async function POST(request: NextRequest) {
     const message = resolveReceiptIntakeMessage(extraction);
     const debugFlags = readDebugFlagsFromExtraction(extraction as unknown as Record<string, unknown>);
     const scanDiagnostics = readScanDiagnosticsFromExtraction(extraction as unknown as Record<string, unknown>);
+    const normalizationOutcome = resolveNormalizationQualityOutcome({
+      normalizationApplied: ingestedUpload.normalizationApplied,
+      extraction
+    });
+    debugLog(
+      "[inventory][receipt-intake][normalization-outcome]",
+      {
+        normalizationPath: ingestedUpload.normalizationPath,
+        normalizationApplied: ingestedUpload.normalizationApplied,
+        outcome: normalizationOutcome,
+        scanStatus: extraction.scanStatus,
+        extractedLineCount: Array.isArray(extraction.lines) ? extraction.lines.length : 0
+      },
+      { channel: "inventory-receipt" }
+    );
 
     const supplierSuggestion = await suggestSupplier({
       extractedSupplierName: hydratedSupplier.headerSupplierAfter,
@@ -297,8 +351,8 @@ export async function POST(request: NextRequest) {
         receipt: {
           url: savedFile.receiptUrl,
           fileName: savedFile.receiptFileName,
-          mimeType: receiptFileEntry.type,
-          size: receiptFileEntry.size
+          mimeType: receiptFileEntry.type || ingestedUpload.effectiveMimeType,
+          size: ingestedUpload.auditMetadata.original.size
         },
         extracted: extraction,
         supplierSuggestion,
@@ -325,8 +379,8 @@ export async function POST(request: NextRequest) {
       receipt: {
         url: savedFile.receiptUrl,
         fileName: savedFile.receiptFileName,
-        mimeType: receiptFileEntry.type,
-        size: receiptFileEntry.size
+        mimeType: receiptFileEntry.type || ingestedUpload.effectiveMimeType,
+        size: ingestedUpload.auditMetadata.original.size
       },
       extracted: extraction,
       supplierSuggestion,
