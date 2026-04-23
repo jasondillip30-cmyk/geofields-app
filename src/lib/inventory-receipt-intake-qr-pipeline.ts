@@ -38,6 +38,7 @@ import {
 import { containsAny } from "@/lib/inventory-receipt-intake-parse-utils";
 import type {
   ReceiptHeaderExtraction,
+  ReceiptQrDecodeAttempt,
   ReceiptLineCandidate,
   ReceiptQrAssistCrop,
   ReceiptQrContentType,
@@ -45,7 +46,7 @@ import type {
   ReceiptQrResult,
   ReceiptVerificationLookupStatus
 } from "@/lib/inventory-receipt-intake-types";
-import { debugLog } from "@/lib/observability";
+import { debugLog, isReceiptTraceEnabled, receiptTraceLog } from "@/lib/observability";
 
 interface TraLookupResult {
   attempted: boolean;
@@ -64,6 +65,27 @@ interface TraLookupResult {
   debugRawTextPreview: string;
   debugFieldCandidates: Array<{ field: string; value: string; confidence: number; source: string }>;
 }
+
+interface ReceiptPreprocessedImageVariants {
+  primary: {
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+    preprocessingSteps: string[];
+  };
+  qrEnhanced: {
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+    preprocessingSteps: string[];
+  } | null;
+}
+
+let runtimeSelfCheckLogged = false;
 
 const PDF_MODULE_WARNING_PREFIX = "[PDF_MODULE_ERROR]";
 const TRA_LOADING_SHELL_RETRY_HINT =
@@ -111,13 +133,37 @@ export async function extractQrDataFromReceipt({
   fileBuffer,
   mimeType,
   qrAssistCrop = null,
+  preprocessedImages = null,
   mode = "full"
 }: {
   fileBuffer: Buffer;
   mimeType: string;
   qrAssistCrop?: ReceiptQrAssistCrop | null;
+  preprocessedImages?: ReceiptPreprocessedImageVariants | null;
   mode?: "full" | "decode-only";
 }): Promise<ReceiptQrResult> {
+  receiptTraceLog("[inventory][receipt-intake][qr][image-input]", {
+    mimeType,
+    fileBytes: fileBuffer.length,
+    preprocessedPrimary: preprocessedImages?.primary
+      ? {
+          mimeType: preprocessedImages.primary.mimeType,
+          bytes: preprocessedImages.primary.size,
+          width: preprocessedImages.primary.width,
+          height: preprocessedImages.primary.height,
+          preprocessingSteps: preprocessedImages.primary.preprocessingSteps
+        }
+      : null,
+    preprocessedEnhanced: preprocessedImages?.qrEnhanced
+      ? {
+          mimeType: preprocessedImages.qrEnhanced.mimeType,
+          bytes: preprocessedImages.qrEnhanced.size,
+          width: preprocessedImages.qrEnhanced.width,
+          height: preprocessedImages.qrEnhanced.height,
+          preprocessingSteps: preprocessedImages.qrEnhanced.preprocessingSteps
+        }
+      : null
+  });
   if (process.env.NODE_ENV !== "production") {
     debugLog("[inventory][receipt-intake][qr][stage]", {
       stage: "image_received",
@@ -167,92 +213,256 @@ export async function extractQrDataFromReceipt({
     });
   }
 
+  const attemptLabels: string[] = [];
+  const attemptOutcomes: ReceiptQrDecodeAttempt[] = [];
+  let totalVariantCount = 0;
+  const ATTEMPT_TRACE_LOG_LIMIT = 120;
+  let attemptTraceLogCount = 0;
+  let attemptTraceSuppressedCount = 0;
+
+  const logAttemptTrace = (payload: Record<string, unknown>) => {
+    if (attemptTraceLogCount < ATTEMPT_TRACE_LOG_LIMIT) {
+      receiptTraceLog("[inventory][receipt-intake][qr][attempt]", payload);
+      attemptTraceLogCount += 1;
+      return;
+    }
+    attemptTraceSuppressedCount += 1;
+  };
+
+  const flushSuppressedAttemptTrace = () => {
+    if (attemptTraceSuppressedCount <= 0) {
+      return;
+    }
+    receiptTraceLog("[inventory][receipt-intake][qr][attempt-suppressed]", {
+      suppressedAttempts: attemptTraceSuppressedCount,
+      loggedAttempts: attemptTraceLogCount,
+      totalAttempts: attemptLabels.length
+    });
+  };
+
   try {
-    const image = sharp(fileBuffer, { failOn: "none" }).rotate();
-    const metadata = await image.metadata();
+    const primarySourceBuffer =
+      preprocessedImages?.primary?.buffer && preprocessedImages.primary.buffer.length > 0
+        ? preprocessedImages.primary.buffer
+        : fileBuffer;
+    const primaryImage = sharp(primarySourceBuffer, { failOn: "none" }).rotate();
+    const primaryMetadata = await primaryImage.metadata();
     const isQrOnlyCandidate = Boolean(
-      metadata.width && metadata.height && looksLikeQrOnlyImage(metadata.width, metadata.height)
+      primaryMetadata.width && primaryMetadata.height && looksLikeQrOnlyImage(primaryMetadata.width, primaryMetadata.height)
     );
-    if (!metadata.width || !metadata.height) {
+
+    if (!primaryMetadata.width || !primaryMetadata.height) {
       return buildQrFailureResult({
         decodeStatus: "NOT_DETECTED",
         failureReason: "No QR detected",
         warnings: ["QR not detected. Continuing with OCR fallback."],
         imageLoaded: false,
-        isQrOnlyImage: isQrOnlyCandidate
+        isQrOnlyImage: isQrOnlyCandidate,
+        attemptedPasses: attemptLabels,
+        attemptOutcomes,
+        variantCount: totalVariantCount
       });
     }
 
-    const qrVariants = await buildQrDetectionVariants({
-      image,
-      width: metadata.width,
-      height: metadata.height,
-      qrAssistCrop
+    const pass1Variants = await buildQrDetectionVariants({
+      image: primaryImage,
+      width: primaryMetadata.width,
+      height: primaryMetadata.height,
+      qrAssistCrop,
+      enhancementMode: "pass1",
+      labelPrefix: "pass1-primary"
     });
+
+    const enhancedSourceBuffer =
+      preprocessedImages?.qrEnhanced?.buffer && preprocessedImages.qrEnhanced.buffer.length > 0
+        ? preprocessedImages.qrEnhanced.buffer
+        : primarySourceBuffer;
+    let enhancedMetadata: {
+      width: number | null;
+      height: number | null;
+    } = { width: null, height: null };
+    let pass2Variants: Array<{ label: string; data: Uint8ClampedArray; width: number; height: number }> = [];
+    try {
+      const enhancedImage = sharp(enhancedSourceBuffer, { failOn: "none" }).rotate();
+      const metadata = await enhancedImage.metadata();
+      enhancedMetadata = {
+        width: metadata.width ?? null,
+        height: metadata.height ?? null
+      };
+      if (metadata.width && metadata.height) {
+        pass2Variants = await buildQrDetectionVariants({
+          image: enhancedImage,
+          width: metadata.width,
+          height: metadata.height,
+          qrAssistCrop,
+          enhancementMode: "pass2",
+          labelPrefix: "pass2-enhanced"
+        });
+      }
+    } catch {
+      pass2Variants = [];
+    }
+    totalVariantCount = pass1Variants.length + pass2Variants.length;
+
     if (process.env.NODE_ENV !== "production") {
       debugLog("[inventory][receipt-intake][qr][stage]", {
         stage: "image_loaded",
-        width: metadata.width,
-        height: metadata.height,
+        width: primaryMetadata.width,
+        height: primaryMetadata.height,
         isQrOnlyCandidate
       });
       debugLog("[inventory][receipt-intake][qr][stage]", {
         stage: "preprocessing_applied",
-        variantCount: qrVariants.length,
-        samplePasses: qrVariants.slice(0, 8).map((variant) => variant.label)
+        variantCount: totalVariantCount,
+        pass1VariantCount: pass1Variants.length,
+        pass2VariantCount: pass2Variants.length,
+        samplePasses: [...pass1Variants, ...pass2Variants].slice(0, 10).map((variant) => variant.label)
       });
     }
+    receiptTraceLog("[inventory][receipt-intake][qr][variants]", {
+      primary: {
+        width: primaryMetadata.width,
+        height: primaryMetadata.height,
+        bytes: primarySourceBuffer.length
+      },
+      enhanced: {
+        width: enhancedMetadata.width,
+        height: enhancedMetadata.height,
+        bytes: enhancedSourceBuffer.length
+      },
+      pass1VariantCount: pass1Variants.length,
+      pass2VariantCount: pass2Variants.length,
+      totalVariantCount,
+      qrAssistCropApplied: isValidQrAssistCrop(qrAssistCrop),
+      isQrOnlyCandidate
+    });
+
     const decoderStrategies = await getQrDecoderStrategies();
+    await logQrRuntimeSelfCheckOnce(decoderStrategies);
     if (decoderStrategies.length === 0) {
       return buildQrFailureResult({
         decodeStatus: "DECODE_FAILED",
         failureReason: "QR detected but decode failed",
         warnings: ["QR decoder is unavailable. Continuing with OCR fallback."],
         isQrOnlyImage: isQrOnlyCandidate,
-        attemptedPasses: qrVariants.map((variant) => variant.label).slice(0, 100),
-        variantCount: qrVariants.length
+        attemptedPasses: attemptLabels,
+        attemptOutcomes,
+        variantCount: totalVariantCount
       });
     }
+
+    const decoderNames = decoderStrategies.map((strategy) => strategy.name);
     if (process.env.NODE_ENV !== "production") {
       debugLog("[inventory][receipt-intake][qr][decode]", {
         stage: "decode_started",
-        decoderStrategies: decoderStrategies.map((strategy) => strategy.name),
-        variantCount: qrVariants.length
+        decoderStrategies: decoderNames,
+        pass1VariantCount: pass1Variants.length,
+        pass2VariantCount: pass2Variants.length,
+        variantCount: totalVariantCount
       });
     }
+    receiptTraceLog("[inventory][receipt-intake][qr][decode-started]", {
+      decoderStrategies: decoderNames,
+      pass1VariantCount: pass1Variants.length,
+      pass2VariantCount: pass2Variants.length,
+      totalVariantCount
+    });
 
-    const attemptLabels: string[] = [];
-    for (const variant of qrVariants) {
-      for (const decoderStrategy of decoderStrategies) {
-        const attemptLabel = `${variant.label}|${decoderStrategy.name}`;
-        attemptLabels.push(attemptLabel);
-        const decodedRaw = decoderStrategy.decode(variant.data, variant.width, variant.height);
-        if (!decodedRaw) {
-          continue;
-        }
-        const parsedResult = await resolveQrDecodedResult({
-          rawValue: decodedRaw,
-          decodePass: attemptLabel,
-          isQrOnlyImage: isQrOnlyCandidate,
-          attemptedPasses: attemptLabels,
-          variantCount: qrVariants.length,
-          mode
-        });
-        if (process.env.NODE_ENV !== "production") {
-          debugLog("[inventory][receipt-intake][qr][decode]", {
-            stage: "decode_result",
+    const runPass = async ({
+      variants,
+      passGroup
+    }: {
+      variants: Array<{ label: string; data: Uint8ClampedArray; width: number; height: number }>;
+      passGroup: "pass1-primary" | "pass2-enhanced";
+    }) => {
+      for (const variant of variants) {
+        for (const decoderStrategy of decoderStrategies) {
+          const attemptLabel = `${variant.label}|${decoderStrategy.name}`;
+          attemptLabels.push(attemptLabel);
+          let decodedRaw: string | null = null;
+          let decodeError = "";
+          try {
+            decodedRaw = decoderStrategy.decode(variant.data, variant.width, variant.height);
+          } catch (error) {
+            decodeError = error instanceof Error ? error.message : "Decoder threw.";
+            decodedRaw = null;
+          }
+          const success = Boolean(decodedRaw);
+          attemptOutcomes.push({
+            attemptLabel,
+            decoder: decoderStrategy.name,
+            passGroup,
+            success,
+            rawLength: success ? decodedRaw?.length || 0 : 0
+          });
+
+          logAttemptTrace({
+            attemptLabel,
+            passGroup,
+            decoder: decoderStrategy.name,
+            success,
+            rawLength: success ? decodedRaw?.length || 0 : 0,
+            variantWidth: variant.width,
+            variantHeight: variant.height,
+            error: decodeError
+          });
+          if (decodeError) {
+            continue;
+          }
+
+          if (!decodedRaw) {
+            continue;
+          }
+          const parsedResult = await resolveQrDecodedResult({
+            rawValue: decodedRaw,
+            decodePass: attemptLabel,
+            isQrOnlyImage: isQrOnlyCandidate,
+            attemptedPasses: attemptLabels,
+            attemptOutcomes,
+            variantCount: totalVariantCount,
+            mode
+          });
+          if (process.env.NODE_ENV !== "production") {
+            debugLog("[inventory][receipt-intake][qr][decode]", {
+              stage: "decode_result",
+              detected: true,
+              pass: attemptLabel,
+              decoder: decoderStrategy.name,
+              passGroup,
+              rawQrContent: truncateQrLogValue(decodedRaw)
+            });
+          }
+          receiptTraceLog("[inventory][receipt-intake][qr][decode-result]", {
             detected: true,
             pass: attemptLabel,
+            passGroup,
             decoder: decoderStrategy.name,
-            rawQrContent: truncateQrLogValue(decodedRaw)
+            rawLength: decodedRaw.length
           });
+          flushSuppressedAttemptTrace();
+          return parsedResult;
         }
-        return parsedResult;
       }
+      return null;
+    };
+
+    const primaryPassResult = await runPass({
+      variants: pass1Variants,
+      passGroup: "pass1-primary"
+    });
+    if (primaryPassResult) {
+      return primaryPassResult;
     }
 
-    const likelyQrRegion =
-      isValidQrAssistCrop(qrAssistCrop) || isQrOnlyCandidate;
+    const enhancedPassResult = await runPass({
+      variants: pass2Variants,
+      passGroup: "pass2-enhanced"
+    });
+    if (enhancedPassResult) {
+      return enhancedPassResult;
+    }
+
+    const likelyQrRegion = isValidQrAssistCrop(qrAssistCrop) || isQrOnlyCandidate;
     const decodeStatus: ReceiptQrDecodeStatus = likelyQrRegion ? "DECODE_FAILED" : "NOT_DETECTED";
     const failureMessage =
       decodeStatus === "DECODE_FAILED"
@@ -264,26 +474,45 @@ export async function extractQrDataFromReceipt({
         detected: false,
         decodeStatus,
         attemptedPasses: attemptLabels.slice(0, 50),
-        decoderStrategies: decoderStrategies.map((strategy) => strategy.name)
+        decoderStrategies: decoderNames
       });
     }
+    receiptTraceLog("[inventory][receipt-intake][qr][decode-result]", {
+      detected: false,
+      decodeStatus,
+      attemptedPasses: attemptLabels.length,
+      attemptOutcomes: attemptOutcomes.length,
+      decoderStrategies: decoderNames
+    });
+    flushSuppressedAttemptTrace();
 
     return buildQrFailureResult({
       decodeStatus,
       failureReason: decodeStatus === "DECODE_FAILED" ? "QR detected but decode failed" : "No QR detected",
       isQrOnlyImage: isQrOnlyCandidate,
       attemptedPasses: attemptLabels,
-      variantCount: qrVariants.length,
+      attemptOutcomes,
+      variantCount: totalVariantCount,
       warnings: isValidQrAssistCrop(qrAssistCrop)
         ? ["Manual QR area could not be decoded. Continuing with OCR fallback.", failureMessage]
         : [failureMessage]
     });
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unexpected QR decode failure.";
+    flushSuppressedAttemptTrace();
+    receiptTraceLog("[inventory][receipt-intake][qr][decode-exception]", {
+      reason,
+      attemptedPasses: attemptLabels.length,
+      attemptOutcomes: attemptOutcomes.length
+    });
     return buildQrFailureResult({
       decodeStatus: "DECODE_FAILED",
       failureReason: "QR detected but decode failed",
       warnings: ["QR detected but could not be decoded. Continuing with OCR fallback."],
-      imageLoaded: false
+      imageLoaded: false,
+      attemptedPasses: attemptLabels,
+      attemptOutcomes,
+      variantCount: totalVariantCount
     });
   }
 }
@@ -310,6 +539,7 @@ async function resolveQrDecodedResult({
   decodePass,
   isQrOnlyImage = false,
   attemptedPasses = [],
+  attemptOutcomes = [],
   variantCount = 0,
   mode
 }: {
@@ -317,6 +547,7 @@ async function resolveQrDecodedResult({
   decodePass: string;
   isQrOnlyImage?: boolean;
   attemptedPasses?: string[];
+  attemptOutcomes?: ReceiptQrDecodeAttempt[];
   variantCount?: number;
   mode: "full" | "decode-only";
 }) {
@@ -327,6 +558,7 @@ async function resolveQrDecodedResult({
       decodePass,
       isQrOnlyImage,
       attemptedPasses,
+      attemptOutcomes,
       variantCount
     });
   }
@@ -336,6 +568,7 @@ async function resolveQrDecodedResult({
       decodePass,
       isQrOnlyImage,
       attemptedPasses,
+      attemptOutcomes,
       variantCount
     })
   );
@@ -351,6 +584,12 @@ function logDecodedRawPayload(rawValue: string, decodePass: string) {
     rawLength: exactRaw.length,
     rawPreview: preview
   });
+  receiptTraceLog("[inventory][receipt-intake][qr][raw-decoder]", {
+    decodeSucceeded: exactRaw.length > 0,
+    decodePass: decodePass || "unknown",
+    rawLength: exactRaw.length,
+    rawPreview: preview
+  });
 }
 
 function buildDecodeOnlyQrResult({
@@ -358,12 +597,14 @@ function buildDecodeOnlyQrResult({
   decodePass,
   isQrOnlyImage,
   attemptedPasses,
+  attemptOutcomes,
   variantCount
 }: {
   rawValue: string;
   decodePass: string;
   isQrOnlyImage: boolean;
   attemptedPasses: string[];
+  attemptOutcomes: ReceiptQrDecodeAttempt[];
   variantCount: number;
 }): ReceiptQrResult {
   const rawDecodedValue = typeof rawValue === "string" ? rawValue : "";
@@ -398,7 +639,8 @@ function buildDecodeOnlyQrResult({
         success: true,
         status: "DECODED",
         pass: decodePass,
-        reason: ""
+        reason: "",
+        attemptCount: attemptOutcomes.length || attemptedPasses.length
       },
       classification: {
         success: true,
@@ -423,9 +665,58 @@ function buildDecodeOnlyQrResult({
       imageLoaded: true,
       attemptedPasses,
       successfulPass: decodePass,
-      variantCount
+      variantCount,
+      attemptOutcomes
     }
   };
+}
+
+async function logQrRuntimeSelfCheckOnce(
+  decoderStrategies: Array<{
+    name: string;
+  }>
+) {
+  if (runtimeSelfCheckLogged || !isReceiptTraceEnabled()) {
+    return;
+  }
+  runtimeSelfCheckLogged = true;
+
+  let sharpTransformChainSupported = false;
+  let sharpTransformError = "";
+  try {
+    const probeBuffer = await sharp({
+      create: {
+        width: 24,
+        height: 24,
+        channels: 3,
+        background: {
+          r: 255,
+          g: 255,
+          b: 255
+        }
+      }
+    })
+      .rotate()
+      .grayscale()
+      .normalize()
+      .sharpen()
+      .png()
+      .toBuffer();
+    sharpTransformChainSupported = probeBuffer.length > 0;
+  } catch (error) {
+    sharpTransformError =
+      error instanceof Error ? error.message : "Sharp preprocessing self-check failed.";
+  }
+
+  receiptTraceLog("[inventory][receipt-intake][qr][runtime-self-check]", {
+    sharp: {
+      transformChain: ["rotate", "grayscale", "normalize", "sharpen"],
+      supported: sharpTransformChainSupported,
+      error: sharpTransformError
+    },
+    decoders: decoderStrategies.map((decoderStrategy) => decoderStrategy.name),
+    decoderCount: decoderStrategies.length
+  });
 }
 
 async function finalizeQrResult(qrResult: ReceiptQrResult): Promise<ReceiptQrResult> {

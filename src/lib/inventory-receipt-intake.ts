@@ -72,6 +72,25 @@ const qrOcrCompletionFields: Array<keyof ReceiptHeaderExtraction> = [
   "itemCount"
 ];
 
+type ReceiptPreprocessedImageVariants = {
+  primary: {
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+    preprocessingSteps: string[];
+  };
+  qrEnhanced: {
+    buffer: Buffer;
+    mimeType: string;
+    size: number;
+    width: number | null;
+    height: number | null;
+    preprocessingSteps: string[];
+  } | null;
+};
+
 function hasHeaderFieldValue(value: unknown) {
   if (typeof value === "number") {
     return Number.isFinite(value) && value > 0;
@@ -133,6 +152,7 @@ export async function extractReceiptData({
   fileName,
   inventoryItems,
   qrAssistCrop = null,
+  preprocessedImages = null,
   debug = false
 }: {
   fileBuffer: Buffer;
@@ -140,9 +160,15 @@ export async function extractReceiptData({
   fileName: string;
   inventoryItems: InventoryReferenceItem[];
   qrAssistCrop?: ReceiptQrAssistCrop | null;
+  preprocessedImages?: ReceiptPreprocessedImageVariants | null;
   debug?: boolean;
 }): Promise<ReceiptExtractionResult> {
-  const qrResult = await extractQrDataFromReceipt({ fileBuffer, mimeType, qrAssistCrop });
+  const qrResult = await extractQrDataFromReceipt({
+    fileBuffer,
+    mimeType,
+    qrAssistCrop,
+    preprocessedImages
+  });
   const warnings: string[] = [];
   const verificationLookup = qrResult.stages.verificationLookup;
   const traLookupSucceeded =
@@ -181,6 +207,7 @@ export async function extractReceiptData({
       extraction = await extractRawText({
         fileBuffer,
         mimeType,
+        enhancedFileBuffer: preprocessedImages?.qrEnhanced?.buffer || null,
         timeoutMs: OCR_ENRICHMENT_TIMEOUT_MS
       });
       if (extraction.warning) {
@@ -439,16 +466,19 @@ export async function extractReceiptDataFromRawPayload({
 export async function extractQrDataOnly({
   fileBuffer,
   mimeType,
-  qrAssistCrop = null
+  qrAssistCrop = null,
+  preprocessedImages = null
 }: {
   fileBuffer: Buffer;
   mimeType: string;
   qrAssistCrop?: ReceiptQrAssistCrop | null;
+  preprocessedImages?: ReceiptPreprocessedImageVariants | null;
 }) {
   return extractQrDataFromReceipt({
     fileBuffer,
     mimeType,
     qrAssistCrop,
+    preprocessedImages,
     mode: "decode-only"
   });
 }

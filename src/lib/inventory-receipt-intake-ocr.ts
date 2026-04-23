@@ -25,7 +25,7 @@ import type {
   ReceiptLineCandidate
 } from "@/lib/inventory-receipt-intake";
 
-export async function buildImageOcrVariants(fileBuffer: Buffer) {
+export async function buildImageOcrVariants(fileBuffer: Buffer, enhancedFileBuffer: Buffer | null = null) {
   try {
     const source = sharp(fileBuffer, { failOn: "none" }).rotate();
     const metadata = await source.metadata();
@@ -89,6 +89,14 @@ export async function buildImageOcrVariants(fileBuffer: Buffer) {
       } catch {
         // Skip failed preprocessing variants and continue with others.
       }
+    }
+
+    if (enhancedFileBuffer && enhancedFileBuffer.length > 0) {
+      resolved.push({
+        label: "mobile-enhanced",
+        buffer: enhancedFileBuffer,
+        preprocessingApplied: ["grayscale", "normalize", "contrast-boost", "sharpen"]
+      });
     }
 
     return resolved;

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireAnyApiPermission } from "@/lib/auth/api-guard";
-import { debugLog } from "@/lib/observability";
+import { receiptTraceLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import {
   apiError,
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
       bytes: fileBuffer.length,
       originalBytes: ingestedUpload.auditMetadata.original.size
     });
-    debugLog(
+    receiptTraceLog(
       "[inventory][receipt-intake][ingestion]",
       {
         originalFileName: ingestedUpload.auditMetadata.original.fileName,
@@ -104,9 +104,10 @@ export async function POST(request: NextRequest) {
         orientationCorrected: ingestedUpload.auditMetadata.normalization.orientationCorrected,
         heicConverted: ingestedUpload.auditMetadata.normalization.heicConverted,
         resized: ingestedUpload.auditMetadata.normalization.resized,
-        pngConvertedForStability: ingestedUpload.auditMetadata.normalization.pngConvertedForStability
-      },
-      { channel: "inventory-receipt" }
+        pngConvertedForStability: ingestedUpload.auditMetadata.normalization.pngConvertedForStability,
+        primaryVariant: ingestedUpload.auditMetadata.variants.primary,
+        qrEnhancedVariant: ingestedUpload.auditMetadata.variants.qrEnhanced
+      }
     );
 
     const extractionModule = await import("@/lib/inventory-receipt-intake").catch((error) => {
@@ -164,7 +165,8 @@ export async function POST(request: NextRequest) {
       const qrOnly = await extractQrOnlyFn({
         fileBuffer,
         mimeType: ingestedUpload.effectiveMimeType,
-        qrAssistCrop
+        qrAssistCrop,
+        preprocessedImages: ingestedUpload.imageVariants
       }).catch((error: unknown) => {
         logExtractError(routeLabel, "extract_qr_only", error);
         return null;
@@ -262,6 +264,7 @@ export async function POST(request: NextRequest) {
       fileName: receiptFileEntry.name,
       inventoryItems,
       qrAssistCrop,
+      preprocessedImages: ingestedUpload.imageVariants,
       debug: debugMode
     }).catch((error: unknown) => {
       logExtractError(routeLabel, "extract_receipt_data", error);
@@ -287,15 +290,14 @@ export async function POST(request: NextRequest) {
       contentType: typeof extraction.qr.contentType === "string" ? extraction.qr.contentType : "UNKNOWN"
     });
     logLookupStagesFromQr(extraction.qr);
-    debugLog(
+    receiptTraceLog(
       "[inventory][receipt-intake][supplier-mapping]",
       {
         parsedSupplierRaw: hydratedSupplier.parsedSupplierRaw,
         headerSupplierBefore: hydratedSupplier.headerSupplierBefore,
         headerSupplierAfter: hydratedSupplier.headerSupplierAfter,
         source: hydratedSupplier.source
-      },
-      { channel: "inventory-receipt" }
+      }
     );
 
     const message = resolveReceiptIntakeMessage(extraction);
@@ -305,7 +307,7 @@ export async function POST(request: NextRequest) {
       normalizationApplied: ingestedUpload.normalizationApplied,
       extraction
     });
-    debugLog(
+    receiptTraceLog(
       "[inventory][receipt-intake][normalization-outcome]",
       {
         normalizationPath: ingestedUpload.normalizationPath,
@@ -313,8 +315,7 @@ export async function POST(request: NextRequest) {
         outcome: normalizationOutcome,
         scanStatus: extraction.scanStatus,
         extractedLineCount: Array.isArray(extraction.lines) ? extraction.lines.length : 0
-      },
-      { channel: "inventory-receipt" }
+      }
     );
 
     const supplierSuggestion = await suggestSupplier({
@@ -322,14 +323,13 @@ export async function POST(request: NextRequest) {
       extractedTin: typeof extraction.header?.tin === "string" ? extraction.header.tin : "",
       suppliers
     });
-    debugLog(
+    receiptTraceLog(
       "[inventory][receipt-intake][supplier-mapping][payload]",
       {
         payloadSupplier: hydratedSupplier.headerSupplierAfter,
         suggestedSupplierId: supplierSuggestion.supplierId,
         suggestedSupplierName: supplierSuggestion.supplierName
-      },
-      { channel: "inventory-receipt" }
+      }
     );
 
     const hasPdfModuleError =

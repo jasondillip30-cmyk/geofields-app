@@ -1,13 +1,14 @@
 import { roundCurrency } from "@/lib/inventory-server";
 import { findDate, findPattern, toStringValue } from "@/lib/inventory-receipt-intake-parse-utils";
 import type {
+  ReceiptQrDecodeAttempt,
   ReceiptFieldReadability,
   ReceiptHeaderExtraction,
   ReceiptQrContentType,
   ReceiptQrDecodeStatus,
   ReceiptQrParseStatus,
   ReceiptQrResult
-} from "@/lib/inventory-receipt-intake";
+} from "@/lib/inventory-receipt-intake-types";
 
 export function buildQrFailureResult({
   decodeStatus,
@@ -17,6 +18,7 @@ export function buildQrFailureResult({
   imageLoaded = false,
   isQrOnlyImage = false,
   attemptedPasses = [],
+  attemptOutcomes = [],
   variantCount = 0
 }: {
   decodeStatus: ReceiptQrDecodeStatus;
@@ -26,6 +28,7 @@ export function buildQrFailureResult({
   imageLoaded?: boolean;
   isQrOnlyImage?: boolean;
   attemptedPasses?: string[];
+  attemptOutcomes?: ReceiptQrDecodeAttempt[];
   variantCount?: number;
 }): ReceiptQrResult {
   return {
@@ -49,7 +52,8 @@ export function buildQrFailureResult({
         success: false,
         status: decodeStatus,
         pass: "",
-        reason: failureReason
+        reason: failureReason,
+        attemptCount: attemptOutcomes.length || attemptedPasses.length
       },
       classification: {
         success: false,
@@ -74,7 +78,8 @@ export function buildQrFailureResult({
       imageLoaded,
       attemptedPasses,
       successfulPass: "",
-      variantCount
+      variantCount,
+      attemptOutcomes
     }
   };
 }
@@ -85,12 +90,14 @@ export function parseQrPayload(
     decodePass?: string;
     isQrOnlyImage?: boolean;
     attemptedPasses?: string[];
+    attemptOutcomes?: ReceiptQrDecodeAttempt[];
     variantCount?: number;
   }
 ): ReceiptQrResult {
   const decodePass = options?.decodePass || "";
   const isQrOnlyImage = Boolean(options?.isQrOnlyImage);
   const attemptedPasses = options?.attemptedPasses || [];
+  const attemptOutcomes = options?.attemptOutcomes || [];
   const variantCount = Number(options?.variantCount || 0);
   const rawDecodedValue = typeof rawValue === "string" ? rawValue : "";
   const normalizedRaw = normalizeDecodedQrValue(rawDecodedValue);
@@ -100,6 +107,7 @@ export function parseQrPayload(
       failureReason: "No QR detected",
       isQrOnlyImage,
       attemptedPasses,
+      attemptOutcomes,
       variantCount,
       warnings: ["No QR detected. Continuing with OCR fallback."]
     });
@@ -126,7 +134,8 @@ export function parseQrPayload(
           success: true,
           status: "DECODED",
           pass: decodePass,
-          reason: ""
+          reason: "",
+          attemptCount: attemptOutcomes.length || attemptedPasses.length
         },
         classification: {
           success: false,
@@ -151,7 +160,8 @@ export function parseQrPayload(
         imageLoaded: true,
         attemptedPasses,
         successfulPass: decodePass,
-        variantCount
+        variantCount,
+        attemptOutcomes
       }
     };
   }
@@ -270,7 +280,8 @@ export function parseQrPayload(
         success: true,
         status: "DECODED",
         pass: decodePass,
-        reason: ""
+        reason: "",
+        attemptCount: attemptOutcomes.length || attemptedPasses.length
       },
       classification: {
         success: true,
@@ -295,7 +306,8 @@ export function parseQrPayload(
       imageLoaded: true,
       attemptedPasses,
       successfulPass: decodePass,
-      variantCount
+      variantCount,
+      attemptOutcomes
     }
   };
 }

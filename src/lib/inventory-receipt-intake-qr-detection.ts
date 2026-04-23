@@ -15,6 +15,8 @@ interface QrDecoderStrategy {
   decode: (data: Uint8ClampedArray, width: number, height: number) => string | null;
 }
 
+type QrEnhancementMode = "full" | "pass1" | "pass2";
+
 let cachedQrDecoderStrategies: QrDecoderStrategy[] | undefined;
 
 function createZxingDecoderStrategy(): QrDecoderStrategy | null {
@@ -124,19 +126,23 @@ export async function buildQrDetectionVariants({
   image,
   width,
   height,
-  qrAssistCrop
+  qrAssistCrop,
+  enhancementMode = "full",
+  labelPrefix = ""
 }: {
   image: sharp.Sharp;
   width: number;
   height: number;
   qrAssistCrop?: ReceiptQrAssistCrop | null;
+  enhancementMode?: QrEnhancementMode;
+  labelPrefix?: string;
 }) {
   const regionVariants = buildQrRegionVariants({
     width,
     height,
     qrAssistCrop
   });
-  const enhancementVariants: Array<{
+  const allEnhancementVariants: Array<{
     label: string;
     apply: (pipeline: sharp.Sharp) => sharp.Sharp;
   }> = [
@@ -193,6 +199,15 @@ export async function buildQrDetectionVariants({
       apply: (pipeline) => pipeline.grayscale().normalize().median(2)
     }
   ];
+  const selectedEnhancementLabels =
+    enhancementMode === "pass1"
+      ? ["original", "grayscale", "contrast-boost"]
+      : enhancementMode === "pass2"
+        ? ["original", "grayscale-contrast-sharpen", "threshold-150", "threshold-170", "threshold-190", "noise-reduced"]
+        : allEnhancementVariants.map((entry) => entry.label);
+  const enhancementVariants = allEnhancementVariants.filter((variant) =>
+    selectedEnhancementLabels.includes(variant.label)
+  );
 
   const variants: Array<{ label: string; data: Uint8ClampedArray; width: number; height: number }> = [];
   for (const regionVariant of regionVariants) {
@@ -248,7 +263,7 @@ export async function buildQrDetectionVariants({
               continue;
             }
             variants.push({
-              label: `${regionVariant.key}-${enhancementVariant.label}-${factor}x-pad${padding}`,
+              label: `${labelPrefix ? `${labelPrefix}-` : ""}${regionVariant.key}-${enhancementVariant.label}-${factor}x-pad${padding}`,
               data: new Uint8ClampedArray(raw),
               width: variantMeta.width,
               height: variantMeta.height

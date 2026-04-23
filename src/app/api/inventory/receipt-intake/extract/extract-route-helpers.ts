@@ -81,6 +81,22 @@ export interface ReceiptUploadAuditMetadata {
     resized: boolean;
     pngConvertedForStability: boolean;
   };
+  variants: {
+    primary: {
+      mimeType: string;
+      size: number;
+      width: number | null;
+      height: number | null;
+      preprocessingSteps: string[];
+    };
+    qrEnhanced: {
+      mimeType: string;
+      size: number;
+      width: number | null;
+      height: number | null;
+      preprocessingSteps: string[];
+    } | null;
+  };
 }
 
 interface ReceiptUploadIngestionFailure {
@@ -95,6 +111,24 @@ export interface ReceiptUploadIngestionSuccess {
   uploadKind: "pdf" | "image";
   effectiveMimeType: string;
   fileBuffer: Buffer;
+  imageVariants: {
+    primary: {
+      buffer: Buffer;
+      mimeType: string;
+      size: number;
+      width: number | null;
+      height: number | null;
+      preprocessingSteps: string[];
+    };
+    qrEnhanced: {
+      buffer: Buffer;
+      mimeType: string;
+      size: number;
+      width: number | null;
+      height: number | null;
+      preprocessingSteps: string[];
+    } | null;
+  } | null;
   normalizationPath: UploadNormalizationPath;
   normalizationApplied: boolean;
   auditMetadata: ReceiptUploadAuditMetadata;
@@ -174,6 +208,16 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
         orientationCorrected: false,
         resized: false,
         pngConvertedForStability: false
+      },
+      variants: {
+        primary: {
+          mimeType: effectiveMimeType,
+          size: originalFileBuffer.length,
+          width: null,
+          height: null,
+          preprocessingSteps: ["original"]
+        },
+        qrEnhanced: null
       }
     };
 
@@ -182,6 +226,7 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
       uploadKind,
       effectiveMimeType,
       fileBuffer: originalFileBuffer,
+      imageVariants: null,
       normalizationPath: "NONE",
       normalizationApplied: false,
       auditMetadata
@@ -240,39 +285,83 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
       resized
     });
 
-    let normalizedPipeline = preNormalize.rotate();
+    const primaryPreprocessingSteps: string[] = [];
+    if (heicConverted) {
+      primaryPreprocessingSteps.push("heic_to_jpeg");
+    }
+    if (orientationCorrected) {
+      primaryPreprocessingSteps.push("rotate");
+    }
     if (resized) {
-      normalizedPipeline = normalizedPipeline.resize({
-        width: MAX_IMAGE_LONG_EDGE_PX,
-        height: MAX_IMAGE_LONG_EDGE_PX,
-        fit: "inside",
-        withoutEnlargement: true
-      });
+      primaryPreprocessingSteps.push(`resize_max_${MAX_IMAGE_LONG_EDGE_PX}`);
+    }
+    if (pngConvertedForStability) {
+      primaryPreprocessingSteps.push("png_to_jpeg_for_stability");
+    }
+    if (primaryPreprocessingSteps.length === 0) {
+      primaryPreprocessingSteps.push("original");
     }
 
-    let normalizedMimeType = workingMimeType;
-    if (heicConverted || pngConvertedForStability || workingMimeType === "image/jpeg" || workingMimeType === "image/jpg") {
-      normalizedPipeline = normalizedPipeline.jpeg({
-        quality: NORMALIZED_JPEG_QUALITY,
-        mozjpeg: true
-      });
-      normalizedMimeType = "image/jpeg";
-    } else if (workingMimeType === "image/webp") {
-      normalizedPipeline = normalizedPipeline.webp({
-        quality: NORMALIZED_JPEG_QUALITY
-      });
-      normalizedMimeType = "image/webp";
-    } else {
-      normalizedPipeline = normalizedPipeline.png({
-        compressionLevel: 8
-      });
-      normalizedMimeType = "image/png";
+    const needsPrimaryTransform = orientationCorrected || resized;
+    const shouldReencodePrimary = heicConverted || pngConvertedForStability || needsPrimaryTransform;
+    const primaryOutputMimeType = resolvePrimaryOutputMimeType({
+      sourceMimeType: workingMimeType,
+      heicConverted,
+      pngConvertedForStability
+    });
+
+    let primaryBuffer = workingBuffer;
+    let primaryMimeType = normalizeDeclaredMimeType(workingMimeType);
+
+    if (shouldReencodePrimary) {
+      let primaryPipeline = preNormalize.clone();
+      if (orientationCorrected) {
+        primaryPipeline = primaryPipeline.rotate();
+      }
+      if (resized) {
+        primaryPipeline = primaryPipeline.resize({
+          width: MAX_IMAGE_LONG_EDGE_PX,
+          height: MAX_IMAGE_LONG_EDGE_PX,
+          fit: "inside",
+          withoutEnlargement: true
+        });
+      }
+      primaryPipeline = applyOutputEncoding(primaryPipeline, primaryOutputMimeType);
+      primaryBuffer = Buffer.from(await primaryPipeline.toBuffer());
+      primaryMimeType = primaryOutputMimeType;
     }
 
-    const normalizedBuffer = await normalizedPipeline.toBuffer();
-    const normalizedMetadata = await readImageMetadataSafe(normalizedBuffer);
+    const primaryMetadata = await readImageMetadataSafe(primaryBuffer);
     const normalizationApplied =
-      normalizationPath !== "NONE" || pngConvertedForStability || normalizedMimeType !== effectiveMimeType;
+      normalizationPath !== "NONE" || pngConvertedForStability || primaryMimeType !== effectiveMimeType;
+
+    const qrEnhancedSteps = [
+      ...primaryPreprocessingSteps.filter((step) => step !== "original"),
+      "grayscale",
+      "normalize",
+      "contrast_boost",
+      "sharpen"
+    ];
+    let qrEnhancedBuffer = primaryBuffer;
+    let qrEnhancedMimeType = primaryMimeType;
+    let qrEnhancedMetadata = primaryMetadata;
+    try {
+      const enhancedPipeline = sharp(primaryBuffer, { failOn: "none" })
+        .grayscale()
+        .normalize()
+        .linear(1.14, -10)
+        .sharpen(1.0)
+        .png({ compressionLevel: 7 });
+      qrEnhancedBuffer = Buffer.from(await enhancedPipeline.toBuffer());
+      qrEnhancedMimeType = "image/png";
+      qrEnhancedMetadata = await readImageMetadataSafe(qrEnhancedBuffer);
+    } catch {
+      qrEnhancedBuffer = primaryBuffer;
+      qrEnhancedMimeType = primaryMimeType;
+      qrEnhancedMetadata = primaryMetadata;
+      qrEnhancedSteps.length = 0;
+      qrEnhancedSteps.push(...primaryPreprocessingSteps, "enhanced_fallback_primary");
+    }
 
     const auditMetadata: ReceiptUploadAuditMetadata = {
       original: {
@@ -284,10 +373,10 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
         height: originalMetadata.height
       },
       normalized: {
-        mimeType: normalizedMimeType,
-        size: normalizedBuffer.length,
-        width: normalizedMetadata.width,
-        height: normalizedMetadata.height
+        mimeType: primaryMimeType,
+        size: primaryBuffer.length,
+        width: primaryMetadata.width,
+        height: primaryMetadata.height
       },
       normalization: {
         path: normalizationPath,
@@ -296,14 +385,48 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
         orientationCorrected,
         resized,
         pngConvertedForStability
+      },
+      variants: {
+        primary: {
+          mimeType: primaryMimeType,
+          size: primaryBuffer.length,
+          width: primaryMetadata.width,
+          height: primaryMetadata.height,
+          preprocessingSteps: primaryPreprocessingSteps
+        },
+        qrEnhanced: {
+          mimeType: qrEnhancedMimeType,
+          size: qrEnhancedBuffer.length,
+          width: qrEnhancedMetadata.width,
+          height: qrEnhancedMetadata.height,
+          preprocessingSteps: qrEnhancedSteps
+        }
       }
     };
 
     return {
       ok: true,
       uploadKind,
-      effectiveMimeType: normalizedMimeType,
-      fileBuffer: normalizedBuffer,
+      effectiveMimeType: primaryMimeType,
+      fileBuffer: primaryBuffer,
+      imageVariants: {
+        primary: {
+          buffer: primaryBuffer,
+          mimeType: primaryMimeType,
+          size: primaryBuffer.length,
+          width: primaryMetadata.width,
+          height: primaryMetadata.height,
+          preprocessingSteps: primaryPreprocessingSteps
+        },
+        qrEnhanced: {
+          buffer: qrEnhancedBuffer,
+          mimeType: qrEnhancedMimeType,
+          size: qrEnhancedBuffer.length,
+          width: qrEnhancedMetadata.width,
+          height: qrEnhancedMetadata.height,
+          preprocessingSteps: qrEnhancedSteps
+        }
+      },
       normalizationPath,
       normalizationApplied,
       auditMetadata
@@ -461,6 +584,42 @@ function classifyNormalizationPath({
     return "RESIZE_ONLY";
   }
   return "NONE";
+}
+
+function resolvePrimaryOutputMimeType({
+  sourceMimeType,
+  heicConverted,
+  pngConvertedForStability
+}: {
+  sourceMimeType: string;
+  heicConverted: boolean;
+  pngConvertedForStability: boolean;
+}) {
+  if (heicConverted || pngConvertedForStability) {
+    return "image/jpeg";
+  }
+  const normalized = normalizeDeclaredMimeType(sourceMimeType);
+  if (normalized === "image/jpg") {
+    return "image/jpeg";
+  }
+  return normalized || "image/jpeg";
+}
+
+function applyOutputEncoding(pipeline: sharp.Sharp, mimeType: string) {
+  if (mimeType === "image/webp") {
+    return pipeline.webp({
+      quality: 95
+    });
+  }
+  if (mimeType === "image/png") {
+    return pipeline.png({
+      compressionLevel: 8
+    });
+  }
+  return pipeline.jpeg({
+    quality: 96,
+    mozjpeg: true
+  });
 }
 
 async function readImageMetadataSafe(fileBuffer: Buffer) {

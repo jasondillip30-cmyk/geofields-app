@@ -23,6 +23,7 @@ export interface ReceiptQrStages {
     status: ReceiptQrDecodeStatus;
     pass: string;
     reason: string;
+    attemptCount?: number;
   };
   classification: {
     success: boolean;
@@ -41,6 +42,14 @@ export interface ReceiptQrStages {
     parsedFieldCount: number;
     parsedLineItemsCount: number;
   };
+}
+
+export interface ReceiptQrDecodeAttempt {
+  attemptLabel: string;
+  decoder: string;
+  passGroup: "pass1-primary" | "pass2-enhanced";
+  success: boolean;
+  rawLength: number;
 }
 
 export interface ReceiptQrAssistCrop {
@@ -141,6 +150,7 @@ export interface ReceiptQrResult {
     attemptedPasses: string[];
     successfulPass: string;
     variantCount: number;
+    attemptOutcomes?: ReceiptQrDecodeAttempt[];
   };
 }
 

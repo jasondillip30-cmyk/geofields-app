@@ -5,6 +5,10 @@ const debugChannels = new Set(
     .filter(Boolean)
 );
 
+export function isReceiptTraceEnabled() {
+  return process.env.NODE_ENV !== "production" || process.env.RECEIPT_QR_TRACE === "1";
+}
+
 function shouldDebug(channel?: string) {
   if (process.env.NODE_ENV === "production") {
     return false;
@@ -29,3 +33,13 @@ export function debugLog(scope: string, payload?: unknown, options?: { channel?:
   console.info(scope, payload);
 }
 
+export function receiptTraceLog(scope: string, payload?: unknown) {
+  if (!isReceiptTraceEnabled()) {
+    return;
+  }
+  if (payload === undefined) {
+    console.info(scope);
+    return;
+  }
+  console.info(scope, payload);
+}

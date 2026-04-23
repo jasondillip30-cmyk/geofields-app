@@ -17,10 +17,12 @@ export const OCR_ENRICHMENT_TIMEOUT_MS = 4000;
 export async function extractRawText({
   fileBuffer,
   mimeType,
+  enhancedFileBuffer = null,
   timeoutMs = OCR_ENRICHMENT_TIMEOUT_MS
 }: {
   fileBuffer: Buffer;
   mimeType: string;
+  enhancedFileBuffer?: Buffer | null;
   timeoutMs?: number;
 }) {
   if (mimeType.includes("pdf")) {
@@ -53,7 +55,7 @@ export async function extractRawText({
     };
   }
 
-  const variants = await buildImageOcrVariants(fileBuffer);
+  const variants = await buildImageOcrVariants(fileBuffer, enhancedFileBuffer);
   if (variants.length === 0) {
     return {
       text: "",
