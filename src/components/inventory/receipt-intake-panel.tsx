@@ -9,62 +9,12 @@ import { asString, buildManualAssistReview, buildReviewStateFromPayload, buildRe
 import { evaluateRequisitionComparison } from "@/components/inventory/receipt-intake-comparison";
 import { ReceiptIntakePanelContent } from "@/components/inventory/receipt-intake-panel-content";
 import { applyReviewLinePatch, createManualSeededReview, fetchFocusedRecordPayload, handleReceiptCaptureModeSwitch, handleQrPointerDownSelection, handleQrPointerMoveSelection, handleQrPointerUpSelection, handleReceiptFileSelection, resetFocusedRecordOverlayState, resetScanSessionStateValues } from "@/components/inventory/receipt-intake-panel-actions";
-import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type CameraScanConfirmPayload, type CameraSessionState, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
-import { debugLog } from "@/lib/observability";
+import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
 import { formatCurrency } from "@/lib/utils";
 export type { ExpenseOnlyCategory, FieldConfidence, QrDecodeStatus, QrLookupStatus, QrParseStatus, ReadabilityConfidence, ReceiptClassification, ReceiptFollowUpStage, ReceiptIntakePanelProps, ReceiptSnapshotLine, ReceiptWorkflowChoice, RequisitionComparisonResult, ReviewLineState, ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage, IntakeAllocationStatus, DuplicatePromptState, QrCropSelection, ExtractState, ReceiptPurpose } from "@/components/inventory/receipt-intake-panel-types";
 const EXTRACT_REQUEST_TIMEOUT_MS = 65_000;
 const EXTRACT_REQUEST_TIMEOUT_MESSAGE =
   "TRA verification response is slow right now. Try Scan again, upload again, or continue with manual review.";
-const CAMERA_CONFIRM_TIMEOUT_MS = 95_000;
-const CAMERA_REFINEMENT_IN_PROGRESS_MESSAGE = "Refining scan from camera frame...";
-const CAMERA_REFINEMENT_WARNING_MESSAGE =
-  "Using direct QR result. Camera-frame refinement returned limited data; review fields before saving.";
-type CameraExtractionCompleteness = {
-  scanStatusComplete: boolean;
-  hasScannedTotal: boolean;
-  hasScannedLines: boolean;
-  hasSupplier: boolean;
-  hasReceiptNumber: boolean;
-  lookupSucceeded: boolean;
-  parsedFieldCount: number;
-  parsedLineItemsCount: number;
-  isCompleteEnough: boolean;
-  score: number;
-};
-
-function evaluateCameraExtractionCompleteness(review: ReviewState): CameraExtractionCompleteness {
-  const hasScannedTotal = Number(review.total || 0) > 0;
-  const hasScannedLines = review.lines.length > 0;
-  const scanStatusComplete = review.scanStatus === "COMPLETE";
-  const hasSupplier = review.supplierName.trim().length > 0;
-  const hasReceiptNumber = review.receiptNumber.trim().length > 0;
-  const lookupSucceeded = review.scanDiagnostics.qrLookupStatus === "SUCCESS";
-  const parsedFieldCount = Number(review.scanDiagnostics.qrParsedFieldCount || 0);
-  const parsedLineItemsCount = Number(review.scanDiagnostics.qrParsedLineItemsCount || 0);
-  const isCompleteEnough = scanStatusComplete && hasScannedTotal && hasScannedLines;
-  const score =
-    (scanStatusComplete ? 50 : 0) +
-    (hasScannedTotal ? 22 : 0) +
-    (hasScannedLines ? 22 : 0) +
-    (lookupSucceeded ? 10 : 0) +
-    (hasSupplier ? 6 : 0) +
-    (hasReceiptNumber ? 4 : 0) +
-    Math.min(parsedFieldCount, 10) * 1.5 +
-    Math.min(parsedLineItemsCount, 8) * 2;
-  return {
-    scanStatusComplete,
-    hasScannedTotal,
-    hasScannedLines,
-    hasSupplier,
-    hasReceiptNumber,
-    lookupSucceeded,
-    parsedFieldCount,
-    parsedLineItemsCount,
-    isCompleteEnough,
-    score
-  };
-}
 export function ReceiptIntakePanel({
   canManage,
   items,
@@ -87,9 +37,6 @@ export function ReceiptIntakePanel({
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreviewUrl, setReceiptPreviewUrl] = useState("");
   const [extractState, setExtractState] = useState<ExtractState>("IDLE");
-  const [cameraSessionState, setCameraSessionState] = useState<CameraSessionState>("idle");
-  const [cameraSessionError, setCameraSessionError] = useState<string | null>(null);
-  const [cameraDetectedPayload, setCameraDetectedPayload] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -147,13 +94,6 @@ export function ReceiptIntakePanel({
   }
   const qrPreviewContainerRef = useRef<HTMLDivElement | null>(null);
   const qrSelectionStartRef = useRef<{ x: number; y: number } | null>(null);
-  const cameraConfirmAbortRef = useRef<AbortController | null>(null);
-  const cancelPendingCameraConfirm = useCallback(() => {
-    if (cameraConfirmAbortRef.current) {
-      cameraConfirmAbortRef.current.abort();
-      cameraConfirmAbortRef.current = null;
-    }
-  }, []);
   const clearQrAssistSelection = useCallback(() => {
     setQrAssistSelection(null);
     setDrawingQrSelection(false);
@@ -194,11 +134,6 @@ export function ReceiptIntakePanel({
       }
     };
   }, [receiptPreviewUrl]);
-  useEffect(() => {
-    return () => {
-      cancelPendingCameraConfirm();
-    };
-  }, [cancelPendingCameraConfirm]);
   useEffect(() => {
     if (!initialRequisition || review || activeSubmission) {
       return;
@@ -400,7 +335,6 @@ export function ReceiptIntakePanel({
     );
   }
   function handleReceiptCaptureModeChange(mode: ReceiptCaptureMode) {
-    cancelPendingCameraConfirm();
     handleReceiptCaptureModeSwitch({
       mode,
       setReceiptCaptureMode,
@@ -418,9 +352,6 @@ export function ReceiptIntakePanel({
       setError,
       setFollowUpStage
     });
-    setCameraSessionState("idle");
-    setCameraSessionError(null);
-    setCameraDetectedPayload("");
     setMismatchOverrideAccepted(false);
   }
   function closeFocusedRecordOverlay() {
@@ -431,7 +362,6 @@ export function ReceiptIntakePanel({
     });
   }
   function resetScanSessionState() {
-    cancelPendingCameraConfirm();
     resetScanSessionStateValues({
       setHasScanAttempted,
       setLastScanDiagnostics,
@@ -444,9 +374,6 @@ export function ReceiptIntakePanel({
       setShowScannedDetails,
       setMismatchOverrideAccepted
     });
-    setCameraSessionState("idle");
-    setCameraSessionError(null);
-    setCameraDetectedPayload("");
   }
   function handleReceiptFileChange(file: File | null) {
     handleReceiptFileSelection({
@@ -711,220 +638,6 @@ export function ReceiptIntakePanel({
       setExtractState((current) =>
         current === "UPLOADING" || current === "PROCESSING" ? "FAILED" : current
       );
-    }
-  }
-  async function handleCameraPayloadConfirm(cameraPayload: CameraScanConfirmPayload) {
-    const rawPayload = asString(cameraPayload.rawPayload).trim();
-    const capturedFrameFile = cameraPayload.capturedFrameFile || null;
-    if (!rawPayload) {
-      setCameraSessionError("No QR payload detected yet.");
-      setCameraSessionState("error");
-      return false;
-    }
-    if (!receiptWorkflowChoice) {
-      setError("Select a receipt workflow type before scanning.");
-      setCameraSessionState("error");
-      setCameraSessionError("Choose a workflow type first.");
-      return false;
-    }
-    const selectedWorkflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
-    setHasScanAttempted(true);
-    setFinalizeSuccess(null);
-    setShowScannedDetails(false);
-    setMismatchOverrideAccepted(false);
-    setExtractState("PROCESSING");
-    setCameraSessionError(null);
-    setCameraSessionState("detected");
-    setError(null);
-    setNotice(null);
-    setNoticeTone("SUCCESS");
-    setDuplicatePrompt(null);
-    setShowDuplicateReview(false);
-    setDuplicateOverrideConfirmed(false);
-    setFocusedRecordPayload(null);
-    setFocusedRecordError(null);
-    setLastSavedAllocationStatus(null);
-    setInventoryActionEditorByLine({});
-    setShowMismatchInventoryHandling(false);
-    cancelPendingCameraConfirm();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), CAMERA_CONFIRM_TIMEOUT_MS);
-    cameraConfirmAbortRef.current = controller;
-    type CameraCandidate = {
-      source: "scan-url" | "camera-frame";
-      response: Response;
-      payload: unknown;
-      receiptFileName: string;
-      completeness: CameraExtractionCompleteness;
-    };
-    const buildCameraCandidate = ({
-      response,
-      payload,
-      source,
-      receiptFileName
-    }: {
-      response: Response;
-      payload: unknown;
-      source: "scan-url" | "camera-frame";
-      receiptFileName: string;
-    }): CameraCandidate | null => {
-      if (!response.ok || !isReceiptExtractSuccessPayload(payload)) {
-        return null;
-      }
-      const reviewCandidate = buildReviewStateFromPayload({
-        payload,
-        receiptFileName,
-        defaultClientId,
-        defaultRigId,
-        receiptClassification: selectedWorkflowConfig.classification,
-        receiptWorkflowChoice,
-        initialRequisition
-      });
-      return {
-        source,
-        response,
-        payload,
-        receiptFileName,
-        completeness: evaluateCameraExtractionCompleteness(reviewCandidate)
-      };
-    };
-    try {
-      const scanUrlResponse = await fetch("/api/inventory/receipt-intake/scan-url", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          rawPayload,
-          context: {
-            workflowChoice: receiptWorkflowChoice
-          },
-          debug: debugMode
-        })
-      });
-      const scanUrlPayload = await readJsonPayload(scanUrlResponse);
-      if (!scanUrlResponse.ok || !isReceiptExtractSuccessPayload(scanUrlPayload)) {
-        throw new Error(
-          scanUrlResponse.ok
-            ? readPayloadMessage(scanUrlPayload, "Camera scan could not read a valid receipt QR. Try scanning again.")
-            : readApiError(scanUrlResponse, scanUrlPayload, "Camera scan could not be completed. Please retry.")
-        );
-      }
-      const primaryCandidate = buildCameraCandidate({
-        response: scanUrlResponse,
-        payload: scanUrlPayload,
-        source: "scan-url",
-        receiptFileName: "camera-qr-scan"
-      });
-      if (!primaryCandidate) {
-        throw new Error("Camera scan returned invalid extraction payload.");
-      }
-
-      let selectedCandidate = primaryCandidate;
-      let refinementAttempted = false;
-      let refinementReason = "not_needed";
-      let refinedCandidate: CameraCandidate | null = null;
-      const shouldRunFrameRefinement =
-        !primaryCandidate.completeness.scanStatusComplete ||
-        !primaryCandidate.completeness.hasScannedTotal ||
-        !primaryCandidate.completeness.hasScannedLines;
-
-      if (shouldRunFrameRefinement && capturedFrameFile) {
-        refinementAttempted = true;
-        setNoticeTone("WARNING");
-        setNotice(CAMERA_REFINEMENT_IN_PROGRESS_MESSAGE);
-        const frameFormData = new FormData();
-        frameFormData.set("receipt", capturedFrameFile);
-        if (debugMode) {
-          frameFormData.set("debug", "1");
-        }
-        const refineResponse = await fetch("/api/inventory/receipt-intake/extract", {
-          method: "POST",
-          body: frameFormData,
-          signal: controller.signal
-        });
-        const refinePayload = await readJsonPayload(refineResponse);
-        refinedCandidate = buildCameraCandidate({
-          response: refineResponse,
-          payload: refinePayload,
-          source: "camera-frame",
-          receiptFileName: capturedFrameFile.name || "camera-qr-capture.jpg"
-        });
-        if (refinedCandidate) {
-          const refinedIsBetter =
-            (refinedCandidate.completeness.isCompleteEnough &&
-              !primaryCandidate.completeness.isCompleteEnough) ||
-            refinedCandidate.completeness.score > primaryCandidate.completeness.score;
-          if (refinedIsBetter) {
-            selectedCandidate = refinedCandidate;
-            refinementReason = "camera_frame_selected";
-          } else {
-            refinementReason = "camera_frame_not_better";
-          }
-        } else {
-          refinementReason = "camera_frame_extract_unusable";
-        }
-      } else if (shouldRunFrameRefinement) {
-        refinementReason = "camera_frame_unavailable";
-      }
-
-      debugLog(
-        "[inventory][receipt-intake][camera-hybrid][selection]",
-        {
-          selectedSource: selectedCandidate.source,
-          refinementAttempted,
-          refinementReason,
-          shouldRunFrameRefinement,
-          hasCapturedFrameFile: Boolean(capturedFrameFile),
-          pass1: primaryCandidate.completeness,
-          pass2: refinedCandidate ? refinedCandidate.completeness : null
-        },
-        { channel: "inventory-receipt" }
-      );
-
-      await processExtractionPayload({
-        response: selectedCandidate.response,
-        payload: selectedCandidate.payload,
-        receiptFileName: selectedCandidate.receiptFileName,
-        selectedWorkflowChoice: receiptWorkflowChoice,
-        selectedWorkflowConfig
-      });
-      if (
-        refinementAttempted &&
-        selectedCandidate.source === "scan-url" &&
-        !selectedCandidate.completeness.isCompleteEnough
-      ) {
-        setNoticeTone("WARNING");
-        setNotice(CAMERA_REFINEMENT_WARNING_MESSAGE);
-      }
-      setCameraSessionState("idle");
-      return true;
-    } catch (scanError) {
-      if (scanError instanceof DOMException && scanError.name === "AbortError") {
-        return false;
-      }
-      debugLog(
-        "[inventory][receipt-intake][camera-hybrid][error]",
-        {
-          reason:
-            scanError instanceof Error && scanError.message
-              ? scanError.message
-              : "Camera scan failed during hybrid extraction."
-        },
-        { channel: "inventory-receipt" }
-      );
-      setCameraSessionState("error");
-      setCameraSessionError(
-        scanError instanceof Error && scanError.message
-          ? scanError.message
-          : "Camera scan failed. You can retry, upload, or continue manually."
-      );
-      return false;
-    } finally {
-      clearTimeout(timeoutId);
-      if (cameraConfirmAbortRef.current === controller) {
-        cameraConfirmAbortRef.current = null;
-      }
-      setExtractState((current) => (current === "PROCESSING" ? "FAILED" : current));
     }
   }
   async function handleCommit() {
@@ -1412,15 +1125,7 @@ export function ReceiptIntakePanel({
         setShowTechnicalDetails,
         handleCommit,
         saving,
-        mismatchOverrideReady,
-        cameraSessionState,
-        setCameraSessionState,
-        cameraSessionError,
-        setCameraSessionError,
-        cameraDetectedPayload,
-        setCameraDetectedPayload,
-        handleCameraPayloadConfirm,
-        cancelPendingCameraConfirm
+        mismatchOverrideReady
       }}
       focusedOverlayProps={{
         focusedOverlayMounted,

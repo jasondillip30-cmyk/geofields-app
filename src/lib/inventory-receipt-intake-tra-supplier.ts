@@ -76,7 +76,18 @@ export function extractTraSupplierFromRawText(text: string) {
 
 export function isLikelyTraPlaceholderText(value: string) {
   const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
+  const compact = normalized.replace(/[.!]+$/g, "").trim();
   if (!normalized) {
+    return true;
+  }
+  if (
+    compact === "please" ||
+    compact.startsWith("please ") ||
+    compact.startsWith("kindly ") ||
+    compact === "loading" ||
+    compact.startsWith("loading ") ||
+    /^(close|submit|continue|retry|cancel|back|next|ok)$/.test(compact)
+  ) {
     return true;
   }
   return (

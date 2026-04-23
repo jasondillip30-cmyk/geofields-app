@@ -13,6 +13,7 @@ import {
   sanitizeTraFieldValue,
   selectBestTraFieldCandidates
 } from "@/lib/inventory-receipt-intake-tra";
+import { isLikelyTraPlaceholderText } from "@/lib/inventory-receipt-intake-tra-supplier";
 import type { ReceiptHeaderExtraction } from "@/lib/inventory-receipt-intake-types";
 
 function run(name: string, testFn: () => void) {
@@ -105,6 +106,12 @@ run("loading-shell fixture is detected and placeholders are rejected", () => {
     "Supplier should stay empty for loading shell HTML."
   );
   assert.equal(parsed.lineCandidates.length, 0);
+});
+
+run("placeholder filter rejects standalone shell words", () => {
+  assert.equal(isLikelyTraPlaceholderText("PLEASE"), true);
+  assert.equal(isLikelyTraPlaceholderText("Close"), true);
+  assert.equal(isLikelyTraPlaceholderText("PETROTZ"), false);
 });
 
 console.log("[tra-fixtures] all fixture checks passed.");

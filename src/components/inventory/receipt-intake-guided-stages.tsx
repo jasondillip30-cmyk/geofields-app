@@ -9,8 +9,6 @@ import { ReceiptIntakeReviewStep } from "@/components/inventory/receipt-intake-r
 import { ReceiptIntakeScanStep } from "@/components/inventory/receipt-intake-scan-step";
 import { inventoryCategoryOptions, formatInventoryCategory } from "@/lib/inventory";
 import type {
-  CameraScanConfirmPayload,
-  CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
   QrCropSelection,
@@ -92,14 +90,6 @@ interface ReceiptIntakeGuidedStagesProps {
   handleCommit: () => Promise<void>;
   saving: boolean;
   mismatchOverrideReady: boolean;
-  cameraSessionState: CameraSessionState;
-  setCameraSessionState: Dispatch<SetStateAction<CameraSessionState>>;
-  cameraSessionError: string | null;
-  setCameraSessionError: Dispatch<SetStateAction<string | null>>;
-  cameraDetectedPayload: string;
-  setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
-  handleCameraPayloadConfirm: (payload: CameraScanConfirmPayload) => Promise<boolean>;
-  cancelPendingCameraConfirm: () => void;
 }
 
 export function ReceiptIntakeGuidedStages({
@@ -171,15 +161,7 @@ export function ReceiptIntakeGuidedStages({
   setShowTechnicalDetails,
   handleCommit,
   saving,
-  mismatchOverrideReady,
-  cameraSessionState,
-  setCameraSessionState,
-  cameraSessionError,
-  setCameraSessionError,
-  cameraDetectedPayload,
-  setCameraDetectedPayload,
-  handleCameraPayloadConfirm,
-  cancelPendingCameraConfirm
+  mismatchOverrideReady
 }: ReceiptIntakeGuidedStagesProps) {
   return (
     <>
@@ -249,14 +231,6 @@ export function ReceiptIntakeGuidedStages({
           setReview={setReview}
           setFollowUpStage={setFollowUpStage}
           resetScanSessionState={resetScanSessionState}
-          cameraSessionState={cameraSessionState}
-          setCameraSessionState={setCameraSessionState}
-          cameraSessionError={cameraSessionError}
-          setCameraSessionError={setCameraSessionError}
-          cameraDetectedPayload={cameraDetectedPayload}
-          setCameraDetectedPayload={setCameraDetectedPayload}
-          handleCameraPayloadConfirm={handleCameraPayloadConfirm}
-          cancelPendingCameraConfirm={cancelPendingCameraConfirm}
         />
       )}
 
