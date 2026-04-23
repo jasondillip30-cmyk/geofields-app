@@ -1,8 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { InventoryCategory } from "@prisma/client";
 
 import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import {
+  isReceiptExtractorSuccessPayload,
+  type ReceiptExtractorRequestContext
+} from "@/lib/receipt-extractor/contracts";
+import { callReceiptExtractorFromRawPayload } from "@/lib/receipt-extractor/client";
+import { resolveReceiptExtractorMode } from "@/lib/receipt-extractor/mode";
 import {
   apiError,
   buildSafeFailureResponse,
@@ -67,53 +74,142 @@ export async function POST(request: NextRequest) {
     }
 
     const debugMode = process.env.NODE_ENV !== "production" && readDebugValue(body);
-
-    const extractionModule = await import("@/lib/inventory-receipt-intake").catch((error) => {
-      logExtractError(routeLabel, "module_import", error);
-      return null;
+    const extractorMode = resolveReceiptExtractorMode();
+    logRouteStage("scan_url_extractor_mode_resolved", {
+      mode: extractorMode
     });
 
-    const extractFromRawPayloadFn =
-      extractionModule &&
-      typeof extractionModule === "object" &&
-      "extractReceiptDataFromRawPayload" in extractionModule
-        ? extractionModule.extractReceiptDataFromRawPayload
-        : null;
+    type InventoryItemLookup = {
+      id: string;
+      name: string;
+      sku: string;
+      category: InventoryCategory;
+    };
 
-    if (typeof extractFromRawPayloadFn !== "function") {
-      logRouteStage("scan_url_failed", { stage: "module_import_error" });
-      return NextResponse.json(
-        buildSafeFailureResponse({
-          savedFile: null,
-          message: "Unable to extract receipt data",
-          debugMode,
-          error: "Extraction module is unavailable.",
-          stage: "module_import_error"
-        })
-      );
+    let inventoryItemsPromise: Promise<InventoryItemLookup[]> | null = null;
+    let suppliersPromise: Promise<Array<{ id: string; name: string }>> | null = null;
+
+    const loadInventoryItems = async (): Promise<InventoryItemLookup[]> => {
+      if (!inventoryItemsPromise) {
+        inventoryItemsPromise = prisma.inventoryItem.findMany({
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            category: true
+          }
+        });
+      }
+      return inventoryItemsPromise;
+    };
+
+    const loadSuppliers = async (): Promise<Array<{ id: string; name: string }>> => {
+      if (!suppliersPromise) {
+        suppliersPromise = prisma.inventorySupplier.findMany({
+          select: {
+            id: true,
+            name: true
+          }
+        });
+      }
+      return suppliersPromise;
+    };
+
+    let extraction: unknown = null;
+
+    const remoteEnabled = extractorMode !== "local" && Boolean(process.env.RECEIPT_EXTRACTOR_BASE_URL?.trim());
+    if (remoteEnabled) {
+      const remoteContext: ReceiptExtractorRequestContext = {
+        requestId: `scan-url-${Date.now()}`,
+        source: "mobile_camera_file",
+        debug: debugMode,
+        inventoryItems: (await loadInventoryItems()).map((item) => ({
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          category: typeof item.category === "string" ? item.category : String(item.category || "")
+        }))
+      };
+
+      if (extractorMode === "shadow") {
+        void (async () => {
+          const shadow = await callReceiptExtractorFromRawPayload({
+            rawPayload,
+            context: remoteContext
+          });
+          debugLog(
+            "[inventory][receipt-intake][scan-url][extractor-shadow]",
+            {
+              ok: shadow.ok,
+              status: shadow.status,
+              attempts: shadow.attempts,
+              durationMs: shadow.durationMs,
+              error: shadow.error
+            },
+            { channel: "inventory-receipt" }
+          );
+        })();
+      } else {
+        const remote = await callReceiptExtractorFromRawPayload({
+          rawPayload,
+          context: remoteContext
+        });
+        if (remote.ok && remote.payload && isReceiptExtractorSuccessPayload(remote.payload)) {
+          if (isExtractionResult(remote.payload.extracted)) {
+            extraction = remote.payload.extracted;
+            logRouteStage("scan_url_remote_succeeded", {
+              attempts: remote.attempts,
+              durationMs: remote.durationMs
+            });
+          }
+        }
+
+        if (!extraction) {
+          logRouteStage("scan_url_remote_failed", {
+            status: remote.status,
+            reason: remote.error || "Remote extractor response was not usable."
+          });
+        }
+      }
+    } else if (extractorMode !== "local") {
+      logRouteStage("scan_url_remote_skipped", {
+        reason: "RECEIPT_EXTRACTOR_BASE_URL not configured",
+        mode: extractorMode
+      });
     }
 
-    const [inventoryItems, suppliers] = await Promise.all([
-      prisma.inventoryItem.findMany({
-        select: {
-          id: true,
-          name: true,
-          sku: true,
-          category: true
-        }
-      }),
-      prisma.inventorySupplier.findMany({
-        select: {
-          id: true,
-          name: true
-        }
-      })
-    ]);
+    if (!extraction) {
+      const extractionModule = await import("@/lib/inventory-receipt-intake").catch((error) => {
+        logExtractError(routeLabel, "module_import", error);
+        return null;
+      });
 
-    const extraction = await extractFromRawPayloadFn({ rawPayload, inventoryItems }).catch((error: unknown) => {
-      logExtractError(routeLabel, "extract_receipt_data_from_raw_payload", error);
-      return null;
-    });
+      const extractFromRawPayloadFn =
+        extractionModule &&
+        typeof extractionModule === "object" &&
+        "extractReceiptDataFromRawPayload" in extractionModule
+          ? extractionModule.extractReceiptDataFromRawPayload
+          : null;
+
+      if (typeof extractFromRawPayloadFn !== "function") {
+        logRouteStage("scan_url_failed", { stage: "module_import_error" });
+        return NextResponse.json(
+          buildSafeFailureResponse({
+            savedFile: null,
+            message: "Unable to extract receipt data",
+            debugMode,
+            error: "Extraction module is unavailable.",
+            stage: "module_import_error"
+          })
+        );
+      }
+
+      const inventoryItems = await loadInventoryItems();
+      extraction = await extractFromRawPayloadFn({ rawPayload, inventoryItems }).catch((error: unknown) => {
+        logExtractError(routeLabel, "extract_receipt_data_from_raw_payload", error);
+        return null;
+      });
+    }
 
     if (!isExtractionResult(extraction)) {
       logRouteStage("scan_url_failed", { stage: "extract_error" });
@@ -144,6 +240,7 @@ export async function POST(request: NextRequest) {
       { channel: "inventory-receipt" }
     );
 
+    const suppliers = await loadSuppliers();
     const supplierSuggestion = await suggestSupplier({
       extractedSupplierName: hydratedSupplier.headerSupplierAfter,
       extractedTin: typeof extraction.header?.tin === "string" ? extraction.header.tin : "",

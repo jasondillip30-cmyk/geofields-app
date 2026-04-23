@@ -1,0 +1,25 @@
+{
+  "name": "receipt-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "@zxing/library": "^0.21.3",
+    "heic-convert": "^2.1.0",
+    "jsqr": "^1.4.0",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.58.2",
+    "sharp": "^0.34.5",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.8",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
