@@ -1092,6 +1092,7 @@ export function ReceiptIntakePanel({
         setDebugMode,
         review,
         mismatchDetected,
+        canInspectScannedDetails: Boolean(requisitionComparison?.canInspectScannedDetails),
         showScannedDetails,
         setShowScannedDetails,
         setReview,

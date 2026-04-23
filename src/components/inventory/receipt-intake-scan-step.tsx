@@ -46,6 +46,7 @@ export function ReceiptIntakeScanStep({
   setDebugMode,
   review,
   mismatchDetected,
+  canInspectScannedDetails,
   showScannedDetails,
   setShowScannedDetails,
   setReview,
@@ -88,6 +89,7 @@ export function ReceiptIntakeScanStep({
   setDebugMode: (value: boolean) => void;
   review: ReviewState | null;
   mismatchDetected: boolean;
+  canInspectScannedDetails: boolean;
   showScannedDetails: boolean;
   setShowScannedDetails: Dispatch<SetStateAction<boolean>>;
   setReview: Dispatch<SetStateAction<ReviewState | null>>;
@@ -375,6 +377,19 @@ export function ReceiptIntakeScanStep({
             type="button"
             onClick={() => setShowScannedDetails((current) => !current)}
             className="mt-2 rounded-md border border-rose-300/80 bg-white px-2.5 py-1 text-xs font-medium text-rose-900 hover:bg-rose-100/70"
+          >
+            {showScannedDetails ? "Hide scanned receipt" : "Review scanned receipt"}
+          </button>
+        </div>
+      )}
+      {review && !manualInputSelected && canInspectScannedDetails && !mismatchDetected && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800">
+          <p className="font-semibold">Review scanned receipt details</p>
+          <p className="mt-1 text-xs text-slate-700">Open the comparison to verify extracted values and complete any missing fields.</p>
+          <button
+            type="button"
+            onClick={() => setShowScannedDetails((current) => !current)}
+            className="mt-2 rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-900 hover:bg-slate-100"
           >
             {showScannedDetails ? "Hide scanned receipt" : "Review scanned receipt"}
           </button>

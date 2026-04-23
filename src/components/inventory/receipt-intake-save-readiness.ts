@@ -271,16 +271,16 @@ export function markFrontendMappingGap(review: ReviewState): ReviewState {
 
 export function resolveScanFailureNotice(review: ReviewState) {
   if (review.scanDiagnostics.failureStage === "QR_NOT_DETECTED") {
-    return "QR was not detected. Please complete manually with requisition prefilled context.";
+    return "QR was not detected. Open Scanned receipt details to compare against the requisition, then complete missing fields manually.";
   }
   if (review.scanDiagnostics.failureStage === "QR_DECODE_FAILED") {
-    return "QR was detected but could not be decoded. Please complete manually with requisition prefilled context.";
+    return "QR was detected but could not be decoded. Open Scanned receipt details and complete missing fields manually.";
   }
   if (review.scanDiagnostics.failureStage === "QR_PARSE_UNPARSED") {
-    return "QR decoded but parsing was limited. Review the captured details and complete remaining fields manually.";
+    return "QR decoded but parsing was limited. Open Scanned receipt details, review captured fields, and complete the remaining fields manually.";
   }
   if (review.scanDiagnostics.failureStage === "TRA_LOOKUP_FAILED") {
-    return "QR decoded but TRA lookup returned limited details. Please review and complete the remaining fields.";
+    return "QR decoded but TRA lookup returned limited details. Open Scanned receipt details and complete the remaining fields manually.";
   }
   return SCAN_FALLBACK_MESSAGE;
 }

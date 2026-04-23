@@ -58,6 +58,7 @@ export function evaluateRequisitionComparison(
   }
 
   const approvedLines = mapRequisitionSnapshotLines(initialRequisition);
+  const hasRequisitionContext = Boolean(initialRequisition);
   const scannedLines = review.lines
     .map((line) => ({
       id: line.id,
@@ -208,7 +209,7 @@ export function evaluateRequisitionComparison(
       status: "SCAN_FAILED",
       label: "Manual review needed",
       message: "Receipt scan could not be completed confidently. Please review and complete required fields.",
-      canInspectScannedDetails: false,
+      canInspectScannedDetails: hasRequisitionContext,
       ...baseResult
     };
   }
@@ -228,7 +229,7 @@ export function evaluateRequisitionComparison(
       status: "SCAN_FAILED",
       label: "Manual review needed",
       message: "Receipt scan data is incomplete. Please review and complete required fields.",
-      canInspectScannedDetails: false,
+      canInspectScannedDetails: hasRequisitionContext,
       ...baseResult
     };
   }

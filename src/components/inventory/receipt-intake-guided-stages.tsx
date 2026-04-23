@@ -56,6 +56,7 @@ interface ReceiptIntakeGuidedStagesProps {
   setDebugMode: Dispatch<SetStateAction<boolean>>;
   review: ReviewState | null;
   mismatchDetected: boolean;
+  canInspectScannedDetails: boolean;
   showScannedDetails: boolean;
   setShowScannedDetails: Dispatch<SetStateAction<boolean>>;
   setReview: Dispatch<SetStateAction<ReviewState | null>>;
@@ -128,6 +129,7 @@ export function ReceiptIntakeGuidedStages({
   setDebugMode,
   review,
   mismatchDetected,
+  canInspectScannedDetails,
   showScannedDetails,
   setShowScannedDetails,
   setReview,
@@ -226,6 +228,7 @@ export function ReceiptIntakeGuidedStages({
           setDebugMode={setDebugMode}
           review={review}
           mismatchDetected={mismatchDetected}
+          canInspectScannedDetails={canInspectScannedDetails}
           showScannedDetails={showScannedDetails}
           setShowScannedDetails={setShowScannedDetails}
           setReview={setReview}

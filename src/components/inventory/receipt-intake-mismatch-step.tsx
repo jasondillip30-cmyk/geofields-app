@@ -20,6 +20,15 @@ export function ReceiptIntakeMismatchStep({
   requisitionComparison: RequisitionComparisonResult | null;
   acceptMismatchOverrideAndContinue: () => void;
 }) {
+  const scanFailedComparison = requisitionComparison?.status === "SCAN_FAILED";
+  const formatScannedValue = (value: string) => {
+    const normalized = value.trim();
+    if (scanFailedComparison && (normalized.length === 0 || normalized === "-")) {
+      return "Not extracted";
+    }
+    return normalized || "-";
+  };
+
   return (
     <>
       {showMismatchFinalizeConfirm && (
@@ -76,6 +85,11 @@ export function ReceiptIntakeMismatchStep({
               </button>
             </div>
             <div className="space-y-3 p-4">
+              {scanFailedComparison && (
+                <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Scan data is incomplete. Compare values below and complete missing scanned fields manually.
+                </p>
+              )}
               <DataTable
                 compact
                 columns={["Field", "Approved Requisition", "Scanned Receipt"]}
@@ -84,7 +98,7 @@ export function ReceiptIntakeMismatchStep({
                     {row.label}
                   </span>,
                   row.approved || "-",
-                  row.scanned || "-"
+                  formatScannedValue(row.scanned)
                 ])}
                 rowClassNames={requisitionComparison.headerRows.map((row) =>
                   row.mismatch ? "bg-red-50/70 text-red-900 hover:bg-red-50/80" : ""
@@ -112,7 +126,9 @@ export function ReceiptIntakeMismatchStep({
                     Scanned Receipt Lines
                   </p>
                   {requisitionComparison.scannedLines.length === 0 ? (
-                    <p className="mt-1 text-xs text-slate-600">No line items extracted from scan.</p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {scanFailedComparison ? "Not extracted from scan." : "No line items extracted from scan."}
+                    </p>
                   ) : (
                     <div className="mt-1 space-y-1 text-xs text-slate-700">
                       {requisitionComparison.scannedLines.map((line) => (
