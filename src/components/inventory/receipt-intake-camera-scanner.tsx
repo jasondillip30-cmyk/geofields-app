@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import jsQR from "jsqr";
 
-import type { CameraSessionState } from "@/components/inventory/receipt-intake-panel-types";
+import type { CameraScanConfirmPayload, CameraSessionState } from "@/components/inventory/receipt-intake-panel-types";
 
 type BarcodeCandidate = {
   rawValue?: string;
@@ -36,7 +36,7 @@ interface ReceiptIntakeCameraScannerProps {
   onSessionStateChange: (state: CameraSessionState) => void;
   onSessionErrorChange: (message: string | null) => void;
   onDetectedPayloadChange: (payload: string) => void;
-  onConfirmPayload: (payload: string) => Promise<boolean>;
+  onConfirmPayload: (payload: CameraScanConfirmPayload) => Promise<boolean>;
   onCancelPendingConfirm: () => void;
   onClose: () => void;
   onEnterManually: () => void;
@@ -68,7 +68,10 @@ export function ReceiptIntakeCameraScanner({
   const sessionStateRef = useRef<CameraSessionState>(sessionState);
   const openRef = useRef(open);
   const activeStartAttemptRef = useRef(0);
+  const capturedFrameFileRef = useRef<File | null>(null);
+  const frozenFrameUrlRef = useRef<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [frozenFrameUrl, setFrozenFrameUrl] = useState("");
 
   const statusText = useMemo(() => {
     if (sessionState === "requesting") {
@@ -111,6 +114,50 @@ export function ReceiptIntakeCameraScanner({
   const resetDetectionStability = useCallback(() => {
     lastCandidateRef.current = "";
     stableHitsRef.current = 0;
+  }, []);
+
+  const clearCapturedFrame = useCallback(() => {
+    capturedFrameFileRef.current = null;
+    const previousUrl = frozenFrameUrlRef.current;
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+      frozenFrameUrlRef.current = null;
+    }
+    setFrozenFrameUrl("");
+  }, []);
+
+  const captureCurrentFrameFile = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      return null;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((result) => resolve(result), "image/jpeg", 0.92);
+    });
+    if (!blob) {
+      return null;
+    }
+    const file = new File([blob], `camera-qr-capture-${Date.now()}.jpg`, {
+      type: "image/jpeg",
+      lastModified: Date.now()
+    });
+    const nextUrl = URL.createObjectURL(file);
+    const previousUrl = frozenFrameUrlRef.current;
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+    }
+    frozenFrameUrlRef.current = nextUrl;
+    capturedFrameFileRef.current = file;
+    setFrozenFrameUrl(nextUrl);
+    return file;
   }, []);
 
   const detectCandidateWithBarcodeDetector = useCallback(async () => {
@@ -183,13 +230,14 @@ export function ReceiptIntakeCameraScanner({
   }, []);
 
   const handleStableDetection = useCallback(
-    (payload: string) => {
+    async (payload: string) => {
+      await captureCurrentFrameFile();
       onDetectedPayloadChange(payload);
       onSessionErrorChange(null);
       onSessionStateChange("detected");
       stopCameraStream();
     },
-    [onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, stopCameraStream]
+    [captureCurrentFrameFile, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, stopCameraStream]
   );
 
   const runScanTick = useCallback(async () => {
@@ -220,7 +268,7 @@ export function ReceiptIntakeCameraScanner({
       }
 
       if (stableHitsRef.current >= 3) {
-        handleStableDetection(candidate);
+        await handleStableDetection(candidate);
       }
     } catch (error) {
       resetDetectionStability();
@@ -237,6 +285,7 @@ export function ReceiptIntakeCameraScanner({
     activeStartAttemptRef.current = attemptId;
     stopCameraStream();
     resetDetectionStability();
+    clearCapturedFrame();
     onDetectedPayloadChange("");
     onSessionErrorChange(null);
 
@@ -313,7 +362,7 @@ export function ReceiptIntakeCameraScanner({
               : "Unable to start camera scanner.";
       onSessionErrorChange(message);
     }
-  }, [onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, runScanTick, stopCameraStream]);
+  }, [clearCapturedFrame, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, runScanTick, stopCameraStream]);
 
   const handleConfirm = useCallback(async () => {
     if (!detectedPayload || submitting) {
@@ -321,7 +370,10 @@ export function ReceiptIntakeCameraScanner({
     }
     setSubmitting(true);
     try {
-      const ok = await onConfirmPayload(detectedPayload);
+      const ok = await onConfirmPayload({
+        rawPayload: detectedPayload,
+        capturedFrameFile: capturedFrameFileRef.current
+      });
       if (ok) {
         stopCameraStream();
         onSessionStateChange("idle");
@@ -342,11 +394,12 @@ export function ReceiptIntakeCameraScanner({
     cancelPendingStart();
     stopCameraStream();
     resetDetectionStability();
+    clearCapturedFrame();
     onSessionStateChange("idle");
     onSessionErrorChange(null);
     onDetectedPayloadChange("");
     onClose();
-  }, [cancelPendingStart, onCancelPendingConfirm, onClose, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, stopCameraStream]);
+  }, [cancelPendingStart, clearCapturedFrame, onCancelPendingConfirm, onClose, onDetectedPayloadChange, onSessionErrorChange, onSessionStateChange, resetDetectionStability, stopCameraStream]);
 
   useEffect(() => {
     sessionStateRef.current = sessionState;
@@ -365,6 +418,7 @@ export function ReceiptIntakeCameraScanner({
       cancelPendingStart();
       stopCameraStream();
       resetDetectionStability();
+      clearCapturedFrame();
       onSessionStateChange("idle");
       return;
     }
@@ -373,20 +427,23 @@ export function ReceiptIntakeCameraScanner({
       onCancelPendingConfirm();
       cancelPendingStart();
       stopCameraStream();
+      clearCapturedFrame();
     };
-  }, [cancelPendingStart, onCancelPendingConfirm, open, onSessionStateChange, resetDetectionStability, startCameraSession, stopCameraStream]);
+  }, [cancelPendingStart, clearCapturedFrame, onCancelPendingConfirm, open, onSessionStateChange, resetDetectionStability, startCameraSession, stopCameraStream]);
 
   useEffect(() => {
     return () => {
       onCancelPendingConfirm();
       cancelPendingStart();
       stopCameraStream();
+      clearCapturedFrame();
     };
-  }, [cancelPendingStart, onCancelPendingConfirm, stopCameraStream]);
+  }, [cancelPendingStart, clearCapturedFrame, onCancelPendingConfirm, stopCameraStream]);
 
   if (!open) {
     return null;
   }
+  const showFrozenFrame = Boolean(frozenFrameUrl) && (sessionState === "detected" || submitting);
 
   return (
     <div className="fixed inset-0 z-[120] bg-slate-950/95 text-white">
@@ -409,13 +466,21 @@ export function ReceiptIntakeCameraScanner({
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
             <div className="relative mx-auto w-full max-w-md overflow-hidden rounded-2xl border border-white/20 bg-black">
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                autoPlay
-                className="h-[48svh] min-h-[220px] max-h-[440px] w-full object-cover sm:h-[56vh] sm:min-h-[300px]"
-              />
+              {showFrozenFrame && frozenFrameUrl ? (
+                <div
+                  aria-label="Captured QR frame"
+                  className="h-[48svh] min-h-[220px] max-h-[440px] w-full bg-cover bg-center sm:h-[56vh] sm:min-h-[300px]"
+                  style={{ backgroundImage: `url("${frozenFrameUrl}")` }}
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  autoPlay
+                  className="h-[48svh] min-h-[220px] max-h-[440px] w-full object-cover sm:h-[56vh] sm:min-h-[300px]"
+                />
+              )}
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="h-[52%] w-[68%] rounded-xl border-2 border-white/90 shadow-[0_0_0_9999px_rgba(2,6,23,0.45)]" />
               </div>
@@ -453,7 +518,8 @@ export function ReceiptIntakeCameraScanner({
               <button
                 type="button"
                 onClick={handleScanAgain}
-                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+                disabled={submitting}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Scan again
               </button>
@@ -463,7 +529,8 @@ export function ReceiptIntakeCameraScanner({
                   closeOverlay();
                   onEnterManually();
                 }}
-                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+                disabled={submitting}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Enter manually
               </button>
@@ -473,7 +540,8 @@ export function ReceiptIntakeCameraScanner({
                   closeOverlay();
                   onUseUploadFallback();
                 }}
-                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15"
+                disabled={submitting}
+                className="rounded-lg border border-white/30 bg-white/10 px-3 py-2 font-semibold hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Upload fallback
               </button>

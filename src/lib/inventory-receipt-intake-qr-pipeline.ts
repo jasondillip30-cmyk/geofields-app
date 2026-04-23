@@ -68,45 +68,42 @@ interface TraLookupResult {
 const PDF_MODULE_WARNING_PREFIX = "[PDF_MODULE_ERROR]";
 const TRA_LOADING_SHELL_RETRY_HINT =
   "TRA verification page is still loading. Try Scan again or continue with manual review.";
-const TRA_LOOKUP_ATTEMPT_PROFILES: Array<{
+const TRA_LOOKUP_TIMEOUT_REASON =
+  "TRA verification response was slow and exceeded the scan time budget. Try Scan again or continue with manual review.";
+const TRA_LOOKUP_TOTAL_BUDGET_MS = 50000;
+const TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS = 4500;
+type TraLookupAttemptProfile = {
   label: string;
   retryDelayMs: number;
   gotoTimeoutMs: number;
   waitForBodyMs: number;
   waitForSignalMs: number;
   fallbackTimeoutMs: number;
-}> = [
+};
+const TRA_LOOKUP_ATTEMPT_PROFILES: TraLookupAttemptProfile[] = [
   {
     label: "quick",
     retryDelayMs: 0,
-    gotoTimeoutMs: 7000,
-    waitForBodyMs: 3500,
-    waitForSignalMs: 2500,
-    fallbackTimeoutMs: 5000
+    gotoTimeoutMs: 6000,
+    waitForBodyMs: 3000,
+    waitForSignalMs: 2000,
+    fallbackTimeoutMs: 4000
   },
   {
     label: "balanced",
-    retryDelayMs: 900,
-    gotoTimeoutMs: 10000,
-    waitForBodyMs: 4500,
-    waitForSignalMs: 4500,
-    fallbackTimeoutMs: 7000
+    retryDelayMs: 700,
+    gotoTimeoutMs: 8500,
+    waitForBodyMs: 3500,
+    waitForSignalMs: 3500,
+    fallbackTimeoutMs: 5500
   },
   {
     label: "extended",
-    retryDelayMs: 1800,
-    gotoTimeoutMs: 13000,
-    waitForBodyMs: 5000,
-    waitForSignalMs: 6500,
-    fallbackTimeoutMs: 8500
-  },
-  {
-    label: "stabilize",
-    retryDelayMs: 2600,
-    gotoTimeoutMs: 16000,
-    waitForBodyMs: 6500,
-    waitForSignalMs: 9000,
-    fallbackTimeoutMs: 10000
+    retryDelayMs: 1200,
+    gotoTimeoutMs: 10500,
+    waitForBodyMs: 4000,
+    waitForSignalMs: 4500,
+    fallbackTimeoutMs: 6500
   }
 ];
 
@@ -509,6 +506,7 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
 
   type TraLookupAttempt = {
     profileLabel: string;
+    timeoutProfile: TraLookupAttemptProfile;
     renderedLookup: Awaited<ReturnType<typeof fetchTraRenderedHtml>>;
     parsedLookup: ReturnType<typeof parseTraLookupResponse>;
     parsedFields: Partial<ReceiptHeaderExtraction>;
@@ -518,9 +516,13 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
     isLoadingShell: boolean;
     reason: string;
     score: number;
+    elapsedMs: number;
+    remainingBudgetMs: number;
   };
 
   const attempts: TraLookupAttempt[] = [];
+  const lookupStartedAt = Date.now();
+  let budgetExitReason = "";
 
   try {
     if (process.env.NODE_ENV !== "production") {
@@ -531,10 +533,30 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
     }
 
     for (const profile of TRA_LOOKUP_ATTEMPT_PROFILES) {
-      if (profile.retryDelayMs > 0 && attempts.length > 0) {
-        await sleep(profile.retryDelayMs);
+      const elapsedBeforeDelayMs = Date.now() - lookupStartedAt;
+      const remainingBeforeDelayMs = TRA_LOOKUP_TOTAL_BUDGET_MS - elapsedBeforeDelayMs;
+      if (remainingBeforeDelayMs <= TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS) {
+        budgetExitReason = TRA_LOOKUP_TIMEOUT_REASON;
+        break;
       }
-      const renderedLookup = await fetchTraRenderedHtml(target.toString(), profile);
+      if (profile.retryDelayMs > 0 && attempts.length > 0) {
+        const maxDelayMs = Math.max(0, remainingBeforeDelayMs - TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS);
+        const delayMs = Math.min(profile.retryDelayMs, maxDelayMs);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
+      }
+      const elapsedBeforeAttemptMs = Date.now() - lookupStartedAt;
+      const remainingBeforeAttemptMs = TRA_LOOKUP_TOTAL_BUDGET_MS - elapsedBeforeAttemptMs;
+      if (remainingBeforeAttemptMs <= TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS) {
+        budgetExitReason = TRA_LOOKUP_TIMEOUT_REASON;
+        break;
+      }
+      const timeoutProfile = constrainTraLookupProfileForRemainingBudget({
+        profile,
+        remainingBudgetMs: remainingBeforeAttemptMs
+      });
+      const renderedLookup = await fetchTraRenderedHtml(target.toString(), timeoutProfile);
       const body = renderedLookup.html;
       const parsedLookup = parseTraLookupResponse({ url: target, body });
       const parsedFields = parsedLookup.parsedFields;
@@ -558,7 +580,8 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
         lineItemsParseStatus: parsedLookup.lineItemsParseStatus
       });
       attempts.push({
-        profileLabel: profile.label,
+        profileLabel: timeoutProfile.label,
+        timeoutProfile,
         renderedLookup,
         parsedLookup,
         parsedFields,
@@ -567,15 +590,23 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
         parsed,
         isLoadingShell,
         reason,
-        score
+        score,
+        elapsedMs: Date.now() - lookupStartedAt,
+        remainingBudgetMs: Math.max(0, TRA_LOOKUP_TOTAL_BUDGET_MS - (Date.now() - lookupStartedAt))
       });
 
       if (process.env.NODE_ENV !== "production") {
         debugLog("[inventory][receipt-intake][tra-lookup][attempt]", {
-          profile: profile.label,
+          profile: timeoutProfile.label,
+          elapsedMs: attempts[attempts.length - 1]?.elapsedMs || 0,
+          remainingBudgetMs: attempts[attempts.length - 1]?.remainingBudgetMs || 0,
           status: renderedLookup.httpStatus,
           ok: renderedLookup.ok,
           source: renderedLookup.source,
+          gotoTimeoutMs: timeoutProfile.gotoTimeoutMs,
+          waitForBodyMs: timeoutProfile.waitForBodyMs,
+          waitForSignalMs: timeoutProfile.waitForSignalMs,
+          fallbackTimeoutMs: timeoutProfile.fallbackTimeoutMs,
           htmlLength: body.length,
           containsReceipt: renderedLookup.containsReceipt,
           containsTin: renderedLookup.containsTin,
@@ -590,8 +621,16 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
         });
       }
 
-      const hasMeaningfulStructuredData = parsedCount >= 3 || parsedLineItemsCount > 0;
+      const hasMeaningfulStructuredData = hasMeaningfulTraEarlyExitData({
+        parsedFields,
+        parsedCount,
+        parsedLineItemsCount
+      });
       if (renderedLookup.ok && !isLoadingShell && hasMeaningfulStructuredData) {
+        break;
+      }
+      if (TRA_LOOKUP_TOTAL_BUDGET_MS - (Date.now() - lookupStartedAt) <= TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS) {
+        budgetExitReason = TRA_LOOKUP_TIMEOUT_REASON;
         break;
       }
     }
@@ -625,7 +664,9 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
       attempted: true,
       success: false,
       status: "FAILED",
-      reason: normalizeTraLookupFailureReason("TRA verification lookup returned limited data."),
+      reason:
+        budgetExitReason ||
+        normalizeTraLookupFailureReason("TRA verification lookup returned limited data."),
       httpStatus: null,
       parsed: false,
       parsedFields: {},
@@ -646,7 +687,9 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
     ? bestAttempt.parsed
       ? ""
       : "Lookup response could not be parsed"
-    : bestAttempt.reason || normalizeTraLookupFailureReason("TRA verification lookup returned limited data.");
+    : budgetExitReason ||
+      bestAttempt.reason ||
+      normalizeTraLookupFailureReason("TRA verification lookup returned limited data.");
 
   if (process.env.NODE_ENV !== "production") {
     debugLog("[inventory][receipt-intake][tra-lookup][response]", {
@@ -665,8 +708,13 @@ async function attemptTraVerificationLookup(url: string): Promise<TraLookupResul
       fieldsParseStatus: bestAttempt.parsedLookup.fieldsParseStatus,
       lineItemsParseStatus: bestAttempt.parsedLookup.lineItemsParseStatus,
       attemptsEvaluated: attempts.length,
+      totalElapsedMs: Date.now() - lookupStartedAt,
+      budgetMs: TRA_LOOKUP_TOTAL_BUDGET_MS,
+      budgetExitReason,
       attemptScores: attempts.map((attempt) => ({
         profile: attempt.profileLabel,
+        elapsedMs: attempt.elapsedMs,
+        remainingBudgetMs: attempt.remainingBudgetMs,
         score: roundTo(attempt.score, 2),
         ok: attempt.renderedLookup.ok,
         parsedCount: attempt.parsedCount,
@@ -754,15 +802,61 @@ function normalizeTraLookupFailureReason(rawReason: string) {
   }
   const lower = reason.toLowerCase();
   if (lower.includes("aborted") || lower.includes("aborterror") || lower.includes("operation was aborted")) {
-    return "TRA verification timed out before the receipt fully loaded. Try Scan again or continue with manual review.";
+    return TRA_LOOKUP_TIMEOUT_REASON;
   }
   if (lower.includes("timeout") || lower.includes("timed out")) {
-    return "TRA verification is taking longer than expected. Try Scan again or continue with manual review.";
+    return TRA_LOOKUP_TIMEOUT_REASON;
   }
   if (lower.includes("loading")) {
     return TRA_LOADING_SHELL_RETRY_HINT;
   }
   return reason;
+}
+
+function hasMeaningfulTraEarlyExitData({
+  parsedFields,
+  parsedCount,
+  parsedLineItemsCount
+}: {
+  parsedFields: Partial<ReceiptHeaderExtraction>;
+  parsedCount: number;
+  parsedLineItemsCount: number;
+}) {
+  if (parsedLineItemsCount > 0) {
+    return true;
+  }
+  const criticalSignals = [
+    parsedFields.supplierName,
+    parsedFields.receiptNumber,
+    parsedFields.verificationCode,
+    parsedFields.traReceiptNumber,
+    parsedFields.total
+  ].filter((value) => (typeof value === "number" ? value > 0 : String(value || "").trim().length > 0)).length;
+  return criticalSignals >= 3 || parsedCount >= 5;
+}
+
+function constrainTraLookupProfileForRemainingBudget({
+  profile,
+  remainingBudgetMs
+}: {
+  profile: TraLookupAttemptProfile;
+  remainingBudgetMs: number;
+}): TraLookupAttemptProfile {
+  const safeRemainingBudgetMs = Math.max(TRA_LOOKUP_MIN_ATTEMPT_WINDOW_MS, remainingBudgetMs);
+  const attemptWindowMs = Math.max(3500, safeRemainingBudgetMs - 700);
+  const perStageCaps = {
+    gotoTimeoutMs: Math.max(2200, Math.floor(attemptWindowMs * 0.45)),
+    waitForBodyMs: Math.max(1000, Math.floor(attemptWindowMs * 0.2)),
+    waitForSignalMs: Math.max(1000, Math.floor(attemptWindowMs * 0.25)),
+    fallbackTimeoutMs: Math.max(1200, Math.floor(attemptWindowMs * 0.35))
+  };
+  return {
+    ...profile,
+    gotoTimeoutMs: Math.min(profile.gotoTimeoutMs, perStageCaps.gotoTimeoutMs),
+    waitForBodyMs: Math.min(profile.waitForBodyMs, perStageCaps.waitForBodyMs),
+    waitForSignalMs: Math.min(profile.waitForSignalMs, perStageCaps.waitForSignalMs),
+    fallbackTimeoutMs: Math.min(profile.fallbackTimeoutMs, perStageCaps.fallbackTimeoutMs)
+  };
 }
 
 async function sleep(ms: number) {
@@ -774,13 +868,7 @@ async function sleep(ms: number) {
 
 async function fetchTraRenderedHtml(
   url: string,
-  profile: {
-    label: string;
-    gotoTimeoutMs: number;
-    waitForBodyMs: number;
-    waitForSignalMs: number;
-    fallbackTimeoutMs: number;
-  }
+  profile: TraLookupAttemptProfile
 ): Promise<{
   ok: boolean;
   httpStatus: number | null;

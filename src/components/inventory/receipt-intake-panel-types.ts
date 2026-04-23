@@ -38,6 +38,10 @@ export type ReceiptWorkflowChoice =
 export type ReceiptInputMethod = "SCAN" | "MANUAL";
 export type ReceiptFollowUpStage = "SCAN" | "REVIEW" | "FINALIZE";
 export type ReceiptCaptureMode = "SCAN" | "MANUAL";
+export interface CameraScanConfirmPayload {
+  rawPayload: string;
+  capturedFrameFile?: File | null;
+}
 export type ScanFailureStage =
   | "NONE"
   | "QR_NOT_DETECTED"

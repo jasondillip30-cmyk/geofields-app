@@ -9,6 +9,7 @@ import { ReceiptIntakeReviewStep } from "@/components/inventory/receipt-intake-r
 import { ReceiptIntakeScanStep } from "@/components/inventory/receipt-intake-scan-step";
 import { inventoryCategoryOptions, formatInventoryCategory } from "@/lib/inventory";
 import type {
+  CameraScanConfirmPayload,
   CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
@@ -97,7 +98,7 @@ interface ReceiptIntakeGuidedStagesProps {
   setCameraSessionError: Dispatch<SetStateAction<string | null>>;
   cameraDetectedPayload: string;
   setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
-  handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
+  handleCameraPayloadConfirm: (payload: CameraScanConfirmPayload) => Promise<boolean>;
   cancelPendingCameraConfirm: () => void;
 }
 

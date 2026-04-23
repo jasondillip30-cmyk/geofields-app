@@ -7,6 +7,7 @@ import { ReceiptIntakeCameraScanner } from "@/components/inventory/receipt-intak
 import { InputField } from "@/components/inventory/receipt-intake-panel-fields";
 import { formatPercent } from "@/components/inventory/receipt-intake-scan-utils";
 import type {
+  CameraScanConfirmPayload,
   CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
@@ -109,7 +110,7 @@ export function ReceiptIntakeScanStep({
   setCameraSessionError: Dispatch<SetStateAction<string | null>>;
   cameraDetectedPayload: string;
   setCameraDetectedPayload: Dispatch<SetStateAction<string>>;
-  handleCameraPayloadConfirm: (rawPayload: string) => Promise<boolean>;
+  handleCameraPayloadConfirm: (payload: CameraScanConfirmPayload) => Promise<boolean>;
   cancelPendingCameraConfirm: () => void;
 }) {
   const [showCameraScanner, setShowCameraScanner] = useState(false);
