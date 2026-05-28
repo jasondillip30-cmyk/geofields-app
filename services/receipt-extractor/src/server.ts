@@ -6,6 +6,7 @@ import { handleExtractReceipt, handleExtractReceiptFromRawPayload } from "./rout
 import { handleHealthz } from "./routes/healthz";
 
 const port = Number(process.env.PORT || 4300);
+const host = process.env.HOST || "0.0.0.0";
 
 function toWebRequest(req: IncomingMessage) {
   const protocol = (req.headers["x-forwarded-proto"] as string) || "http";
@@ -110,6 +111,6 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(port, () => {
-  console.info(`[receipt-extractor] listening on port ${port}`);
+server.listen(port, host, () => {
+  console.info(`[receipt-extractor] listening on ${host}:${port}`);
 });

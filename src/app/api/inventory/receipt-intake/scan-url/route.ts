@@ -28,6 +28,39 @@ import {
 
 export const runtime = "nodejs";
 
+type ScanUrlServedBy = "local" | "shadow_local" | "remote" | "remote_fallback_local";
+
+function logModeServingPath({
+  mode,
+  servedBy,
+  route,
+  remoteAttemptStatus,
+  remoteStatus,
+  remoteAttempts,
+  remoteDurationMs,
+  remoteReason
+}: {
+  mode: "local" | "shadow" | "remote";
+  servedBy: ScanUrlServedBy;
+  route: "extract" | "scan-url";
+  remoteAttemptStatus: string;
+  remoteStatus?: number | null;
+  remoteAttempts?: number | null;
+  remoteDurationMs?: number | null;
+  remoteReason?: string;
+}) {
+  if (process.env.NODE_ENV === "production") {
+    return;
+  }
+  const statusSegment = typeof remoteStatus === "number" ? String(remoteStatus) : "n/a";
+  const attemptsSegment = typeof remoteAttempts === "number" ? String(remoteAttempts) : "n/a";
+  const durationSegment = typeof remoteDurationMs === "number" ? String(remoteDurationMs) : "n/a";
+  const reasonSegment = remoteReason && remoteReason.trim() ? remoteReason.trim() : "n/a";
+  console.info(
+    `[inventory][receipt-intake][mode] route=${route} mode=${mode} servedBy=${servedBy} remoteAttemptStatus=${remoteAttemptStatus} remoteStatus=${statusSegment} remoteAttempts=${attemptsSegment} remoteDurationMs=${durationSegment} remoteReason=${reasonSegment}`
+  );
+}
+
 function readRawPayload(body: unknown) {
   if (!body || typeof body !== "object") {
     return "";
@@ -75,6 +108,12 @@ export async function POST(request: NextRequest) {
 
     const debugMode = process.env.NODE_ENV !== "production" && readDebugValue(body);
     const extractorMode = resolveReceiptExtractorMode();
+    let servedBy: ScanUrlServedBy = extractorMode === "shadow" ? "shadow_local" : "local";
+    let remoteAttemptStatus = "not_attempted";
+    let remoteStatus: number | null = null;
+    let remoteAttempts: number | null = null;
+    let remoteDurationMs: number | null = null;
+    let remoteReason = "";
     logRouteStage("scan_url_extractor_mode_resolved", {
       mode: extractorMode
     });
@@ -132,6 +171,8 @@ export async function POST(request: NextRequest) {
       };
 
       if (extractorMode === "shadow") {
+        servedBy = "shadow_local";
+        remoteAttemptStatus = "shadow_async_started";
         void (async () => {
           const shadow = await callReceiptExtractorFromRawPayload({
             rawPayload,
@@ -148,6 +189,16 @@ export async function POST(request: NextRequest) {
             },
             { channel: "inventory-receipt" }
           );
+          logModeServingPath({
+            mode: extractorMode,
+            servedBy: "shadow_local",
+            route: "scan-url",
+            remoteAttemptStatus: shadow.ok ? "shadow_async_succeeded" : "shadow_async_failed",
+            remoteStatus: shadow.status,
+            remoteAttempts: shadow.attempts,
+            remoteDurationMs: shadow.durationMs,
+            remoteReason: shadow.error
+          });
         })();
       } else {
         const remote = await callReceiptExtractorFromRawPayload({
@@ -157,6 +208,11 @@ export async function POST(request: NextRequest) {
         if (remote.ok && remote.payload && isReceiptExtractorSuccessPayload(remote.payload)) {
           if (isExtractionResult(remote.payload.extracted)) {
             extraction = remote.payload.extracted;
+            servedBy = "remote";
+            remoteAttemptStatus = "succeeded";
+            remoteStatus = remote.status;
+            remoteAttempts = remote.attempts;
+            remoteDurationMs = remote.durationMs;
             logRouteStage("scan_url_remote_succeeded", {
               attempts: remote.attempts,
               durationMs: remote.durationMs
@@ -165,18 +221,40 @@ export async function POST(request: NextRequest) {
         }
 
         if (!extraction) {
+          servedBy = "remote_fallback_local";
+          remoteAttemptStatus = "failed";
+          remoteStatus = remote.status;
+          remoteAttempts = remote.attempts;
+          remoteDurationMs = remote.durationMs;
+          remoteReason = remote.error || "Remote extractor response was not usable.";
           logRouteStage("scan_url_remote_failed", {
             status: remote.status,
-            reason: remote.error || "Remote extractor response was not usable."
+            reason: remoteReason
           });
         }
       }
     } else if (extractorMode !== "local") {
+      servedBy = extractorMode === "shadow" ? "shadow_local" : "remote_fallback_local";
+      remoteAttemptStatus = "skipped";
+      remoteReason = "RECEIPT_EXTRACTOR_BASE_URL not configured";
       logRouteStage("scan_url_remote_skipped", {
         reason: "RECEIPT_EXTRACTOR_BASE_URL not configured",
         mode: extractorMode
       });
+    } else {
+      servedBy = "local";
     }
+
+    logModeServingPath({
+      mode: extractorMode,
+      servedBy,
+      route: "scan-url",
+      remoteAttemptStatus,
+      remoteStatus,
+      remoteAttempts,
+      remoteDurationMs,
+      remoteReason
+    });
 
     if (!extraction) {
       const extractionModule = await import("@/lib/inventory-receipt-intake").catch((error) => {

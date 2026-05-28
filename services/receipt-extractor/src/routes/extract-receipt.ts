@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  extractQrDataOnly,
-  extractReceiptData,
-  extractReceiptDataFromRawPayload,
-  type ReceiptQrAssistCrop
-} from "@/lib/inventory-receipt-intake";
+import type { ReceiptQrAssistCrop } from "@/lib/inventory-receipt-intake";
 
 import { resolveRuntimeCapabilities } from "../runtime-capabilities";
 import {
@@ -31,6 +26,30 @@ type InventoryReferenceItemLite = {
   category: string;
 };
 
+type ReceiptExtractionModule = {
+  extractQrDataOnly: (input: {
+    fileBuffer: Buffer;
+    mimeType: string;
+    qrAssistCrop?: ReceiptQrAssistCrop | null;
+    preprocessedImages?: unknown;
+  }) => Promise<unknown>;
+  extractReceiptData: (input: {
+    fileBuffer: Buffer;
+    mimeType: string;
+    fileName: string;
+    inventoryItems: InventoryReferenceItemLite[];
+    qrAssistCrop?: ReceiptQrAssistCrop | null;
+    preprocessedImages?: unknown;
+    debug?: boolean;
+  }) => Promise<unknown>;
+  extractReceiptDataFromRawPayload: (input: {
+    rawPayload: string;
+    inventoryItems: InventoryReferenceItemLite[];
+  }) => Promise<unknown>;
+};
+
+let extractionModulePromise: Promise<ReceiptExtractionModule> | null = null;
+
 type ExtractContext = {
   requestId?: string;
   source?: "desktop_upload" | "mobile_gallery" | "mobile_camera_file";
@@ -44,6 +63,71 @@ type ExtractOptions = {
   mode?: "full" | "decode-only";
   trace?: boolean;
 };
+
+function readModuleFunction(
+  moduleValue: unknown,
+  functionName: keyof ReceiptExtractionModule
+) {
+  if (!moduleValue || typeof moduleValue !== "object") {
+    return null;
+  }
+  const moduleRecord = moduleValue as Record<string, unknown>;
+  const direct = moduleRecord[functionName];
+  if (typeof direct === "function") {
+    return direct;
+  }
+  const defaultExport =
+    moduleRecord.default && typeof moduleRecord.default === "object"
+      ? (moduleRecord.default as Record<string, unknown>)
+      : null;
+  const fromDefault = defaultExport?.[functionName];
+  if (typeof fromDefault === "function") {
+    return fromDefault;
+  }
+  const cjsInteropExport =
+    moduleRecord["module.exports"] && typeof moduleRecord["module.exports"] === "object"
+      ? (moduleRecord["module.exports"] as Record<string, unknown>)
+      : null;
+  const fromCjsInterop = cjsInteropExport?.[functionName];
+  if (typeof fromCjsInterop === "function") {
+    return fromCjsInterop;
+  }
+  return null;
+}
+
+async function loadExtractionModule(): Promise<ReceiptExtractionModule> {
+  if (!extractionModulePromise) {
+    extractionModulePromise = import("@/lib/inventory-receipt-intake").then((moduleValue) => {
+      const extractQrDataOnly = readModuleFunction(moduleValue, "extractQrDataOnly");
+      const extractReceiptData = readModuleFunction(moduleValue, "extractReceiptData");
+      const extractReceiptDataFromRawPayload = readModuleFunction(
+        moduleValue,
+        "extractReceiptDataFromRawPayload"
+      );
+
+      if (
+        typeof extractQrDataOnly !== "function" ||
+        typeof extractReceiptData !== "function" ||
+        typeof extractReceiptDataFromRawPayload !== "function"
+      ) {
+        throw new Error(
+          "Receipt extraction module did not expose required extraction functions."
+        );
+      }
+
+      return {
+        extractQrDataOnly:
+          extractQrDataOnly as ReceiptExtractionModule["extractQrDataOnly"],
+        extractReceiptData:
+          extractReceiptData as ReceiptExtractionModule["extractReceiptData"],
+        extractReceiptDataFromRawPayload:
+          extractReceiptDataFromRawPayload as ReceiptExtractionModule["extractReceiptDataFromRawPayload"]
+      };
+    });
+  }
+
+  return extractionModulePromise;
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -349,22 +433,23 @@ export async function handleExtractReceipt(request: Request) {
   }
 
   const extractStartedAt = Date.now();
-  const inventoryItems = (context.inventoryItems || []) as Parameters<typeof extractReceiptData>[0]["inventoryItems"];
+  const inventoryItems = Array.isArray(context.inventoryItems) ? context.inventoryItems : [];
 
   const extractionId = context.requestId || randomUUID();
 
-  let extractedPayload: Awaited<ReturnType<typeof extractReceiptData>> | null = null;
-  let qrDecodePayload: Awaited<ReturnType<typeof extractQrDataOnly>> | null = null;
+  let extractedPayload: unknown = null;
+  let qrDecodePayload: unknown = null;
   try {
+    const extractionModule = await loadExtractionModule();
     if (options.mode === "decode-only") {
-      qrDecodePayload = await extractQrDataOnly({
+      qrDecodePayload = await extractionModule.extractQrDataOnly({
         fileBuffer: ingestion.fileBuffer,
         mimeType: ingestion.effectiveMimeType,
         qrAssistCrop: context.qrCrop || null,
         preprocessedImages: ingestion.imageVariants
       });
     } else {
-      extractedPayload = await extractReceiptData({
+      extractedPayload = await extractionModule.extractReceiptData({
         fileBuffer: ingestion.fileBuffer,
         mimeType: ingestion.effectiveMimeType,
         fileName: receiptFileEntry.name,
@@ -808,12 +893,11 @@ export async function handleExtractReceiptFromRawPayload(request: Request) {
   }
 
   const context = readRawContext(body);
-  const inventoryItems = Array.isArray(context.inventoryItems)
-    ? (context.inventoryItems as Parameters<typeof extractReceiptDataFromRawPayload>[0]["inventoryItems"])
-    : ([] as Parameters<typeof extractReceiptDataFromRawPayload>[0]["inventoryItems"]);
+  const inventoryItems = Array.isArray(context.inventoryItems) ? context.inventoryItems : [];
 
   try {
-    const extraction = await extractReceiptDataFromRawPayload({
+    const extractionModule = await loadExtractionModule();
+    const extraction = await extractionModule.extractReceiptDataFromRawPayload({
       rawPayload,
       inventoryItems
     });
