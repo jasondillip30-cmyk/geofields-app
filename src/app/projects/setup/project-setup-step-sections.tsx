@@ -17,6 +17,7 @@ type ReviewSummary = {
   clientName: string;
   location: string;
   status: string;
+  scheduleStatus: string;
   primaryRig: string;
   secondaryRig: string;
   team: Array<{
@@ -164,7 +165,15 @@ export function ProjectSetupStepSections({
             onChange={(value) => setForm((current) => ({ ...current, endDate: value }))}
           />
           <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 md:col-span-2">
-            Project status is automatic from dates: <span className="font-semibold text-slate-900">{derivedProjectStatus}</span>
+            <p>
+              Operational status:{" "}
+              <span className="font-semibold text-slate-900">
+                {form.id ? form.operationalStatus : derivedProjectStatus}
+              </span>
+            </p>
+            <p className="mt-1 text-xs text-slate-600">
+              Schedule signal: {derivedProjectStatus}. Editing dates does not automatically close an existing project.
+            </p>
           </div>
         </div>
       ) : null}
@@ -478,7 +487,10 @@ export function ProjectSetupStepSections({
                 <span className="font-semibold">Location:</span> {reviewSummary.location}
               </p>
               <p>
-                <span className="font-semibold">Status:</span> {reviewSummary.status}
+                <span className="font-semibold">Operational status:</span> {reviewSummary.status}
+              </p>
+              <p>
+                <span className="font-semibold">Schedule signal:</span> {reviewSummary.scheduleStatus}
               </p>
               <p>
                 <span className="font-semibold">Start Date:</span> {form.startDate || "-"}

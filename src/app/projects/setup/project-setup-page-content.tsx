@@ -211,7 +211,8 @@ function ProjectSetupPageContent() {
     return {
       clientName: resolvedClientName,
       location: resolvedLocation || "-",
-      status: deriveStatusFromDates(form.startDate, form.endDate),
+      status: form.id ? form.operationalStatus : deriveStatusFromDates(form.startDate, form.endDate),
+      scheduleStatus: deriveStatusFromDates(form.startDate, form.endDate),
       primaryRig,
       secondaryRig,
       team: selectedTeam
@@ -227,6 +228,8 @@ function ProjectSetupPageContent() {
     form.secondaryRigId,
     form.startDate,
     form.endDate,
+    form.id,
+    form.operationalStatus,
     form.teamMemberIds,
     rigs
   ]);
@@ -258,6 +261,7 @@ function ProjectSetupPageContent() {
         locationNew: locationExists ? "" : project.location,
         startDate: project.startDate.slice(0, 10),
         endDate: project.endDate ? project.endDate.slice(0, 10) : "",
+        operationalStatus: project.status as ProjectFormState["operationalStatus"],
         contractType: normalizeContractType(project.contractType),
         contractRatePerM: String(project.contractRatePerM),
         contractDayRate: String(project.contractDayRate || 0),
@@ -485,7 +489,6 @@ function ProjectSetupPageContent() {
     setSaving(true);
     try {
       const location = form.locationMode === "NEW" ? form.locationNew.trim() : form.locationExisting.trim();
-      const statusToSave = deriveStatusFromDates(form.startDate, form.endDate);
       const selectedTeam = employees.filter((employee) => form.teamMemberIds.includes(employee.id));
 
       const payload = {
@@ -496,7 +499,6 @@ function ProjectSetupPageContent() {
         photoUrl: form.photoUrl.trim() || null,
         startDate: form.startDate,
         endDate: form.endDate || null,
-        status: statusToSave,
         contractType: form.contractType,
         contractRatePerM: Number(form.contractRatePerM),
         contractDayRate: Number(form.contractDayRate),

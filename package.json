@@ -23,6 +23,7 @@
     "test:contract:spending": "node --import tsx scripts/test-spending-contracts.ts",
     "test:actual-use-policy": "node --import tsx scripts/test-actual-use-movement-policy.ts",
     "test:project-expense-policy": "node --import tsx scripts/test-project-expense-policy.ts",
+    "test:qa-metric-consistency": "node --import tsx scripts/test-qa-metric-consistency.ts",
     "smoke:spending-first": "node --import tsx scripts/smoke-spending-first.ts",
     "bundle:guard": "node --import tsx scripts/bundle-guard.ts",
     "build:guard": "NEXT_DIST_DIR=.next-build next build && NEXT_DIST_DIR=.next-build node --import tsx scripts/bundle-guard.ts",

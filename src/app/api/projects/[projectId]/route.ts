@@ -8,6 +8,7 @@ import {
   replaceProjectBillingRateItems
 } from "@/lib/project-billing-rate-card";
 import { prisma } from "@/lib/prisma";
+import { resolveProjectStatusOnSetupSave } from "@/lib/project-status-policy";
 
 const PROJECT_SETUP_REPORT_TYPE = "PROJECT_SETUP_PROFILE";
 
@@ -101,7 +102,10 @@ export async function PUT(
         photoUrl: typeof body?.photoUrl === "string" ? body.photoUrl.trim() : null,
         startDate: parsedStartDate,
         endDate: parsedEndDate,
-        status: deriveProjectStatusFromDates(parsedStartDate, parsedEndDate),
+        status: resolveProjectStatusOnSetupSave({
+          existingStatus: existing.status,
+          dateDerivedStatus: deriveProjectStatusFromDates(parsedStartDate, parsedEndDate)
+        }),
         contractType,
         contractRatePerM: meterRate,
         contractDayRate: dayRate,

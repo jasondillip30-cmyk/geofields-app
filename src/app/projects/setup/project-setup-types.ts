@@ -80,7 +80,7 @@ export interface BillableItemTemplate {
 }
 
 export type ProjectSetupStep = 1 | 2 | 3 | 4 | 5 | 6;
-export type ProjectStatusOption = "PLANNED" | "ACTIVE" | "COMPLETED";
+export type ProjectStatusOption = "PLANNED" | "ACTIVE" | "ON_HOLD" | "COMPLETED";
 export type ProjectContractTypeOption = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 export type LocationLinkMode = "EXISTING" | "NEW";
 
@@ -93,6 +93,7 @@ export interface ProjectFormState {
   locationNew: string;
   startDate: string;
   endDate: string;
+  operationalStatus: ProjectStatusOption;
   contractType: ProjectContractTypeOption;
   contractRatePerM: string;
   contractDayRate: string;
@@ -111,7 +112,11 @@ export interface ProjectFormState {
 
 export const STEP_LABELS: Array<{ step: ProjectSetupStep; title: string; subtitle: string }> = [
   { step: 1, title: "Client and Location", subtitle: "Define who and where this project belongs." },
-  { step: 2, title: "Project Timing", subtitle: "Set project dates. Status updates automatically." },
+  {
+    step: 2,
+    title: "Project Timing",
+    subtitle: "Set dates and review the schedule signal without silently changing lifecycle status."
+  },
   { step: 3, title: "Commercial Setup", subtitle: "Define how this project is billed." },
   { step: 4, title: "Rig Assignment", subtitle: "Assign primary rig and optional backup support." },
   { step: 5, title: "Team Assignment", subtitle: "Attach workers/employees to this project setup." },
@@ -148,6 +153,7 @@ export function createEmptyProjectForm(): ProjectFormState {
     locationNew: "",
     startDate: "",
     endDate: "",
+    operationalStatus: "PLANNED",
     contractType: "PER_METER",
     contractRatePerM: "0",
     contractDayRate: "0",
