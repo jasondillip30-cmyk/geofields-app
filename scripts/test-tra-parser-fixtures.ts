@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { parseQrFromUrl } from "@/lib/inventory-receipt-intake-qr";
+import { parseTraLookupResponse } from "@/lib/inventory-receipt-intake-qr-pipeline";
 import {
   buildTraParseContext,
   extractTraLabelValuePairs,
@@ -92,6 +93,49 @@ run("full TRA fixture yields supplier, totals, and line items", () => {
   assert.ok(
     parsed.lineCandidates.some((line) => Number(line.lineTotal) > 0),
     "Expected at least one parsed line item with a positive line total."
+  );
+  const fuelLine = parsed.lineCandidates.find((line) => line.description.toLowerCase().includes("fuel"));
+  assert.deepEqual(fuelLine, {
+    description: "Fuel Petrol",
+    quantity: 20,
+    unitPrice: 20,
+    lineTotal: 400,
+    extractionConfidence: "HIGH"
+  });
+});
+
+run("TRA metadata is not invented as a purchased item", () => {
+  const html = loadFixture("verification-metadata-no-items.html");
+  const parsed = parseTraLookupResponse({
+    url: new URL("https://verify.tra.go.tz/0192C43691_190351"),
+    body: html
+  });
+
+  assert.equal(parsed.parsedFields.receiptNumber, "3691");
+  assert.equal(parsed.parsedFields.verificationCode, "0192C43691");
+  assert.equal(parsed.parsedFields.traReceiptNumber, "65");
+  assert.ok(
+    parsed.debugFieldCandidates.some(
+      (candidate) =>
+        candidate.field === "traReceiptNumber" &&
+        candidate.value === "190351" &&
+        candidate.source === "url-query"
+    ),
+    "Expected the URL suffix to remain available as a low-confidence fallback."
+  );
+  assert.ok(
+    parsed.debugFieldCandidates.some(
+      (candidate) =>
+        candidate.field === "traReceiptNumber" &&
+        candidate.value === "65" &&
+        candidate.source === "html-table"
+    ),
+    "Expected the explicitly labeled Z Number to win over the URL fallback."
+  );
+  assert.deepEqual(
+    parsed.parsedLineCandidates,
+    [],
+    "Receipt verification metadata must not become a purchased line item."
   );
 });
 

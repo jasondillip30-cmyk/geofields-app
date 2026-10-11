@@ -14,6 +14,9 @@ export const lineSkipKeywords = [
   "operator",
   "tra",
   "tin",
+  "vrn",
+  "verification code",
+  "z number",
   "tel",
   "phone"
 ];

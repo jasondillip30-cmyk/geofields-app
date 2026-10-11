@@ -989,7 +989,11 @@ function extractTraNonTableLineCandidates(html: string) {
     if (!/[a-z]/i.test(block) || !/\d/.test(block)) {
       continue;
     }
-    if (isLikelyTraLoadingShellText(lower) || isLikelyLineSummaryText(lower)) {
+    if (
+      isLikelyTraLoadingShellText(lower) ||
+      isLikelyLineSummaryText(lower) ||
+      containsAny(lower, lineSkipKeywords)
+    ) {
       continue;
     }
     const explicit = parseExplicitLinePattern(block);

@@ -1302,7 +1302,7 @@ function buildTraHtmlKeywordMetrics(html: string) {
   };
 }
 
-function parseTraLookupResponse({
+export function parseTraLookupResponse({
   url,
   body
 }: {
