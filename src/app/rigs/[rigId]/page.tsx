@@ -9,7 +9,9 @@ import { AuthConfigurationError } from "@/lib/auth/secret";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session-config";
 import { verifySessionToken } from "@/lib/auth/session";
 import { normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
+import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 import {
   parsePurchaseRequisitionPayload,
   PURCHASE_REQUISITION_REPORT_TYPE,
@@ -31,11 +33,18 @@ interface LinkedRequisitionRow {
 }
 
 export default async function RigProfilePage({
-  params
+  params,
+  searchParams
 }: {
   params: Promise<{ rigId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { rigId } = await params;
+  const query = await searchParams;
+  const projectId = normalizeQueryValue(query.projectId);
+  const clientId = projectId ? null : normalizeQueryValue(query.clientId);
+  const fromDate = parseDateOrNull(normalizeQueryValue(query.from));
+  const toDate = parseDateOrNull(normalizeQueryValue(query.to), true);
   const role = await resolveRigProfileRole();
   const hideFinancials = role === "MECHANIC" || role === "FIELD";
 
@@ -53,7 +62,8 @@ export default async function RigProfilePage({
     inventoryUsageHistory,
     rigUsageHistory,
     requisitionSummaryRows,
-    metersAgg
+    approvedDrillingReports,
+    scopedProject
   ] = await Promise.all([
     prisma.maintenanceRequest.findMany({
       where: { rigId },
@@ -174,29 +184,68 @@ export default async function RigProfilePage({
         payloadJson: true
       }
     }),
-    prisma.drillReport.aggregate({
-      where: { rigId },
-      _sum: { totalMetersDrilled: true }
-    })
+    prisma.drillReport.findMany({
+      where: withFinancialDrillReportApproval({
+        rigId,
+        ...(projectId ? { projectId } : {}),
+        ...(clientId ? { clientId } : {}),
+        ...(fromDate || toDate
+          ? {
+              date: {
+                ...(fromDate ? { gte: fromDate } : {}),
+                ...(toDate ? { lte: toDate } : {})
+              }
+            }
+          : {})
+      }),
+      select: {
+        totalMetersDrilled: true,
+        billableAmount: true
+      }
+    }),
+    projectId
+      ? prisma.project.findUnique({
+          where: { id: projectId },
+          select: { id: true, name: true }
+        })
+      : Promise.resolve(null)
   ]);
 
-  let revenue = 0;
+  const totalApprovedMeters = approvedDrillingReports.reduce(
+    (sum, report) => sum + Number(report.totalMetersDrilled || 0),
+    0
+  );
+  const revenue = approvedDrillingReports.reduce(
+    (sum, report) => sum + Number(report.billableAmount || 0),
+    0
+  );
   let expenses = 0;
   if (!hideFinancials) {
-    const [revenueAgg, expenseAgg] = await Promise.all([
-      prisma.revenue.aggregate({
-        where: { rigId },
-        _sum: { amount: true }
-      }),
-      prisma.expense.aggregate({
-        where: { rigId },
-        _sum: { amount: true }
-      })
-    ]);
-    revenue = revenueAgg._sum.amount || 0;
-    expenses = expenseAgg._sum.amount || 0;
+    const spendContext = await buildRecognizedSpendContext({
+      projectId,
+      clientId,
+      fromDate,
+      toDate
+    });
+    const expenseById = new Map(
+      spendContext.recognizedExpenses.map((expense) => [expense.id, expense])
+    );
+    expenses = spendContext.projectExpensePolicy.rows.reduce((sum, row) => {
+      const expense = expenseById.get(row.expenseId);
+      const linkedRigId = row.linkedRigId || expense?.rigId || null;
+      return linkedRigId === rigId ? sum + Number(row.amount || 0) : sum;
+    }, 0);
   }
   const profit = revenue - expenses;
+  const activityScopeLabel = scopedProject
+    ? `Approved activity for ${scopedProject.name}`
+    : "Approved activity across all projects";
+  const preservedQuery = new URLSearchParams();
+  if (projectId) preservedQuery.set("projectId", projectId);
+  if (clientId) preservedQuery.set("clientId", clientId);
+  if (normalizeQueryValue(query.from)) preservedQuery.set("from", normalizeQueryValue(query.from) || "");
+  if (normalizeQueryValue(query.to)) preservedQuery.set("to", normalizeQueryValue(query.to) || "");
+  const backHref = preservedQuery.size > 0 ? `/rigs?${preservedQuery.toString()}` : "/rigs";
 
   const linkedRequisitions: LinkedRequisitionRow[] = requisitionSummaryRows
     .map((row) => {
@@ -250,9 +299,10 @@ export default async function RigProfilePage({
             <p className="text-sm text-ink-600">
               {rig.model} • Serial {rig.serialNumber}
             </p>
+            <p className="mt-1 text-xs font-medium text-slate-500">{activityScopeLabel}</p>
           </div>
           <Link
-            href="/rigs"
+            href={backHref}
             className="text-sm text-brand-700 underline-offset-2 hover:underline"
           >
             Back to rigs
@@ -273,8 +323,8 @@ export default async function RigProfilePage({
             value={formatNumber(rig.totalLifetimeDays)}
           />
           <MetricCard
-            label="Total Meters"
-            value={formatNumber(metersAgg._sum.totalMetersDrilled || 0)}
+            label="Approved Meters (Scope)"
+            value={formatNumber(totalApprovedMeters)}
           />
           {!hideFinancials ? (
             <>
@@ -295,7 +345,7 @@ export default async function RigProfilePage({
               <p>Utilization rate: {formatPercent(utilization)}</p>
               <p>Total hours worked: {formatNumber(rig.totalHoursWorked)}</p>
               <p>
-                Total meters drilled: {formatNumber(metersAgg._sum.totalMetersDrilled || 0)}
+                Approved meters in scope: {formatNumber(totalApprovedMeters)}
               </p>
               {rig.photoUrl && (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -308,7 +358,7 @@ export default async function RigProfilePage({
             </div>
           </Card>
           {!hideFinancials ? (
-            <Card title="Profitability Snapshot">
+            <Card title="Profitability Snapshot" subtitle={activityScopeLabel}>
               <DataTable
                 columns={["Metric", "Value"]}
                 rows={[
@@ -518,4 +568,25 @@ async function resolveRigProfileRole(): Promise<UserRole | null> {
     }
     throw error;
   }
+}
+
+function normalizeQueryValue(value: string | string[] | undefined) {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  return normalized && normalized !== "all" ? normalized : null;
+}
+
+function parseDateOrNull(value: string | null, endOfDay = false) {
+  if (!value) {
+    return null;
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  if (endOfDay) {
+    parsed.setUTCHours(23, 59, 59, 999);
+  } else {
+    parsed.setUTCHours(0, 0, 0, 0);
+  }
+  return parsed;
 }

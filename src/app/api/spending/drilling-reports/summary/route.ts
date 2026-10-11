@@ -4,6 +4,8 @@ import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { canAccess } from "@/lib/auth/permissions";
 import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
+import { calculateCostPerMeter } from "@/lib/project-performance-metrics";
 import {
   buildSpendingStageProgress,
   normalizeSpendingStageBands,
@@ -49,25 +51,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const movementWhere = {
-    movementType: "OUT" as const,
-    expenseId: {
-      not: null
-    },
-    ...(projectId ? { projectId } : {}),
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(fromDate || toDate
-      ? {
-          date: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {})
-          }
-        }
-      : {})
-  };
-
-  const [reports, usageMovements, projectRateCard] = await Promise.all([
+  const [reports, spendContext, projectRateCard] = await Promise.all([
     prisma.drillReport.findMany({
       where: reportWhere,
       select: {
@@ -80,13 +64,14 @@ export async function GET(request: NextRequest) {
       }
     }),
     canViewFinance
-      ? prisma.inventoryMovement.findMany({
-          where: movementWhere,
-          select: {
-            totalCost: true
-          }
+      ? buildRecognizedSpendContext({
+          projectId,
+          clientId,
+          rigId,
+          fromDate,
+          toDate
         })
-      : Promise.resolve([] as Array<{ totalCost: number }>),
+      : Promise.resolve(null),
     projectId
       ? prisma.project.findUnique({
           where: {
@@ -116,7 +101,7 @@ export async function GET(request: NextRequest) {
   const totalReports = reports.length;
   const timePeriod = buildDrillingTimePeriodBuckets(reports);
   const totalExpenses = canViewFinance
-    ? usageMovements.reduce((sum, movement) => sum + safeNumber(movement.totalCost), 0)
+    ? safeNumber(spendContext?.projectExpensePolicy.total)
     : 0;
 
   const rawStageBands = extractProjectStageBands(projectRateCard?.billingRateItems || []);
@@ -165,7 +150,11 @@ export async function GET(request: NextRequest) {
       totalReports,
       totalWorkHours: roundMetric(totalWorkHours),
       totalExpenses: canViewFinance ? roundCurrency(totalExpenses) : 0,
-      totalCostPerMeter: canViewFinance && totalMeters > 0 ? roundCurrency(totalExpenses / totalMeters) : null
+      totalCostPerMeter: canViewFinance ? calculateCostPerMeter(totalExpenses, totalMeters) : null
+    },
+    meta: {
+      expenseBasis: "project-expenses" as const,
+      meterBasis: "approved-drilling-reports" as const
     },
     stageConfigured,
     metersByHole

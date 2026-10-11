@@ -93,6 +93,7 @@ async function main() {
   }
 
   const baseUrl = (process.env.SMOKE_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
+  const targetProjectId = process.env.SMOKE_PROJECT_ID?.trim() || null;
   const adminEmail = process.env.SMOKE_ADMIN_EMAIL || "admin@geofields.co.tz";
   const adminPassword = process.env.SMOKE_ADMIN_PASSWORD || "Admin123!";
 
@@ -100,6 +101,7 @@ async function main() {
   const cookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
 
   const project = await prisma.project.findFirst({
+    ...(targetProjectId ? { where: { id: targetProjectId } } : {}),
     select: { id: true, clientId: true, assignedRigId: true, backupRigId: true }
   });
   assert(Boolean(project), "No project found. Seed baseline data first.");
@@ -124,14 +126,15 @@ async function main() {
   }).toString();
   const lockedParams = new URLSearchParams({ projectId: project!.id }).toString();
 
-  const [spendingLocked, spendingStale, profitLocked, profitStale, drillingLocked, drillingStale] =
+  const [spendingLocked, spendingStale, profitLocked, profitStale, drillingLocked, drillingStale, movementsLocked] =
     await Promise.all([
       getJson(baseUrl, `/api/spending/summary?${lockedParams}`, cookie),
       getJson(baseUrl, `/api/spending/summary?${staleParams}`, cookie),
       getJson(baseUrl, `/api/profit/summary?${lockedParams}`, cookie),
       getJson(baseUrl, `/api/profit/summary?${staleParams}`, cookie),
       getJson(baseUrl, `/api/spending/drilling-reports/summary?${lockedParams}`, cookie),
-      getJson(baseUrl, `/api/spending/drilling-reports/summary?${staleParams}`, cookie)
+      getJson(baseUrl, `/api/spending/drilling-reports/summary?${staleParams}`, cookie),
+      getJson(baseUrl, `/api/inventory/movements?${lockedParams}&projectView=locked`, cookie)
     ]);
 
   for (const [label, result] of [
@@ -140,7 +143,8 @@ async function main() {
     ["profit-locked", profitLocked],
     ["profit-stale", profitStale],
     ["drilling-locked", drillingLocked],
-    ["drilling-stale", drillingStale]
+    ["drilling-stale", drillingStale],
+    ["movements-locked", movementsLocked]
   ] as const) {
     assert(result.ok, `${label} failed (${result.status}): ${result.text}`);
   }
@@ -173,6 +177,38 @@ async function main() {
   assertClose("cross-endpoint revenue", income, totalRevenue);
   assertClose("cross-endpoint expenses", expenses, totalExpenses);
 
+  const drillingSummary = (drillingLocked.json?.summary || {}) as Record<string, unknown>;
+  const drillingMeta = (drillingLocked.json?.meta || {}) as Record<string, unknown>;
+  const drillingExpenses = toNumber(drillingSummary.totalExpenses);
+  const drillingMeters = toNumber(drillingSummary.totalMeters);
+  const drillingCostPerMeter = drillingSummary.totalCostPerMeter;
+  assertClose("drilling vs profit project expenses", drillingExpenses, totalExpenses);
+  assert(
+    drillingMeta.expenseBasis === "project-expenses",
+    "Drilling cost per meter must disclose the shared project-expenses basis."
+  );
+  if (drillingMeters > 0) {
+    assertClose(
+      "drilling cost per meter",
+      toNumber(drillingCostPerMeter),
+      drillingExpenses / drillingMeters
+    );
+  }
+
+  const expectedMovementCount = await prisma.inventoryMovement.count({
+    where: {
+      projectId: project!.id,
+      movementType: { in: ["IN", "OUT"] }
+    }
+  });
+  const movementRows = Array.isArray(movementsLocked.json?.data)
+    ? movementsLocked.json.data
+    : [];
+  assert(
+    movementRows.length === expectedMovementCount,
+    `Locked project movement endpoint returned ${movementRows.length} row(s); database has ${expectedMovementCount}.`
+  );
+
   console.log(
     JSON.stringify(
       {
@@ -181,9 +217,19 @@ async function main() {
           "project lock precedence ignores stale client/rig",
           "spending net cash flow equation",
           "profit equation",
-          "spending vs profit totals consistency"
+          "spending vs profit totals consistency",
+          "drilling cost per meter uses shared project expenses",
+          "locked stock movements match physical movement history"
         ],
-        projectId: project!.id
+        projectId: project!.id,
+        metrics: {
+          revenue: totalRevenue,
+          expenses: totalExpenses,
+          profit: totalProfit,
+          approvedMeters: drillingMeters,
+          costPerMeter: drillingCostPerMeter,
+          physicalMovementRows: movementRows.length
+        }
       },
       null,
       2

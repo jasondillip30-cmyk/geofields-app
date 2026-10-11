@@ -42,6 +42,11 @@ interface ExpenseRigBucket {
   amount: number;
 }
 
+interface ApprovedMetersRigBucket {
+  id: string;
+  meters: number;
+}
+
 export default function RigsPage() {
   const { filters } = useAnalyticsFilters();
   const pathname = usePathname();
@@ -50,6 +55,7 @@ export default function RigsPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [revenueByRig, setRevenueByRig] = useState<RevenueRigBucket[]>([]);
   const [expensesByRig, setExpensesByRig] = useState<ExpenseRigBucket[]>([]);
+  const [approvedMetersByRig, setApprovedMetersByRig] = useState<ApprovedMetersRigBucket[]>([]);
   const [focusedRowId, setFocusedRowId] = useState<string | null>(null);
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
@@ -120,35 +126,40 @@ export default function RigsPage() {
     const suffix = query ? `?${query}` : "";
 
     try {
-      const [revenueResponse, expenseResponse] = await Promise.all([
-        fetch(`/api/revenue/summary${suffix}`, { cache: "no-store" }),
-        fetch(`/api/expenses/analytics${suffix}`, { cache: "no-store" })
+      const [profitResponse, drillingResponse] = await Promise.all([
+        fetch(`/api/profit/summary${suffix}`, { cache: "no-store" }),
+        fetch(`/api/drilling-reports${suffix ? `${suffix}&` : "?"}approvalStatus=APPROVED`, { cache: "no-store" })
       ]);
 
-      const revenuePayload = revenueResponse.ok ? await revenueResponse.json() : null;
-      const expensePayload = expenseResponse.ok ? await expenseResponse.json() : null;
+      const profitPayload = profitResponse.ok ? await profitResponse.json() : null;
+      const drillingPayload = drillingResponse.ok ? await drillingResponse.json() : null;
+      const profitRows = Array.isArray(profitPayload?.profitByRig) ? profitPayload.profitByRig : [];
 
       setRevenueByRig(
-        Array.isArray(revenuePayload?.revenueByRig)
-          ? revenuePayload.revenueByRig.map((entry: { id: string; name: string; revenue: number }) => ({
+        profitRows.map((entry: { id: string; name: string; revenue: number }) => ({
               id: entry.id,
               name: entry.name,
               revenue: Number(entry.revenue || 0)
             }))
-          : []
       );
       setExpensesByRig(
-        Array.isArray(expensePayload?.expensesByRig)
-          ? expensePayload.expensesByRig.map((entry: { id: string; name: string; amount: number }) => ({
+        profitRows.map((entry: { id: string; name: string; expenses: number }) => ({
               id: entry.id,
               name: entry.name,
-              amount: Number(entry.amount || 0)
+              amount: Number(entry.expenses || 0)
             }))
-          : []
       );
+      const meterMap = new Map<string, number>();
+      for (const report of Array.isArray(drillingPayload?.data) ? drillingPayload.data : []) {
+        const reportRigId = typeof report?.rigId === "string" ? report.rigId : "";
+        if (!reportRigId) continue;
+        meterMap.set(reportRigId, (meterMap.get(reportRigId) || 0) + Number(report.totalMetersDrilled || 0));
+      }
+      setApprovedMetersByRig(Array.from(meterMap, ([id, meters]) => ({ id, meters })));
     } catch {
       setRevenueByRig([]);
       setExpensesByRig([]);
+      setApprovedMetersByRig([]);
     }
   }, [filters.clientId, filters.from, filters.projectId, filters.rigId, filters.to]);
 
@@ -179,6 +190,10 @@ export default function RigsPage() {
   const rigExpenseMap = useMemo(
     () => new Map(expensesByRig.map((entry) => [entry.id, entry.amount])),
     [expensesByRig]
+  );
+  const rigApprovedMetersMap = useMemo(
+    () => new Map(approvedMetersByRig.map((entry) => [entry.id, entry.meters])),
+    [approvedMetersByRig]
   );
   const topRevenueRig = revenueByRig[0] || null;
   const topExpenseRig = expensesByRig[0] || null;
@@ -514,7 +529,7 @@ export default function RigsPage() {
                           ],
                           ["Total hours", String(rig.totalHoursWorked)],
                           ["Lifetime days", String(rig.totalLifetimeDays)],
-                          ["Total meters", String(rig.totalMetersDrilled)],
+                          ["Approved meters (scope)", String(rigApprovedMetersMap.get(rig.id) || 0)],
                           ["Revenue", formatCurrency(revenue)],
                           ["Expenses", formatCurrency(expenses)],
                           ["Profitability", formatCurrency(profitability)]
@@ -522,7 +537,7 @@ export default function RigsPage() {
                       />
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Link
-                          href={`/rigs/${rig.id}`}
+                          href={buildHref(`/rigs/${rig.id}`)}
                           className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-ink-700 hover:bg-slate-50"
                         >
                           Open rig details
@@ -606,9 +621,9 @@ export default function RigsPage() {
                   <p className="text-sm text-ink-600">Loading rigs...</p>
                 ) : (
                   <DataTable
-                    columns={["Rig", "Model", "Status", "Condition", "Score", "Hours", "Meters", "Actions"]}
+                    columns={["Rig", "Model", "Status", "Condition", "Score", "Hours", "Approved Meters (Scope)", "Actions"]}
                     rows={visibleRigs.map((rig) => [
-                      <Link key={rig.id} href={`/rigs/${rig.id}`} className="text-brand-700 underline-offset-2 hover:underline">
+                      <Link key={rig.id} href={buildHref(`/rigs/${rig.id}`)} className="text-brand-700 underline-offset-2 hover:underline">
                         {rig.rigCode}
                       </Link>,
                       rig.model,
@@ -616,7 +631,7 @@ export default function RigsPage() {
                       rig.condition,
                       String(rig.conditionScore),
                       String(rig.totalHoursWorked),
-                      String(rig.totalMetersDrilled),
+                      String(rigApprovedMetersMap.get(rig.id) || 0),
                       <div key={`actions-${rig.id}`} className="flex gap-2">
                         <AccessGate permission="rigs:manage">
                           <Link
