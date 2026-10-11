@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
+import {
+  withFinancialActualUseMovementApproval,
+  withFinancialDrillReportApproval
+} from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
 import { resolveSpendingMovementCategory } from "@/lib/spending-expense-category";
 
@@ -94,11 +97,7 @@ export async function GET(request: NextRequest) {
       }
     }),
     prisma.inventoryMovement.findMany({
-      where: {
-        movementType: "OUT",
-        expenseId: {
-          not: null
-        },
+      where: withFinancialActualUseMovementApproval({
         ...(projectId ? { projectId } : {}),
         ...(clientId ? { clientId } : {}),
         ...(rigId ? { rigId } : {}),
@@ -110,7 +109,7 @@ export async function GET(request: NextRequest) {
               }
             }
           : {})
-      },
+      }),
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
       select: {
         id: true,

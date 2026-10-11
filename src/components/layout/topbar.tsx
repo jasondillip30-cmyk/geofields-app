@@ -371,7 +371,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
     if (filters.projectId === "all") {
       return "All projects";
     }
-    return projects.find((project) => project.id === filters.projectId)?.name || filters.projectId;
+    return projects.find((project) => project.id === filters.projectId)?.name || "Selected project";
   }, [filters.projectId, projects]);
   const selectedProjectStatus = useMemo(() => {
     if (filters.workspaceMode !== "project" || filters.projectId === "all") {

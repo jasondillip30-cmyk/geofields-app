@@ -48,7 +48,7 @@ export function buildFilterScopeSummary({
   }
 
   if (filters.projectId !== "all") {
-    return `Project locked: ${projectLabel || filters.projectId} • ${dateScope}`;
+    return `Project locked: ${projectLabel || "Selected project"} • ${dateScope}`;
   }
 
   const rigScope = filters.rigId === "all" ? null : `Rig ${rigLabel || filters.rigId}`;

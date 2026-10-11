@@ -21,6 +21,7 @@
     "test:tsconfig-normalizer": "node --import tsx scripts/test-tsconfig-next-include-normalizer.ts",
     "test:interaction:workflows": "node --import tsx scripts/test-interaction-workflows.ts",
     "test:contract:spending": "node --import tsx scripts/test-spending-contracts.ts",
+    "test:actual-use-policy": "node --import tsx scripts/test-actual-use-movement-policy.ts",
     "smoke:spending-first": "node --import tsx scripts/smoke-spending-first.ts",
     "bundle:guard": "node --import tsx scripts/bundle-guard.ts",
     "build:guard": "NEXT_DIST_DIR=.next-build next build && NEXT_DIST_DIR=.next-build node --import tsx scripts/bundle-guard.ts",

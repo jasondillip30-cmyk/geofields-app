@@ -31,6 +31,31 @@ export function withFinancialExpenseApproval(where: Prisma.ExpenseWhereInput = {
   };
 }
 
+export function withFinancialActualUseMovementApproval(
+  where: Prisma.InventoryMovementWhereInput = {}
+): Prisma.InventoryMovementWhereInput {
+  return {
+    ...where,
+    movementType: "OUT",
+    expenseId: { not: null },
+    expense: {
+      is: withFinancialExpenseApproval()
+    }
+  };
+}
+
+export function isFinancialActualUseMovement(candidate: {
+  movementType: string;
+  expenseId: string | null;
+  expenseApprovalStatus: string | null;
+}) {
+  return (
+    candidate.movementType === "OUT" &&
+    Boolean(candidate.expenseId) &&
+    candidate.expenseApprovalStatus === "APPROVED"
+  );
+}
+
 export function getFinancialInclusionPolicy() {
   return FINANCIAL_INCLUSION_POLICY;
 }
