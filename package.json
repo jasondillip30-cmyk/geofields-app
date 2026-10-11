@@ -18,6 +18,7 @@
     "smoke:ops": "npx tsx scripts/smoke-operational-lifecycle.ts",
     "smoke:mutations": "npx tsx scripts/smoke-mutation-hardening.ts",
     "test:module-boundaries": "node --import tsx scripts/test-extracted-module-boundaries.ts",
+    "test:tsconfig-normalizer": "node --import tsx scripts/test-tsconfig-next-include-normalizer.ts",
     "test:interaction:workflows": "node --import tsx scripts/test-interaction-workflows.ts",
     "test:contract:spending": "node --import tsx scripts/test-spending-contracts.ts",
     "smoke:spending-first": "node --import tsx scripts/smoke-spending-first.ts",

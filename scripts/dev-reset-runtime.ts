@@ -1,6 +1,10 @@
 import { rm } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
-import { normalizeTrackedTsconfigIncludes } from "./tsconfig-next-include-normalizer";
+import {
+  normalizeTrackedTsconfigIncludes,
+  prepareRuntimeTsconfig,
+  removeRuntimeTsconfig
+} from "./tsconfig-next-include-normalizer";
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_HOST = "127.0.0.1";
@@ -53,12 +57,21 @@ async function main() {
     console.log(`[dev:reset] removed ${legacySharedDistDir}`);
   }
 
-  await startDevServerWithRetry({
-    host,
-    port,
-    distDir,
-    maxAttempts: 2
-  });
+  const runtimeTsconfigPath = prepareRuntimeTsconfig(
+    process.cwd(),
+    `.next-dev-${port}.tsconfig.json`
+  );
+  try {
+    await startDevServerWithRetry({
+      host,
+      port,
+      distDir,
+      runtimeTsconfigPath,
+      maxAttempts: 2
+    });
+  } finally {
+    removeRuntimeTsconfig(process.cwd(), runtimeTsconfigPath);
+  }
 }
 
 function resolvePort(raw: string | undefined) {
@@ -150,7 +163,12 @@ function isAlive(pid: number) {
   }
 }
 
-function startDevServer(host: string, port: number, distDir: string) {
+function startDevServer(
+  host: string,
+  port: number,
+  distDir: string,
+  runtimeTsconfigPath: string
+) {
   console.log(`[dev:reset] starting fresh dev server on ${host}:${port}`);
   const child = spawn("next", ["dev", "-H", host, "-p", String(port)], {
     cwd: process.cwd(),
@@ -158,7 +176,8 @@ function startDevServer(host: string, port: number, distDir: string) {
       ...process.env,
       HOST: host,
       PORT: String(port),
-      NEXT_DIST_DIR: distDir
+      NEXT_DIST_DIR: distDir,
+      NEXT_TSCONFIG_PATH: runtimeTsconfigPath
     },
     stdio: ["inherit", "inherit", "pipe"]
   });
@@ -180,25 +199,10 @@ function startDevServer(host: string, port: number, distDir: string) {
   process.on("SIGINT", () => forwardSignal("SIGINT"));
   process.on("SIGTERM", () => forwardSignal("SIGTERM"));
 
-  const normalizeTimer = setInterval(() => {
-    try {
-      const changed = normalizeTrackedTsconfigIncludes(process.cwd());
-      if (changed) {
-        console.info("[dev:reset] normalized tsconfig include patterns");
-      }
-    } catch (error) {
-      console.warn(
-        `[dev:reset] unable to normalize tsconfig includes: ${
-          error instanceof Error ? error.message : "unknown error"
-        }`
-      );
-    }
-  }, 5_000);
-
   return new Promise<void>((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
-      clearInterval(normalizeTimer);
+      normalizeAfterDevExit();
       if (signal) {
         resolve();
         return;
@@ -219,22 +223,39 @@ function startDevServer(host: string, port: number, distDir: string) {
   });
 }
 
+function normalizeAfterDevExit() {
+  try {
+    const changed = normalizeTrackedTsconfigIncludes(process.cwd());
+    if (changed) {
+      console.info("[dev:reset] normalized tsconfig include patterns after Next.js stopped");
+    }
+  } catch (error) {
+    console.warn(
+      `[dev:reset] unable to normalize tsconfig includes after Next.js stopped: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`
+    );
+  }
+}
+
 async function startDevServerWithRetry({
   host,
   port,
   distDir,
+  runtimeTsconfigPath,
   maxAttempts
 }: {
   host: string;
   port: number;
   distDir: string;
+  runtimeTsconfigPath: string;
   maxAttempts: number;
 }) {
   let attempt = 0;
   while (attempt < maxAttempts) {
     attempt += 1;
     try {
-      await startDevServer(host, port, distDir);
+      await startDevServer(host, port, distDir, runtimeTsconfigPath);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
