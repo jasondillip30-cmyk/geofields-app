@@ -6,7 +6,12 @@ import {
   withFinancialDrillReportApproval
 } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
-import { resolveSpendingMovementCategory } from "@/lib/spending-expense-category";
+import { calculateProjectRevenueFromBillableLines } from "@/lib/project-revenue-calculator";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
+import {
+  resolveSpendingExpenseCategory,
+  resolveSpendingMovementCategory
+} from "@/lib/spending-expense-category";
 
 interface RevenueTrendPoint {
   bucketStart: string;
@@ -32,6 +37,14 @@ interface FrequentUsageRow {
   itemId: string;
   itemName: string;
   usageCount: number;
+}
+
+interface ProjectExpenseRecord {
+  id: string;
+  date: Date;
+  amount: number;
+  label: string;
+  category: string;
 }
 
 type RevenueRateCardMode =
@@ -85,7 +98,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const [reports, expenseMovements, usageMovements, projectRateCard] = await Promise.all([
+  const [reports, spendContext, usageMovements, projectRateCard] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -93,8 +106,23 @@ export async function GET(request: NextRequest) {
         id: true,
         date: true,
         holeNumber: true,
-        billableAmount: true
+        totalMetersDrilled: true,
+        billableAmount: true,
+        billableLines: {
+          select: {
+            itemCode: true,
+            quantity: true,
+            unit: true
+          }
+        }
       }
+    }),
+    buildRecognizedSpendContext({
+      clientId,
+      rigId,
+      projectId,
+      fromDate,
+      toDate
     }),
     prisma.inventoryMovement.findMany({
       where: withFinancialActualUseMovementApproval({
@@ -110,34 +138,6 @@ export async function GET(request: NextRequest) {
             }
           : {})
       }),
-      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        date: true,
-        totalCost: true,
-        item: {
-          select: {
-            name: true,
-            category: true
-          }
-        }
-      }
-    }),
-    prisma.inventoryMovement.findMany({
-      where: {
-        movementType: "OUT",
-        ...(projectId ? { projectId } : {}),
-        ...(clientId ? { clientId } : {}),
-        ...(rigId ? { rigId } : {}),
-        ...(fromDate || toDate
-          ? {
-              date: {
-                ...(fromDate ? { gte: fromDate } : {}),
-                ...(toDate ? { lte: toDate } : {})
-              }
-            }
-          : {})
-      },
       select: {
         itemId: true,
         item: {
@@ -160,6 +160,7 @@ export async function GET(request: NextRequest) {
               orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
               select: {
                 id: true,
+                itemCode: true,
                 label: true,
                 unit: true,
                 unitRate: true,
@@ -174,27 +175,78 @@ export async function GET(request: NextRequest) {
       : Promise.resolve(null)
   ]);
 
+  const recognizedExpenseById = new Map(
+    spendContext.recognizedExpenses.map((expense) => [expense.id, expense])
+  );
+  const movementByExpenseId = new Map<
+    string,
+    (typeof spendContext.movements)[number]
+  >();
+  const movementCategoryByExpenseId = new Map<string, string>();
+  for (const movement of spendContext.movements) {
+    if (!movement.expenseId || movementByExpenseId.has(movement.expenseId)) {
+      continue;
+    }
+    movementByExpenseId.set(movement.expenseId, movement);
+    if (movement.item?.category) {
+      movementCategoryByExpenseId.set(
+        movement.expenseId,
+        resolveSpendingMovementCategory({ itemCategory: movement.item.category })
+      );
+    }
+  }
+  const projectExpenses = spendContext.projectExpensePolicy.rows.flatMap<ProjectExpenseRecord>((row) => {
+    const expense = recognizedExpenseById.get(row.expenseId);
+    if (!expense) {
+      return [];
+    }
+    const movement = movementByExpenseId.get(row.expenseId);
+    return [
+      {
+        id: expense.id,
+        date: expense.date,
+        amount: safeNumber(expense.amount),
+        label: normalizeLabel(
+          movement?.item?.name,
+          normalizeLabel(expense.subcategory, normalizeLabel(expense.category, "Expense"))
+        ),
+        category: resolveSpendingExpenseCategory({ expense, movementCategoryByExpenseId })
+      }
+    ];
+  });
+
   const totalIncome = reports.reduce((sum, report) => sum + safeNumber(report.billableAmount), 0);
-  const totalExpenses = expenseMovements.reduce((sum, movement) => sum + safeNumber(movement.totalCost), 0);
+  const totalExpenses = spendContext.projectExpensePolicy.total;
   const netCashFlow = totalIncome - totalExpenses;
+  const totalMetersDrilled = reports.reduce(
+    (sum, report) => sum + safeNumber(report.totalMetersDrilled),
+    0
+  );
 
   const revenueTrend = buildRevenueTrend(reports);
-  const expenseByCategory = buildExpenseCategoryRows(expenseMovements, totalExpenses);
+  const expenseByCategory = buildExpenseCategoryRows(projectExpenses, totalExpenses);
   const incomeByHole = buildIncomeByHoleRows(reports, totalIncome);
   const timePeriod = buildTimePeriodBuckets(
     reports,
-    expenseMovements.map((movement) => ({
-      date: movement.date,
-      amount: safeNumber(movement.totalCost)
+    projectExpenses.map((expense) => ({
+      date: expense.date,
+      amount: expense.amount
     }))
   );
-  const largestExpenses = buildLargestExpenses(expenseMovements);
+  const largestExpenses = buildLargestExpenses(projectExpenses);
   const mostFrequentUsage = buildMostFrequentUsage(usageMovements);
   const revenueRateCard = buildRevenueRateCard(projectRateCard);
+  const revenueBreakdown = projectRateCard
+    ? calculateProjectRevenueFromBillableLines({
+        approvedReports: reports,
+        activeRateItems: projectRateCard.billingRateItems
+      }).lineItems
+    : [];
 
   return NextResponse.json({
     meta: {
-      expenseBasis: "actual-use" as const
+      expenseBasis: "project-expenses" as const,
+      excludedStockReplenishment: spendContext.projectExpensePolicy.excludedStockReplenishmentTotal
     },
     filters: {
       projectId: projectId || "all",
@@ -206,7 +258,8 @@ export async function GET(request: NextRequest) {
     totals: {
       income: roundCurrency(totalIncome),
       expenses: roundCurrency(totalExpenses),
-      netCashFlow: roundCurrency(netCashFlow)
+      netCashFlow: roundCurrency(netCashFlow),
+      metersDrilled: roundCurrency(totalMetersDrilled)
     },
     revenueTrend,
     timePeriod,
@@ -214,7 +267,8 @@ export async function GET(request: NextRequest) {
     incomeByHole,
     largestExpenses,
     mostFrequentUsage,
-    revenueRateCard
+    revenueRateCard,
+    revenueBreakdown
   });
 }
 
@@ -227,6 +281,7 @@ function buildRevenueRateCard(
         contractLumpSumValue: number;
         billingRateItems: Array<{
           id: string;
+          itemCode: string;
           label: string;
           unit: string;
           unitRate: number;
@@ -354,23 +409,15 @@ function buildRevenueTrend(
 }
 
 function buildExpenseCategoryRows(
-  movements: Array<{
-    totalCost: number | null;
-    item:
-      | {
-          category: string | null;
-        }
-      | null;
-  }>,
+  expenses: ProjectExpenseRecord[],
   totalExpenses: number
 ) {
   const categoryMap = new Map<string, number>();
-  for (const movement of movements) {
-    const category = resolveSpendingMovementCategory({
-      itemCategory: movement.item?.category,
-      fallbackCategory: "Uncategorized"
-    });
-    categoryMap.set(category, (categoryMap.get(category) || 0) + safeNumber(movement.totalCost));
+  for (const expense of expenses) {
+    categoryMap.set(
+      expense.category,
+      (categoryMap.get(expense.category) || 0) + expense.amount
+    );
   }
 
   return Array.from(categoryMap.entries())
@@ -458,30 +505,14 @@ function buildTimePeriodBuckets(
 }
 
 function buildLargestExpenses(
-  movements: Array<{
-    id: string;
-    totalCost: number | null;
-    date: Date;
-    item:
-      | {
-          name: string | null;
-          category: string | null;
-        }
-      | null;
-  }>
+  expenses: ProjectExpenseRecord[]
 ) {
-  return [...movements]
-    .map<LargestExpenseRow>((movement) => ({
-      id: movement.id,
-      label: normalizeLabel(
-        movement.item?.name,
-        resolveSpendingMovementCategory({
-          itemCategory: movement.item?.category,
-          fallbackCategory: "Uncategorized"
-        })
-      ),
-      dateLabel: formatDateLabel(movement.date),
-      amount: roundCurrency(safeNumber(movement.totalCost))
+  return [...expenses]
+    .map<LargestExpenseRow>((expense) => ({
+      id: expense.id,
+      label: expense.label,
+      dateLabel: formatDateLabel(expense.date),
+      amount: roundCurrency(expense.amount)
     }))
     .sort((left, right) => right.amount - left.amount)
     .slice(0, 3);

@@ -15,6 +15,7 @@ import {
   parsePurchaseRequisitionPayload,
   PURCHASE_REQUISITION_REPORT_TYPE
 } from "@/lib/requisition-workflow";
+import { buildProjectExpensePolicySummary } from "@/lib/project-expense-policy";
 
 const RECEIPT_SUBMISSION_REPORT_TYPE = "INVENTORY_RECEIPT_SUBMISSION";
 
@@ -73,7 +74,13 @@ export async function buildRecognizedSpendContext({
             maintenanceRequestId: true,
             breakdownReportId: true,
             projectId: true,
-            rigId: true
+            rigId: true,
+            item: {
+              select: {
+                name: true,
+                category: true
+              }
+            }
           }
         })
       : Promise.resolve([]),
@@ -234,6 +241,7 @@ export async function buildRecognizedSpendContext({
   const purposeTotals = buildPurposeTotals(classifiedRows);
   const categoryTotals = buildCategoryTotals(classifiedRows);
   const classificationAudit = buildClassificationAuditSummary(classifiedRows);
+  const projectExpensePolicy = buildProjectExpensePolicySummary(classifiedRows);
 
   return {
     rawExpenses,
@@ -245,6 +253,7 @@ export async function buildRecognizedSpendContext({
     receiptContexts,
     maintenanceRequests,
     classifiedRows,
+    projectExpensePolicy,
     purposeTotals,
     categoryTotals,
     classificationAudit

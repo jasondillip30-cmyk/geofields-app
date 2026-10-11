@@ -77,13 +77,15 @@ export default function ProjectsPage() {
         if (filters.rigId !== "all") search.set("rigId", filters.rigId);
       }
       const query = search.toString();
+      const expenseSearch = new URLSearchParams(search);
+      expenseSearch.set("basis", "project-expenses");
 
       const [projectsRes, clientsRes, rigsRes, revenueRes, expensesRes, drillingRes] = await Promise.all([
         fetch(`/api/projects${query ? `?${query}` : ""}`, { cache: "no-store" }),
         fetch(`/api/clients${query ? `?${query}` : ""}`, { cache: "no-store" }),
         fetch(`/api/rigs${query ? `?${query}` : ""}`, { cache: "no-store" }),
         fetch(`/api/revenue/summary${query ? `?${query}` : ""}`, { cache: "no-store" }),
-        fetch(`/api/expenses/analytics${query ? `?${query}` : ""}`, { cache: "no-store" }),
+        fetch(`/api/expenses/analytics?${expenseSearch.toString()}`, { cache: "no-store" }),
         fetch(`/api/drilling-reports${query ? `?${query}` : ""}`, { cache: "no-store" })
       ]);
 

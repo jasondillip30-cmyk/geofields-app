@@ -676,6 +676,11 @@ export function buildEmptyRecognizedSpendContext(): Awaited<ReturnType<typeof bu
     receiptContexts: [],
     maintenanceRequests: [],
     classifiedRows: [],
+    projectExpensePolicy: {
+      rows: [],
+      total: 0,
+      excludedStockReplenishmentTotal: 0
+    },
     purposeTotals: {
       recognizedSpendTotal: 0,
       breakdownCost: 0,

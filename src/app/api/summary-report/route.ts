@@ -2,8 +2,9 @@ import type { MaintenanceStatus, Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import { withFinancialDrillReportApproval, withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
+import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
 const UNASSIGNED_PROJECT_ID = "__unassigned_project__";
 const UNASSIGNED_PROJECT_NAME = "Unassigned Project";
@@ -63,20 +64,6 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const expenseWhere = withFinancialExpenseApproval({
-    ...(clientId ? { clientId } : {}),
-    ...(rigId ? { rigId } : {}),
-    ...(projectId ? { projectId } : {}),
-    ...(fromDate || toDate
-      ? {
-          date: {
-            ...(fromDate ? { gte: fromDate } : {}),
-            ...(toDate ? { lte: toDate } : {})
-          }
-        }
-      : {})
-  });
-
   const projectWhere: Prisma.ProjectWhereInput = {
     ...(clientId ? { clientId } : {}),
     ...(projectId ? { id: projectId } : {}),
@@ -111,7 +98,7 @@ export async function GET(request: NextRequest) {
   const weekStart = startOfUtcWeek(new Date());
   const monthStart = startOfUtcMonth(new Date());
 
-  const [reports, expenses, projects, rigs, totalClientsCount, pendingMaintenanceRequests, dailyIssueCount, inventoryItems] =
+  const [reports, spendContext, projects, rigs, totalClientsCount, pendingMaintenanceRequests, dailyIssueCount, inventoryItems] =
     await Promise.all([
       prisma.drillReport.findMany({
         where: drillWhere,
@@ -122,14 +109,12 @@ export async function GET(request: NextRequest) {
           rig: { select: { id: true, rigCode: true } }
         }
       }),
-      prisma.expense.findMany({
-        where: expenseWhere,
-        orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-        include: {
-          client: { select: { id: true, name: true } },
-          project: { select: { id: true, name: true } },
-          rig: { select: { id: true, rigCode: true } }
-        }
+      buildRecognizedSpendContext({
+        clientId,
+        rigId,
+        projectId,
+        fromDate,
+        toDate
       }),
       prisma.project.findMany({
         where: projectWhere,
@@ -173,6 +158,13 @@ export async function GET(request: NextRequest) {
         }
       })
     ]);
+
+  const projectExpenseIds = new Set(
+    spendContext.projectExpensePolicy.rows.map((row) => row.expenseId)
+  );
+  const expenses = spendContext.recognizedExpenses.filter((expense) =>
+    projectExpenseIds.has(expense.id)
+  );
 
   const totalRevenue = roundCurrency(reports.reduce((sum, report) => sum + report.billableAmount, 0));
   const totalExpenses = roundCurrency(expenses.reduce((sum, expense) => sum + expense.amount, 0));

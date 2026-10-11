@@ -5,6 +5,7 @@ import { requireApiPermission } from "@/lib/auth/api-guard";
 import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 
 interface AggregateBucket {
   id?: string;
@@ -29,6 +30,13 @@ export async function GET(request: NextRequest) {
   const category = nullableFilter(request.nextUrl.searchParams.get("category"));
   const statusFilter = parseApprovalStatus(request.nextUrl.searchParams.get("status"));
   const includeAllStatuses = request.nextUrl.searchParams.get("includeAllStatuses") === "true";
+  const useProjectExpenseBasis =
+    request.nextUrl.searchParams.get("basis") === "project-expenses" && !includeAllStatuses;
+  const inclusionPolicy = includeAllStatuses
+    ? "ALL_STATUSES"
+    : useProjectExpenseBasis
+      ? "PROJECT_EXPENSES"
+      : "APPROVED_ONLY";
   const appliedFilters = {
     from: fromDate ? fromDate.toISOString() : null,
     to: toDate ? toDate.toISOString() : null,
@@ -38,7 +46,7 @@ export async function GET(request: NextRequest) {
     projectId: projectId || "all",
     category: category || "all",
     status: statusFilter || "all",
-    inclusionPolicy: includeAllStatuses ? "ALL_STATUSES" : "APPROVED_ONLY"
+    inclusionPolicy
   };
 
   const baseWhere: Prisma.ExpenseWhereInput = expenseId
@@ -63,15 +71,17 @@ export async function GET(request: NextRequest) {
       };
   const where = includeAllStatuses ? baseWhere : withFinancialExpenseApproval(baseWhere);
 
-  const expenses = await prisma.expense.findMany({
-    where,
-    orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-    include: {
-      client: { select: { id: true, name: true } },
-      project: { select: { id: true, name: true } },
-      rig: { select: { id: true, rigCode: true } }
-    }
-  });
+  const expenses = useProjectExpenseBasis
+    ? await loadProjectExpenses({ clientId, rigId, projectId, fromDate, toDate, expenseId, category })
+    : await prisma.expense.findMany({
+        where,
+        orderBy: [{ date: "asc" }, { createdAt: "asc" }],
+        include: {
+          client: { select: { id: true, name: true } },
+          project: { select: { id: true, name: true } },
+          rig: { select: { id: true, rigCode: true } }
+        }
+      });
 
   const byDateMap = new Map<string, number>();
   const byProjectMap = new Map<string, AggregateBucket>();
@@ -173,9 +183,42 @@ export async function GET(request: NextRequest) {
       statusCounts,
       totalExpenses,
       approvedIntentAmount,
-      inclusionPolicy: includeAllStatuses ? "ALL_STATUSES" : "APPROVED_ONLY"
+      inclusionPolicy
     }
   });
+}
+
+async function loadProjectExpenses({
+  clientId,
+  rigId,
+  projectId,
+  fromDate,
+  toDate,
+  expenseId,
+  category
+}: {
+  clientId: string | null;
+  rigId: string | null;
+  projectId: string | null;
+  fromDate: Date | null;
+  toDate: Date | null;
+  expenseId: string | null;
+  category: string | null;
+}) {
+  const context = await buildRecognizedSpendContext({
+    clientId,
+    rigId,
+    projectId,
+    fromDate,
+    toDate
+  });
+  const includedIds = new Set(context.projectExpensePolicy.rows.map((row) => row.expenseId));
+  return context.recognizedExpenses.filter(
+    (expense) =>
+      includedIds.has(expense.id) &&
+      (!expenseId || expense.id === expenseId) &&
+      (!category || expense.category === category)
+  );
 }
 
 function sortBuckets(items: AggregateBucket[]) {

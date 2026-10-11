@@ -2,15 +2,16 @@ import type { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { logLegacyFinanceApiUsage, withLegacyFinanceDeprecationHeaders } from "@/lib/api-deprecation";
+import { buildPurposeTotals } from "@/lib/approved-spend-classification";
 import { requireApiPermission } from "@/lib/auth/api-guard";
-import {
-  withFinancialActualUseMovementApproval,
-  withFinancialDrillReportApproval
-} from "@/lib/financial-approval-policy";
+import { withFinancialDrillReportApproval } from "@/lib/financial-approval-policy";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
-import { resolveSpendingMovementCategory } from "@/lib/spending-expense-category";
+import {
+  resolveSpendingExpenseCategory,
+  resolveSpendingMovementCategory
+} from "@/lib/spending-expense-category";
 
 interface AggregateRowBase {
   id: string;
@@ -96,7 +97,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const [reports, spendContext, expenseMovements] = await Promise.all([
+  const [reports, spendContext] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -112,73 +113,58 @@ export async function GET(request: NextRequest) {
       projectId,
       fromDate,
       toDate
-    }),
-    prisma.inventoryMovement.findMany({
-      where: withFinancialActualUseMovementApproval({
-        ...(projectId ? { projectId } : {}),
-        ...(clientId ? { clientId } : {}),
-        ...(rigId ? { rigId } : {}),
-        ...(fromDate || toDate
-          ? {
-              date: {
-                ...(fromDate ? { gte: fromDate } : {}),
-                ...(toDate ? { lte: toDate } : {})
-              }
-            }
-          : {})
-      }),
-      orderBy: [{ date: "asc" }, { createdAt: "asc" }],
-      select: {
-        id: true,
-        date: true,
-        totalCost: true,
-        contextType: true,
-        clientId: true,
-        projectId: true,
-        rigId: true,
-        client: { select: { name: true } },
-        project: { select: { name: true } },
-        rig: { select: { rigCode: true } },
-        item: {
-          select: {
-            category: true
-          }
-        }
-      }
     })
   ]);
   const recognizedExpenses = spendContext.recognizedExpenses;
-  const usageExpenses = expenseMovements.map((movement) => ({
-    id: movement.id,
-    amount: safeNumber(movement.totalCost),
-    date: movement.date,
-    contextType: movement.contextType,
-    category: normalizeExpenseCategory(
-      resolveSpendingMovementCategory({
-        itemCategory: movement.item?.category,
-        fallbackCategory: "Uncategorized"
-      })
-    ),
-    clientId: movement.clientId || null,
-    projectId: movement.projectId || null,
-    rigId: movement.rigId || null,
-    clientName: movement.client?.name || null,
-    projectName: movement.project?.name || null,
-    rigName: movement.rig?.rigCode || null
-  }));
+  const recognizedExpenseById = new Map(recognizedExpenses.map((expense) => [expense.id, expense]));
+  const movementCategoryByExpenseId = new Map<string, string>();
+  for (const movement of spendContext.movements) {
+    if (!movement.expenseId || movementCategoryByExpenseId.has(movement.expenseId)) {
+      continue;
+    }
+    if (movement.item?.category) {
+      movementCategoryByExpenseId.set(
+        movement.expenseId,
+        resolveSpendingMovementCategory({ itemCategory: movement.item.category })
+      );
+    }
+  }
+  const projectExpenses = spendContext.projectExpensePolicy.rows.flatMap((row) => {
+    const expense = recognizedExpenseById.get(row.expenseId);
+    if (!expense) {
+      return [];
+    }
+    return [
+      {
+        id: expense.id,
+        amount: safeNumber(expense.amount),
+        date: expense.date,
+        contextType: row.purposeBucket,
+        category: normalizeExpenseCategory(
+          resolveSpendingExpenseCategory({ expense, movementCategoryByExpenseId })
+        ),
+        clientId: expense.clientId || null,
+        projectId: row.linkedProjectId || expense.projectId || null,
+        rigId: row.linkedRigId || expense.rigId || null,
+        clientName: expense.client?.name || null,
+        projectName: expense.project?.name || null,
+        rigName: expense.rig?.rigCode || null
+      }
+    ];
+  });
   const recognizedExpenseResult = {
     stats: spendContext.recognitionStats
   };
-  const purposeTotals = spendContext.purposeTotals;
-  const usagePurposeSummary = buildUsagePurposeSummary(usageExpenses);
-  const recognizedPurposeSummary = normalizeRecognizedPurposeSummary(purposeTotals);
+  const projectPurposeTotals = buildPurposeTotals(spendContext.projectExpensePolicy.rows);
+  const projectPurposeSummary = normalizeRecognizedPurposeSummary(projectPurposeTotals);
+  const recognizedPurposeSummary = normalizeRecognizedPurposeSummary(spendContext.purposeTotals);
   const classificationAudit = spendContext.classificationAudit;
 
   const trendGranularity = resolveTrendGranularity({
     fromDate,
     toDate,
     reportDates: reports.map((entry) => entry.date),
-    expenseDates: usageExpenses.map((entry) => entry.date)
+    expenseDates: projectExpenses.map((entry) => entry.date)
   });
 
   const trendMap = new Map<string, TrendRow>();
@@ -229,7 +215,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  for (const expense of usageExpenses) {
+  for (const expense of projectExpenses) {
     if (expense.amount <= 0) {
       continue;
     }
@@ -331,13 +317,13 @@ export async function GET(request: NextRequest) {
       reportRecordCount: reports.length,
       expenseRecordCount: spendContext.rawExpenses.length,
       recognizedExpenseRecordCount: recognizedExpenses.length,
-      usageExpenseMovementCount: usageExpenses.length,
+      projectExpenseRecordCount: projectExpenses.length,
       recognition: recognizedExpenseResult.stats,
       totalExpenses,
       approvedIntentAmount,
-      usagePurposeSummary,
+      projectPurposeSummary,
       expenseStatusCounts,
-      purposeTotals: recognizedPurposeSummary,
+      excludedStockReplenishment: spendContext.projectExpensePolicy.excludedStockReplenishmentTotal,
       classificationAudit
     },
     { channel: "finance" }
@@ -358,10 +344,11 @@ export async function GET(request: NextRequest) {
       recognizedSpend: roundCurrency(totalExpenses),
       totalProfit: roundCurrency(totalProfit)
     },
-    operationalPurposeSummary: usagePurposeSummary,
+    operationalPurposeSummary: projectPurposeSummary,
     recognizedPurposeSummary,
     meta: {
-      expenseBasis: "actual-use" as const
+      expenseBasis: "project-expenses" as const,
+      excludedStockReplenishment: spendContext.projectExpensePolicy.excludedStockReplenishmentTotal
     },
     classificationAudit,
     kpis: {
@@ -562,64 +549,6 @@ function calculatePercent(value: number, total: number) {
 function normalizeExpenseCategory(category: string | null | undefined) {
   const value = category?.trim();
   return value || "Uncategorized";
-}
-
-function buildUsagePurposeSummary(
-  expenses: Array<{
-    amount: number;
-    contextType: string | null;
-    clientId: string | null;
-    projectId: string | null;
-    rigId: string | null;
-  }>
-): PurposeSummary {
-  const totals: PurposeSummary = {
-    totalRecognizedSpend: 0,
-    breakdownCost: 0,
-    maintenanceCost: 0,
-    stockReplenishmentCost: 0,
-    operatingCost: 0,
-    otherUnlinkedCost: 0
-  };
-
-  for (const expense of expenses) {
-    const amount = safeNumber(expense.amount);
-    if (amount <= 0) {
-      continue;
-    }
-    totals.totalRecognizedSpend += amount;
-
-    if (expense.contextType === "BREAKDOWN") {
-      totals.breakdownCost += amount;
-      continue;
-    }
-
-    if (expense.contextType === "MAINTENANCE") {
-      totals.maintenanceCost += amount;
-      continue;
-    }
-
-    if (
-      expense.contextType === "OTHER" &&
-      !expense.clientId &&
-      !expense.projectId &&
-      !expense.rigId
-    ) {
-      totals.otherUnlinkedCost += amount;
-      continue;
-    }
-
-    totals.operatingCost += amount;
-  }
-
-  return {
-    totalRecognizedSpend: roundCurrency(totals.totalRecognizedSpend),
-    breakdownCost: roundCurrency(totals.breakdownCost),
-    maintenanceCost: roundCurrency(totals.maintenanceCost),
-    stockReplenishmentCost: roundCurrency(totals.stockReplenishmentCost),
-    operatingCost: roundCurrency(totals.operatingCost),
-    otherUnlinkedCost: roundCurrency(totals.otherUnlinkedCost)
-  };
 }
 
 function normalizeRecognizedPurposeSummary(source: {

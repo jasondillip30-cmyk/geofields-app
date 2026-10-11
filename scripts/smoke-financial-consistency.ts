@@ -207,7 +207,7 @@ async function main() {
   assertClose("Dashboard vs Cost Tracking spend", dashboardSpend, costTrackingSpend);
   assertClose("Dashboard vs Budget vs Actual spend", dashboardSpend, budgetsSpend);
   assertClose("Dashboard vs Inventory Expenses recognized spend", dashboardSpend, inventoryRecognizedSpend);
-  assertClose("Spending vs Profit spend (actual-use lens)", spendingSpend, profitSpend);
+  assertClose("Spending vs Profit spend (project-expense lens)", spendingSpend, profitSpend);
 
   const dashboardBasis = (dashboard.json?.meta as Record<string, unknown> | null)?.expenseBasis;
   const costTrackingBasis = (costTracking.json?.meta as Record<string, unknown> | null)?.expenseBasis;
@@ -218,8 +218,8 @@ async function main() {
   assert(dashboardBasis === "recognized", `Dashboard expense basis expected "recognized" (got "${String(dashboardBasis)}").`);
   assert(costTrackingBasis === "recognized", `Cost Tracking expense basis expected "recognized" (got "${String(costTrackingBasis)}").`);
   assert(budgetsBasis === "recognized", `Budgets expense basis expected "recognized" (got "${String(budgetsBasis)}").`);
-  assert(profitBasis === "actual-use", `Profit expense basis expected "actual-use" (got "${String(profitBasis)}").`);
-  assert(spendingBasis === "actual-use", `Spending expense basis expected "actual-use" (got "${String(spendingBasis)}").`);
+  assert(profitBasis === "project-expenses", `Profit expense basis expected "project-expenses" (got "${String(profitBasis)}").`);
+  assert(spendingBasis === "project-expenses", `Spending expense basis expected "project-expenses" (got "${String(spendingBasis)}").`);
 
   const dashboardPurpose = normalizePurposeSummary(
     (dashboard.json?.operationalPurposeSummary as Record<string, unknown> | null) || null

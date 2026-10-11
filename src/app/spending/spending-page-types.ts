@@ -42,12 +42,14 @@ export interface SpendingRevenueRateCard {
 
 export interface SpendingSummaryPayload {
   meta?: {
-    expenseBasis: "recognized" | "actual-use";
+    expenseBasis: "recognized" | "actual-use" | "project-expenses";
+    excludedStockReplenishment?: number;
   };
   totals: {
     income: number;
     expenses: number;
     netCashFlow: number;
+    metersDrilled?: number;
   };
   revenueTrend: Array<{
     bucketStart: string;
@@ -82,6 +84,14 @@ export interface SpendingSummaryPayload {
     usageCount: number;
   }>;
   revenueRateCard: SpendingRevenueRateCard;
+  revenueBreakdown?: Array<{
+    itemCode: string;
+    label: string;
+    unit: string;
+    quantity: number;
+    unitRate: number;
+    revenue: number;
+  }>;
 }
 
 export interface SpendingStageSegment {

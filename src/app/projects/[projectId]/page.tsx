@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
+import { ProjectFinancialOverview } from "@/components/modules/project-financial-overview";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
@@ -52,8 +53,11 @@ export default async function ProjectWorkspacePage({
     notFound();
   }
 
-  const spendingHref = `/spending?projectId=${encodeURIComponent(project.id)}`;
-  const drillingReportsHref = `/spending?view=drilling-reports&projectId=${encodeURIComponent(project.id)}`;
+  const spendingHref = `/spending?workspace=project&projectId=${encodeURIComponent(project.id)}`;
+  const drillingReportsHref = `${spendingHref}&view=drilling-reports`;
+  const primaryContractRate =
+    project.billingRateItems.find((line) => line.unit.toLowerCase() === "meter")?.unitRate ||
+    project.contractRatePerM;
 
   return (
     <AccessGate denyBehavior="redirect" permission="projects:view">
@@ -91,6 +95,10 @@ export default async function ProjectWorkspacePage({
             </Link>
           </div>
         </section>
+
+        <AccessGate permission="finance:view">
+          <ProjectFinancialOverview projectId={project.id} contractRate={primaryContractRate} />
+        </AccessGate>
 
         <Card title="Project details">
           <DataTable

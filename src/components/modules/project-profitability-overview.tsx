@@ -36,16 +36,16 @@ export function ProjectProfitabilityOverview({
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="text-lg font-semibold text-ink-900">Project profitability</h3>
+        <h3 className="text-lg font-semibold text-ink-900">Project financial overview</h3>
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <MetricCard label="Drilled meters" value={formatNumber(drilledMeters)} />
         <MetricCard label="Contract rate" value={formatCurrency(contractRate)} />
         <MetricCard label="Revenue" value={formatCurrency(revenue)} tone="good" />
-        <MetricCard label="Cost" value={formatCurrency(cost)} tone="warn" />
+        <MetricCard label="Expenses" value={formatCurrency(cost)} tone="warn" />
         <MetricCard
-          label="Profit / Loss"
+          label="Profit"
           value={formatCurrency(profitLoss)}
           tone={profitLoss >= 0 ? "good" : "danger"}
         />
@@ -74,13 +74,13 @@ export function ProjectProfitabilityOverview({
         </div>
       </details>
 
-      <Card title="Cost breakdown">
+      <Card title="Expense breakdown">
         {costBreakdown.length === 0 ? (
           <p className="text-sm text-ink-600">No project costs recorded yet.</p>
         ) : (
           <DataTable
             compact
-            columns={["Cost", "Amount"]}
+            columns={["Expense category", "Amount"]}
             rows={costBreakdown.map((row) => [row.label, formatCurrency(row.amount)])}
           />
         )}
