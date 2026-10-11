@@ -153,6 +153,7 @@ export function InventoryItemsSection({
             <div id="inventory-value-card-section">
               <InventoryValueStatisticsCard
                 totalValue={overview.overview.totalInventoryValue}
+                subtitle={`Quantity on hand × unit cost across ${formatNumber(overview.overview.totalItems)} catalog items. ${formatNumber(overview.overview.unassignedLocationItemCount)} item(s) without a location contribute ${formatCurrency(overview.overview.unassignedLocationValue)}.`}
                 segments={inventoryValueSegments}
                 lowStockRows={lowStockRows}
                 outOfStockRows={overview.outOfStockItems}
@@ -264,7 +265,12 @@ export function InventoryItemsSection({
             </p>
           ) : (
             <div className="space-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Item List</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Item List</p>
+                <p className="text-xs text-slate-500">
+                  Showing {formatNumber(visibleItems.length)} of {formatNumber(items.length)} filtered item(s)
+                </p>
+              </div>
               <DataTable
                 className="border-slate-200/70"
                 columns={

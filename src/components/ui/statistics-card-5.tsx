@@ -32,6 +32,8 @@ interface OutOfStockRow {
 
 interface InventoryValueStatisticsCardProps {
   totalValue: number;
+  title?: string;
+  subtitle?: string;
   segments: InventoryValueSegment[];
   lowStockRows: LowStockRow[];
   outOfStockRows: OutOfStockRow[];
@@ -54,6 +56,8 @@ type StockPanel = "low" | "out" | null;
 
 export function InventoryValueStatisticsCard({
   totalValue,
+  title = "Global Inventory Value",
+  subtitle,
   segments,
   lowStockRows,
   outOfStockRows,
@@ -88,7 +92,10 @@ export function InventoryValueStatisticsCard({
       )}
     >
       <div className="flex items-center justify-between gap-4">
-        <h3 className="text-lg font-semibold text-slate-700">Inventory Value</h3>
+        <div>
+          <h3 className="text-lg font-semibold text-slate-700">{title}</h3>
+          {subtitle ? <p className="mt-1 text-xs text-slate-500">{subtitle}</p> : null}
+        </div>
       </div>
 
       <div className="mt-3 text-3xl font-bold tracking-tight text-ink-900">

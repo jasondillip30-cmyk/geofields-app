@@ -60,6 +60,7 @@ interface MovementWorkspaceRow {
 export function InventoryMovementsWorkspace({
   isProjectLocked,
   projectName,
+  loading,
   focusedSectionId,
   movementLedgerSummary,
   movementTypeFilter,
@@ -73,6 +74,7 @@ export function InventoryMovementsWorkspace({
 }: {
   isProjectLocked: boolean;
   projectName?: string | null;
+  loading: boolean;
   focusedSectionId: string | null;
   movementLedgerSummary: MovementLedgerSummary;
   movementTypeFilter: string;
@@ -88,13 +90,15 @@ export function InventoryMovementsWorkspace({
     ? filteredMovements.reduce(
         (summary, movement) => {
           if (movement.movementType === "IN") {
-            summary.in += 1;
+            summary.inRecords += 1;
+            summary.inQuantity += movement.quantity;
           } else if (movement.movementType === "OUT") {
-            summary.out += 1;
+            summary.outRecords += 1;
+            summary.outQuantity += movement.quantity;
           }
           return summary;
         },
-        { in: 0, out: 0 }
+        { inRecords: 0, inQuantity: 0, outRecords: 0, outQuantity: 0 }
       )
     : null;
 
@@ -136,13 +140,13 @@ export function InventoryMovementsWorkspace({
             {isProjectLocked ? (
               <>
                 <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-                  Project-linked in scope: {formatNumber(movementLedgerSummary.total)}
+                  {loading ? "Loading project-linked movements..." : `Project-linked in scope: ${formatNumber(movementLedgerSummary.total)}`}
                 </span>
                 <span className="rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
-                  IN: {formatNumber(lockedInOutSummary?.in || 0)}
+                  {loading ? "IN: loading" : `IN: ${formatNumber(lockedInOutSummary?.inQuantity || 0)} qty / ${formatNumber(lockedInOutSummary?.inRecords || 0)} record(s)`}
                 </span>
                 <span className="rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-800">
-                  OUT: {formatNumber(lockedInOutSummary?.out || 0)}
+                  {loading ? "OUT: loading" : `OUT: ${formatNumber(lockedInOutSummary?.outQuantity || 0)} qty / ${formatNumber(lockedInOutSummary?.outRecords || 0)} record(s)`}
                 </span>
               </>
             ) : (
@@ -196,7 +200,9 @@ export function InventoryMovementsWorkspace({
             </label>
           </div>
         </div>
-        {filteredMovements.length === 0 ? (
+        {loading ? (
+          <p className="text-sm text-ink-600">Loading stock movement history...</p>
+        ) : filteredMovements.length === 0 ? (
           <p className="text-sm text-ink-600">
             {isProjectLocked
               ? "No project-linked stock movements found for this project."
@@ -209,7 +215,7 @@ export function InventoryMovementsWorkspace({
               compact
               columns={
                 isProjectLocked
-                  ? ["Date", "Item", "Type", "Qty", "Total Cost", "Linked To", "Receipt", "Actions"]
+                  ? ["Date", "Item", "Type", "Qty", "Total Cost", "Linked To", "Financial Status", "Receipt", "Actions"]
                   : ["Date", "Item", "Type", "Qty", "Total Cost", "Purpose", "Linked To", "Financial Status", "Receipt", "Actions"]
               }
               rows={visibleMovements.map((movement) => {
@@ -224,6 +230,21 @@ export function InventoryMovementsWorkspace({
                     formatNumber(movement.quantity),
                     formatCurrency(movement.totalCost || 0),
                     movementLinkedToDisplay(movement),
+                    <div key={`${movement.id}-financial`} className="space-y-0.5">
+                      <span
+                        className={cn(
+                          "inline-flex rounded-full border px-1.5 py-[1px] text-[10px] font-semibold",
+                          recognition.tone === "good"
+                            ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+                            : recognition.tone === "warn"
+                              ? "border-amber-300 bg-amber-100 text-amber-800"
+                              : "border-slate-300 bg-slate-100 text-slate-700"
+                        )}
+                      >
+                        {recognition.label}
+                      </span>
+                      <p className="text-[10px] text-slate-600">{financialSubLine}</p>
+                    </div>,
                     movement.receiptUrl ? (
                       <a
                         key={`${movement.id}-receipt`}

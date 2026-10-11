@@ -12,8 +12,7 @@ interface InventoryPageChromeProps {
   filters: AnalyticsFilters;
   selectedClientLabel: string | null;
   selectedRigLabel: string | null;
-  isSingleProjectScope: boolean;
-  isProjectScopedInventoryView: boolean;
+  selectedProjectLabel: string | null;
   showMovements: boolean;
   pageTitle: string;
   pageSubtitle: string;
@@ -26,8 +25,7 @@ export function InventoryPageChrome({
   filters,
   selectedClientLabel,
   selectedRigLabel,
-  isSingleProjectScope,
-  isProjectScopedInventoryView,
+  selectedProjectLabel,
   showMovements,
   pageTitle,
   pageSubtitle,
@@ -46,9 +44,12 @@ export function InventoryPageChrome({
         </div>
       )}
 
-      {!isSingleProjectScope || !isProjectScopedInventoryView ? (
-        <FilterScopeBanner filters={filters} clientLabel={selectedClientLabel} rigLabel={selectedRigLabel} />
-      ) : null}
+      <FilterScopeBanner
+        filters={filters}
+        projectLabel={selectedProjectLabel}
+        clientLabel={selectedClientLabel}
+        rigLabel={selectedRigLabel}
+      />
 
       <section className="gf-page-header">
         <div className="min-w-0">

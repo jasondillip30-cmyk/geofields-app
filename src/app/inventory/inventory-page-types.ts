@@ -170,6 +170,10 @@ export interface InventoryOverviewResponse {
     totalItems: number;
     totalUnitsInStock: number;
     totalInventoryValue: number;
+    valuationBasis: "quantity-on-hand-times-unit-cost";
+    locatedInventoryValue: number;
+    unassignedLocationValue: number;
+    unassignedLocationItemCount: number;
     lowStockCount: number;
     outOfStockCount: number;
     recentlyUsedItems: Array<{ id: string; name: string; date: string; quantity: number }>;
@@ -467,6 +471,10 @@ export const defaultOverview: InventoryOverviewResponse = {
     totalItems: 0,
     totalUnitsInStock: 0,
     totalInventoryValue: 0,
+    valuationBasis: "quantity-on-hand-times-unit-cost",
+    locatedInventoryValue: 0,
+    unassignedLocationValue: 0,
+    unassignedLocationItemCount: 0,
     lowStockCount: 0,
     outOfStockCount: 0,
     recentlyUsedItems: [],

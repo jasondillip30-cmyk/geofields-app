@@ -9,6 +9,7 @@ import {
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 import { buildProjectConsumablesPool } from "@/lib/project-consumables-pool";
+import { summarizeInventoryValuation } from "@/lib/inventory-valuation";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -129,7 +130,8 @@ export async function GET(request: NextRequest) {
 
   const totalItems = items.length;
   const totalUnitsInStock = roundCurrency(items.reduce((sum, item) => sum + item.quantityInStock, 0));
-  const totalInventoryValue = roundCurrency(items.reduce((sum, item) => sum + item.quantityInStock * item.unitCost, 0));
+  const inventoryValuation = summarizeInventoryValuation(items);
+  const totalInventoryValue = inventoryValuation.totalValue;
   const inventoryValueByCategoryMap = new Map<string, number>();
   for (const item of items) {
     const categoryValue = item.quantityInStock * item.unitCost;
@@ -317,6 +319,10 @@ export async function GET(request: NextRequest) {
       totalItems,
       totalUnitsInStock,
       totalInventoryValue,
+      valuationBasis: "quantity-on-hand-times-unit-cost",
+      locatedInventoryValue: inventoryValuation.locatedValue,
+      unassignedLocationValue: inventoryValuation.unassignedLocationValue,
+      unassignedLocationItemCount: inventoryValuation.unassignedLocationItemCount,
       lowStockCount: lowStockItems.length,
       outOfStockCount: outOfStockItems.length,
       recentlyUsedItems: Array.from(recentUsed.values()).slice(0, 8),

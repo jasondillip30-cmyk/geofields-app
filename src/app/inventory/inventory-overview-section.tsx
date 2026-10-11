@@ -150,6 +150,7 @@ export function InventoryOverviewSection({
             <section>
               <InventoryValueStatisticsCard
                 totalValue={overview.overview.totalInventoryValue}
+                subtitle={`Global valuation uses quantity on hand × unit cost. ${formatNumber(overview.overview.unassignedLocationItemCount)} unassigned-location item(s) contribute ${formatCurrency(overview.overview.unassignedLocationValue)}.`}
                 segments={inventoryValueSegments}
                 lowStockRows={lowStockRows}
                 outOfStockRows={overview.outOfStockItems}
@@ -180,6 +181,7 @@ export function InventoryOverviewSection({
             <section>
               <InventoryValueStatisticsCard
                 totalValue={overview.overview.totalInventoryValue}
+                subtitle={`Quantity on hand × unit cost across ${formatNumber(overview.overview.totalItems)} catalog items. ${formatNumber(overview.overview.unassignedLocationItemCount)} unassigned-location item(s) contribute ${formatCurrency(overview.overview.unassignedLocationValue)}.`}
                 segments={inventoryValueSegments}
                 lowStockRows={lowStockRows}
                 outOfStockRows={overview.outOfStockItems}

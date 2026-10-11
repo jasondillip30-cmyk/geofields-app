@@ -163,6 +163,7 @@ function InventoryPageContent() {
   const [selectedUsageBatchId, setSelectedUsageBatchId] = useState("");
   const [selectedUsageBatchDetails, setSelectedUsageBatchDetails] =
     useState<InventoryUsageBatchRow | null>(null);
+  const inventoryFetchSeq = useRef(0);
   const usageRequestFetchSeq = useRef(0);
   const usageBatchFetchSeq = useRef(0);
   const [usageRequestToast, setUsageRequestToast] = useState<{
@@ -297,6 +298,7 @@ function InventoryPageContent() {
   }, []);
 
   const loadInventoryData = useCallback(async () => {
+    const requestSeq = ++inventoryFetchSeq.current;
     setLoading(true);
     setErrorMessage(null);
     setIssuesLoading(true);
@@ -317,6 +319,10 @@ function InventoryPageContent() {
         stockFilter
       });
 
+      if (requestSeq !== inventoryFetchSeq.current) {
+        return;
+      }
+
       setItems(workspaceData.items);
       setMovements(workspaceData.movements);
       setOverview(workspaceData.overview || defaultOverview);
@@ -325,14 +331,18 @@ function InventoryPageContent() {
         setSelectedItemId(workspaceData.items[0].id);
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to load inventory data.");
-      setItems([]);
-      setMovements([]);
-      setOverview(defaultOverview);
-      setIssuesResponse(defaultIssues);
+      if (requestSeq === inventoryFetchSeq.current) {
+        setErrorMessage(error instanceof Error ? error.message : "Failed to load inventory data.");
+        setItems([]);
+        setMovements([]);
+        setOverview(defaultOverview);
+        setIssuesResponse(defaultIssues);
+      }
     } finally {
-      setLoading(false);
-      setIssuesLoading(false);
+      if (requestSeq === inventoryFetchSeq.current) {
+        setLoading(false);
+        setIssuesLoading(false);
+      }
     }
   }, [
     filters.clientId,
@@ -750,7 +760,6 @@ function InventoryPageContent() {
     showIssuesLockedNotice,
     showSuppliers,
     showLocations,
-    isProjectScopedInventoryView,
     pageTitle,
     pageSubtitle,
     copilotPageKey,
@@ -889,8 +898,7 @@ function InventoryPageContent() {
         filters={filters}
         selectedClientLabel={selectedClientLabel}
         selectedRigLabel={selectedRigLabel}
-        isSingleProjectScope={isSingleProjectScope}
-        isProjectScopedInventoryView={isProjectScopedInventoryView}
+        selectedProjectLabel={scopedProject?.name || null}
         showMovements={showMovements}
         pageTitle={pageTitle}
         pageSubtitle={pageSubtitle}
@@ -1001,6 +1009,7 @@ function InventoryPageContent() {
           <InventoryMovementsWorkspace
             isProjectLocked={isSingleProjectScope}
             projectName={scopedProject?.name || null}
+            loading={loading}
             focusedSectionId={focusedSectionId}
             movementLedgerSummary={movementLedgerSummary}
             movementTypeFilter={movementTypeFilter}
