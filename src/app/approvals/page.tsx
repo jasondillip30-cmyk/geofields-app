@@ -86,6 +86,10 @@ export default function ApprovalsPage() {
   const canManageDrillingApprovals = canManageDrillingApprovalActions(user?.role);
   const canManageRequisitionApprovals = canManageExpenseApprovalActions(user?.role);
   const canManageInventoryApprovals = canManageInventoryApprovalActions(user?.role);
+  const isApprovalWorkspaceViewOnly =
+    !canManageDrillingApprovals &&
+    !canManageRequisitionApprovals &&
+    !canManageInventoryApprovals;
 
   const loadDrillingApprovals = useCallback(async () => {
     const search = new URLSearchParams();
@@ -1050,6 +1054,14 @@ export default function ApprovalsPage() {
         {inventoryActionError && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {inventoryActionError}
+          </div>
+        )}
+        {isApprovalWorkspaceViewOnly && (
+          <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+            <p className="font-semibold">View-only approval access</p>
+            <p className="mt-1 text-xs leading-5 text-sky-800">
+              You can review submitted requests and their status, but only Admin and Manager roles can approve or reject them.
+            </p>
           </div>
         )}
         {inventoryActionToast && (

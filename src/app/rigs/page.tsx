@@ -9,9 +9,11 @@ import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-contex
 import { FilterScopeBanner, hasActiveScopeFilters } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { scrollToFocusElement, useCopilotFocusTarget } from "@/components/layout/copilot-focus-target";
+import { useRole } from "@/components/layout/role-provider";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
+import { canAccess } from "@/lib/auth/permissions";
 import { buildScopedHref } from "@/lib/drilldown";
 import { cn, formatCurrency } from "@/lib/utils";
 
@@ -49,6 +51,7 @@ interface ApprovedMetersRigBucket {
 
 export default function RigsPage() {
   const { filters } = useAnalyticsFilters();
+  const { role } = useRole();
   const pathname = usePathname();
   const [rigs, setRigs] = useState<RigRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +63,7 @@ export default function RigsPage() {
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
+  const canManageRigs = role ? canAccess(role, "rigs:manage") : false;
 
   const visibleRigs = useMemo(() => {
     if (isSingleProjectScope) {
@@ -621,7 +625,16 @@ export default function RigsPage() {
                   <p className="text-sm text-ink-600">Loading rigs...</p>
                 ) : (
                   <DataTable
-                    columns={["Rig", "Model", "Status", "Condition", "Score", "Hours", "Approved Meters (Scope)", "Actions"]}
+                    columns={[
+                      "Rig",
+                      "Model",
+                      "Status",
+                      "Condition",
+                      "Score",
+                      "Hours",
+                      "Approved Meters (Scope)",
+                      ...(canManageRigs ? ["Actions"] : [])
+                    ]}
                     rows={visibleRigs.map((rig) => [
                       <Link key={rig.id} href={buildHref(`/rigs/${rig.id}`)} className="text-brand-700 underline-offset-2 hover:underline">
                         {rig.rigCode}
@@ -632,23 +645,25 @@ export default function RigsPage() {
                       String(rig.conditionScore),
                       String(rig.totalHoursWorked),
                       String(rigApprovedMetersMap.get(rig.id) || 0),
-                      <div key={`actions-${rig.id}`} className="flex gap-2">
-                        <AccessGate permission="rigs:manage">
-                          <Link
-                            href={`/rigs/setup?editRigId=${rig.id}`}
-                            className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
-                          >
-                            Edit
-                          </Link>
-                        </AccessGate>
-                        <button
-                          type="button"
-                          className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
-                          onClick={() => void markRigOutOfService(rig)}
-                        >
-                          Mark Out of Service
-                        </button>
-                      </div>
+                      ...(canManageRigs
+                        ? [
+                            <div key={`actions-${rig.id}`} className="flex gap-2">
+                              <Link
+                                href={`/rigs/setup?editRigId=${rig.id}`}
+                                className="rounded-md border border-slate-200 px-2 py-1 text-xs text-ink-700 hover:bg-slate-50"
+                              >
+                                Edit
+                              </Link>
+                              <button
+                                type="button"
+                                className="rounded-md border border-amber-200 px-2 py-1 text-xs text-amber-800 hover:bg-amber-50"
+                                onClick={() => void markRigOutOfService(rig)}
+                              >
+                                Mark Out of Service
+                              </button>
+                            </div>
+                          ]
+                        : [])
                     ])}
                     rowIds={visibleRigs.map((rig) => `ai-focus-${rig.id}`)}
                     rowClassNames={visibleRigs.map((rig) =>
