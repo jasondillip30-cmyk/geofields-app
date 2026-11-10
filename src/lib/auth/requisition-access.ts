@@ -16,6 +16,17 @@ const ROLE_REQUISITION_TYPES: Partial<Record<UserRole, RoleScopedRequisitionType
   MECHANIC: ["INVENTORY_STOCK_UP"]
 };
 
+const WORKSHOP_REQUISITION_TYPES: RoleScopedRequisitionType[] = ["INVENTORY_STOCK_UP"];
+
+const ROLE_CREATABLE_REQUISITION_TYPES: Record<UserRole, RoleScopedRequisitionType[]> = {
+  ADMIN: WORKSHOP_REQUISITION_TYPES,
+  MANAGER: WORKSHOP_REQUISITION_TYPES,
+  OFFICE: WORKSHOP_REQUISITION_TYPES,
+  MECHANIC: WORKSHOP_REQUISITION_TYPES,
+  FIELD: [],
+  STAFF: []
+};
+
 export function getAllowedRequisitionTypesForRole(role: UserRole | null | undefined) {
   if (!role) {
     return ALL_REQUISITION_TYPES;
@@ -30,14 +41,28 @@ export function isRequisitionTypeAllowedForRole(
   return getAllowedRequisitionTypesForRole(role).includes(type as RoleScopedRequisitionType);
 }
 
-export function getRoleForcedRequisitionType(role: UserRole | null | undefined) {
+export function getCreatableRequisitionTypesForRole(
+  role: UserRole | null | undefined
+) {
   if (!role) {
-    return null;
+    return WORKSHOP_REQUISITION_TYPES;
   }
-  const allowedTypes = ROLE_REQUISITION_TYPES[role];
-  if (!allowedTypes || allowedTypes.length !== 1) {
+  return ROLE_CREATABLE_REQUISITION_TYPES[role];
+}
+
+export function isRequisitionTypeCreatableForRole(
+  role: UserRole | null | undefined,
+  type: string
+) {
+  return getCreatableRequisitionTypesForRole(role).includes(
+    type as RoleScopedRequisitionType
+  );
+}
+
+export function getRoleForcedRequisitionType(role: UserRole | null | undefined) {
+  const allowedTypes = getCreatableRequisitionTypesForRole(role);
+  if (allowedTypes.length !== 1) {
     return null;
   }
   return allowedTypes[0];
 }
-

@@ -58,8 +58,7 @@ interface BreakdownsRecordDetailModalProps {
   loading: boolean;
   error: string | null;
   onClose: () => void;
-  onRequestParts: (record: BreakdownRecord) => void;
-  onCreatePurchaseRequest: (record: BreakdownRecord) => void;
+  onOpenMaintenance: (record: BreakdownRecord) => void;
   onResolve: (record: BreakdownRecord) => void;
 }
 
@@ -235,19 +234,13 @@ export function BreakdownsRecordDetailModal(props: BreakdownsRecordDetailModalPr
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => props.onRequestParts(selectedRecord)}
+              onClick={() => props.onOpenMaintenance(selectedRecord)}
               disabled={!props.selectedRecordIsOpen}
               className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Request parts
-            </button>
-            <button
-              type="button"
-              onClick={() => props.onCreatePurchaseRequest(selectedRecord)}
-              disabled={!props.selectedRecordIsOpen}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Create purchase request
+              {props.linkedMaintenanceRows.length > 0
+                ? "Open linked maintenance"
+                : "Create maintenance case"}
             </button>
             <button
               type="button"
@@ -260,7 +253,7 @@ export function BreakdownsRecordDetailModal(props: BreakdownsRecordDetailModalPr
           </div>
           {!props.selectedRecordIsOpen && (
             <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-              This breakdown case is resolved. Linked history remains viewable, but new item or purchase actions are disabled.
+              This breakdown case is resolved. Linked history remains viewable, but new maintenance actions are disabled.
             </p>
           )}
 
@@ -307,10 +300,8 @@ export function BreakdownsRecordDetailModal(props: BreakdownsRecordDetailModalPr
                 )}
               </Card>
 
-              <Card title="Linked Purchase Requests">
-                {props.linkedRequisitionRows.length === 0 ? (
-                  <p className="text-sm text-slate-600">No linked purchase requests yet.</p>
-                ) : (
+              {props.linkedRequisitionRows.length > 0 && (
+                <Card title="Legacy Linked Purchase Requests">
                   <DataTable
                     columns={["Requisition", "Type", "Status", "Submitted", "Estimated"]}
                     rows={props.linkedRequisitionRows.map((row) => [
@@ -321,8 +312,8 @@ export function BreakdownsRecordDetailModal(props: BreakdownsRecordDetailModalPr
                       formatCurrency(row.totals?.estimatedTotalCost || 0)
                     ])}
                   />
-                )}
-              </Card>
+                </Card>
+              )}
 
               <Card title="Case Update History">
                 {props.auditRows.length === 0 ? (

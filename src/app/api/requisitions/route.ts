@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import {
   getAllowedRequisitionTypesForRole,
-  isRequisitionTypeAllowedForRole
+  isRequisitionTypeCreatableForRole
 } from "@/lib/auth/requisition-access";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { roundCurrency } from "@/lib/inventory-server";
@@ -326,11 +326,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  if (!isRequisitionTypeAllowedForRole(auth.session.role, type)) {
+  if (!isRequisitionTypeCreatableForRole(auth.session.role, type)) {
     return NextResponse.json(
       {
         message:
-          "Your role cannot submit this requisition type in the current workflow."
+          "New purchase requests are workshop inventory stock-up requests. Project and maintenance material needs must use inventory usage requests."
       },
       { status: 403 }
     );

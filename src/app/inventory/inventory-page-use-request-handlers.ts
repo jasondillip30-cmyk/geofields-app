@@ -178,7 +178,9 @@ export function createInventoryUseRequestHandlers({
         throw new Error("Only active inventory items can be requested.");
       }
       if (quantity > selectedItemDetails.data.quantityInStock) {
-        throw new Error("Requested quantity is above stock on hand. Create a purchase request to replenish first.");
+        throw new Error(
+          "Requested quantity is above stock on hand. Ask workshop inventory to replenish this item first."
+        );
       }
       const isLockedProjectUseFlow = isSingleProjectScope && Boolean(scopedProject?.id);
       const effectiveReasonType: UseRequestFormState["reasonType"] = isLockedProjectUseFlow

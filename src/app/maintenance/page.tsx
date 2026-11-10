@@ -34,6 +34,10 @@ import {
 import { MaintenanceRecordDetailModal, MaintenanceRigDetailModal } from "@/app/maintenance/maintenance-page-modals";
 import { MaintenanceReportWizardCard } from "@/app/maintenance/maintenance-report-wizard-card";
 import { canReportMaintenanceActivity } from "@/lib/auth/approval-policy";
+import {
+  canOpenMaintenanceForRig,
+  maintenanceRigEligibilityMessage
+} from "@/lib/maintenance-workflow";
 
 export default function MaintenancePage() {
   return (
@@ -62,6 +66,8 @@ function MaintenanceWorkspace() {
   const { user } = useRole();
   const canReportMaintenance = canReportMaintenanceActivity(user?.role);
   const breakdownPrefillId = searchParams.get("breakdownId")?.trim() || "";
+  const requestedMaintenanceRequestId =
+    searchParams.get("maintenanceRequestId")?.trim() || "";
   const hasBreakdownPrefill = Boolean(breakdownPrefillId);
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
@@ -81,6 +87,7 @@ function MaintenanceWorkspace() {
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [prefillApplied, setPrefillApplied] = useState(false);
+  const [deepLinkedMaintenanceId, setDeepLinkedMaintenanceId] = useState("");
   const [logOpen, setLogOpen] = useState(true);
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
@@ -265,11 +272,11 @@ function MaintenanceWorkspace() {
         return "Select an active project in the top bar first.";
       }
       return isWorkshopMode
-        ? "No idle rigs are available for this project. Move a project rig to IDLE before reporting workshop maintenance."
+        ? "No idle rigs or rigs with an open breakdown are available for this project."
         : "This project has no assigned rig. Assign a rig to the project first.";
     }
     if (isWorkshopMode) {
-      return "No idle rigs are available. Move a rig to IDLE before reporting workshop maintenance.";
+      return "No idle rigs or rigs with an open breakdown are available for maintenance.";
     }
     return "No rigs are available for maintenance reporting.";
   }, [isSingleProjectScope, isWorkshopMode, rigOptionsForForm.length, scopedProject]);
@@ -284,8 +291,14 @@ function MaintenanceWorkspace() {
       }
       if (step === 1 && form.rigId) {
         const selectedRigEntry = allRigs.find((entry) => entry.id === form.rigId);
-        if (selectedRigEntry && selectedRigEntry.status !== "IDLE") {
-          return "Only idle rigs can be reported for workshop maintenance.";
+        if (
+          selectedRigEntry &&
+          !canOpenMaintenanceForRig({
+            rigStatus: selectedRigEntry.status,
+            breakdownReportId: form.linkedBreakdownId
+          })
+        ) {
+          return maintenanceRigEligibilityMessage(selectedRigEntry.status);
         }
       }
       return null;
@@ -504,15 +517,13 @@ function MaintenanceWorkspace() {
       if (isSingleProjectScope) {
         breakdownsQuery.set("projectId", scopeProjectId);
       }
-      const [rigsRes, idleRigsRes, projectsRes, breakdownsRes] = await Promise.all([
+      const [rigsRes, projectsRes, breakdownsRes] = await Promise.all([
         fetch("/api/rigs", { cache: "no-store" }),
-        fetch("/api/rigs?status=IDLE", { cache: "no-store" }),
         fetch("/api/projects", { cache: "no-store" }),
         fetch(`/api/breakdowns?${breakdownsQuery.toString()}`, { cache: "no-store" })
       ]);
-      const [rigsPayload, idleRigsPayload, projectsPayload, breakdownsPayload] = await Promise.all([
+      const [rigsPayload, projectsPayload, breakdownsPayload] = await Promise.all([
         rigsRes.ok ? rigsRes.json() : Promise.resolve({ data: [] }),
-        idleRigsRes.ok ? idleRigsRes.json() : Promise.resolve({ data: [] }),
         projectsRes.ok ? projectsRes.json() : Promise.resolve({ data: [] }),
         breakdownsRes.ok ? breakdownsRes.json() : Promise.resolve({ data: [] })
       ]);
@@ -523,17 +534,38 @@ function MaintenanceWorkspace() {
             status: entry.status
           }))
         : [];
-      const mappedIdleRigs: RigOption[] = Array.isArray(idleRigsPayload.data)
-        ? idleRigsPayload.data.map((entry: { id: string; rigCode: string; status: string }) => ({
-            id: entry.id,
-            rigCode: entry.rigCode,
-            status: entry.status
-          }))
+      const mappedBreakdowns: BreakdownOption[] = Array.isArray(breakdownsPayload.data)
+        ? breakdownsPayload.data.map(
+            (entry: {
+              id: string;
+              title: string;
+              severity: string;
+              status: string;
+              project?: { id: string; name: string } | null;
+              rig?: { id: string; rigCode: string } | null;
+            }) => ({
+              id: entry.id,
+              title: entry.title,
+              severity: entry.severity,
+              status: entry.status,
+              project: entry.project || null,
+              rig: entry.rig || null
+            })
+          )
         : [];
+      const breakdownRigIds = new Set(
+        mappedBreakdowns
+          .map((entry) => entry.rig?.id || "")
+          .filter(Boolean)
+      );
 
       setAllRigs(mappedAllRigs);
       setEligibleMaintenanceRigs(
-        (idleRigsRes.ok ? mappedIdleRigs : mappedAllRigs).filter((entry) => entry.status === "IDLE")
+        mappedAllRigs.filter(
+          (entry) =>
+            entry.status === "IDLE" ||
+            (entry.status === "BREAKDOWN" && breakdownRigIds.has(entry.id))
+        )
       );
       setProjects(
         Array.isArray(projectsPayload.data)
@@ -558,27 +590,7 @@ function MaintenanceWorkspace() {
             )
           : []
       );
-      setBreakdowns(
-        Array.isArray(breakdownsPayload.data)
-          ? breakdownsPayload.data.map(
-              (entry: {
-                id: string;
-                title: string;
-                severity: string;
-                status: string;
-                project?: { id: string; name: string } | null;
-                rig?: { id: string; rigCode: string } | null;
-              }) => ({
-                id: entry.id,
-                title: entry.title,
-                severity: entry.severity,
-                status: entry.status,
-                project: entry.project || null,
-                rig: entry.rig || null
-              })
-            )
-          : []
-      );
+      setBreakdowns(mappedBreakdowns);
     } finally {
       setLoadingRefs(false);
     }
@@ -674,7 +686,7 @@ function MaintenanceWorkspace() {
     }
   }
 
-  async function openRecordDetail(recordId: string) {
+  const openRecordDetail = useCallback(async (recordId: string) => {
     setSelectedRecordId(recordId);
     setDetailOpen(true);
     setDetailLoading(true);
@@ -745,7 +757,26 @@ function MaintenanceWorkspace() {
     } finally {
       setDetailLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (
+      !requestedMaintenanceRequestId ||
+      loadingRows ||
+      deepLinkedMaintenanceId === requestedMaintenanceRequestId ||
+      !rows.some((entry) => entry.id === requestedMaintenanceRequestId)
+    ) {
+      return;
+    }
+    setDeepLinkedMaintenanceId(requestedMaintenanceRequestId);
+    void openRecordDetail(requestedMaintenanceRequestId);
+  }, [
+    deepLinkedMaintenanceId,
+    loadingRows,
+    openRecordDetail,
+    requestedMaintenanceRequestId,
+    rows
+  ]);
 
   async function openRigDetail(rigId: string) {
     setSelectedRigHistoryId(rigId);
@@ -861,27 +892,6 @@ function MaintenanceWorkspace() {
     router.push(`/inventory?${query.toString()}`);
   }
 
-  function goToPurchaseRequest() {
-    if (!selectedRecord) {
-      return;
-    }
-    if (normalizeMaintenanceStatus(selectedRecord.status).status === "COMPLETED") {
-      setErrorMessage("Completed maintenance cases are read-only.");
-      return;
-    }
-    const query = new URLSearchParams({
-      maintenanceRequestId: selectedRecord.id
-    });
-    if (selectedRecord.project?.id) {
-      query.set("projectId", selectedRecord.project.id);
-    }
-    if (selectedRecord.breakdownReportId) {
-      query.set("breakdownId", selectedRecord.breakdownReportId);
-    }
-    closeRecordDetail();
-    router.push(`/expenses?${query.toString()}`);
-  }
-
   function openCaseFromRigDetail(recordId: string) {
     closeRigDetail();
     void openRecordDetail(recordId);
@@ -984,7 +994,6 @@ function MaintenanceWorkspace() {
         auditRows={auditRows}
         onClose={closeRecordDetail}
         onRequestItem={goToInventoryRequest}
-        onCreatePurchaseRequest={goToPurchaseRequest}
         onResolve={() => {
           void markMaintenanceResolved();
         }}

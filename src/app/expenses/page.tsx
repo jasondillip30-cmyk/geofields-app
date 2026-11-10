@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
 import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
 import { AccessGate } from "@/components/layout/access-gate";
@@ -34,23 +33,13 @@ export default function ExpensesPage() {
 }
 
 function ExpensesPageContent() {
-  const searchParams = useSearchParams();
   const { filters } = useAnalyticsFilters();
-  const initialProjectId = searchParams.get("projectId")?.trim() || "";
-  const initialBreakdownId = searchParams.get("breakdownId")?.trim() || "";
-  const initialMaintenanceRequestId =
-    searchParams.get("maintenanceRequestId")?.trim() || "";
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rigs, setRigs] = useState<RigOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isProjectLocked = filters.workspaceMode === "project" && filters.projectId !== "all";
-  const resolvedInitialProjectId = isProjectLocked
-    ? filters.projectId
-    : filters.workspaceMode === "project"
-      ? initialProjectId
-      : "";
 
   const loadReferenceData = useCallback(async (options?: { preserveUi?: boolean }) => {
     const preserveUi = options?.preserveUi === true;
@@ -116,20 +105,6 @@ function ExpensesPageContent() {
     void loadReferenceData();
   }, [loadReferenceData]);
 
-  if (filters.workspaceMode === "project" && filters.projectId === "all") {
-    return (
-      <AccessGate denyBehavior="redirect" permission="requisitions:view">
-        <div className="gf-page-stack">
-          <Card title="Select one project">
-            <p className="text-sm text-ink-600">
-              Project mode purchase requests require a single locked project.
-            </p>
-          </Card>
-        </div>
-      </AccessGate>
-    );
-  }
-
   return (
     <AccessGate permission="requisitions:view">
       <div className="gf-page-stack">
@@ -142,10 +117,10 @@ function ExpensesPageContent() {
         <section className="gf-page-header">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-ink-900 md:text-[1.7rem]">
-              Purchase Requests
+              Workshop Purchase Requests
             </h1>
             <p className="mt-1 text-sm text-slate-600">
-              Create requisitions, track approval status, and continue approved requests into receipt intake.
+              Replenish workshop inventory, track approval status, and complete approved purchases through receipt intake.
             </p>
           </div>
           <div className="mt-3 border-t border-slate-200/80" />
@@ -162,11 +137,6 @@ function ExpensesPageContent() {
               clients={clients}
               projects={projects}
               rigs={rigs}
-              initialContext={{
-                projectId: resolvedInitialProjectId || undefined,
-                breakdownId: initialBreakdownId || undefined,
-                maintenanceRequestId: initialMaintenanceRequestId || undefined
-              }}
               onWorkflowChanged={() => loadReferenceData({ preserveUi: true })}
             />
           )}
@@ -180,8 +150,8 @@ function ExpensesPageFallback() {
   return (
     <AccessGate permission="requisitions:view">
       <div className="gf-page-stack">
-        <Card title="Purchase Requests">
-          <p className="text-sm text-ink-600">Loading purchase request workflow...</p>
+        <Card title="Workshop Purchase Requests">
+          <p className="text-sm text-ink-600">Loading workshop stock replenishment workflow...</p>
         </Card>
       </div>
     </AccessGate>

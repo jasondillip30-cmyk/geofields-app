@@ -50,7 +50,6 @@ interface MaintenanceRecordDetailModalProps {
   auditRows: AuditRow[];
   onClose: () => void;
   onRequestItem: () => void;
-  onCreatePurchaseRequest: () => void;
   onResolve: () => void;
 }
 
@@ -251,15 +250,7 @@ export function MaintenanceRecordDetailModal(props: MaintenanceRecordDetailModal
               disabled={props.selectedRecordStatus === "COMPLETED"}
               className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800 hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Request item
-            </button>
-            <button
-              type="button"
-              onClick={props.onCreatePurchaseRequest}
-              disabled={props.selectedRecordStatus === "COMPLETED"}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Create purchase request
+              Request inventory item
             </button>
             <button
               type="button"
@@ -306,10 +297,8 @@ export function MaintenanceRecordDetailModal(props: MaintenanceRecordDetailModal
                 )}
               </Card>
 
-              <Card title="Linked Purchase Requests">
-                {props.linkedRequisitionRows.length === 0 ? (
-                  <p className="text-sm text-slate-600">No linked purchase requests yet.</p>
-                ) : (
+              {props.linkedRequisitionRows.length > 0 && (
+                <Card title="Legacy Linked Purchase Requests">
                   <DataTable
                     columns={["Requisition", "Type", "Status", "Submitted", "Estimated"]}
                     rows={props.linkedRequisitionRows.map((row) => [
@@ -320,8 +309,8 @@ export function MaintenanceRecordDetailModal(props: MaintenanceRecordDetailModal
                       formatCurrency(row.totals?.estimatedTotalCost || 0)
                     ])}
                   />
-                )}
-              </Card>
+                </Card>
+              )}
 
               <Card title="Activity History">
                 {props.auditRows.length === 0 ? (

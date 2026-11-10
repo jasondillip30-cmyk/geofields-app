@@ -394,45 +394,12 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
     }
   );
   await waitForHydratedApp(page);
-  const requisitionWorkflow = page.locator("#expenses-requisition-workflow").first();
-  await page.getByText("Requisition History").first().waitFor({ state: "visible" });
-  await requisitionWorkflow.getByText("Project Request").first().waitFor({ state: "visible" });
+  await page.getByText("Page hidden in current workspace mode").first().waitFor({ state: "visible" });
   assert(
-    !(await requisitionWorkflow.getByText("Inventory Stock-up Request").first().isVisible().catch(() => false)),
-    "Project-mode purchase requests must not expose inventory stock-up request type controls."
-  );
-  assert(
-    await requisitionWorkflow
-      .locator("label:has-text('Project') input[readonly]")
-      .first()
-      .isVisible()
-      .catch(() => false),
-    "Project-mode request context must show a locked project as read-only."
-  );
-  assert(
-    !(await requisitionWorkflow
-      .locator("label:has-text('Project') select")
-      .first()
-      .isVisible()
-      .catch(() => false)),
-    "Project-mode request context must not show a project selector."
-  );
-  await waitFor(
-    () => projectModeCalls.length > 0,
-    10_000,
-    "Project-mode purchase requests did not issue a requisition history query."
+    projectModeCalls.length === 0,
+    "Project mode must not load the workshop purchase-request workflow."
   );
   await page.unroute(requisitionsRoutePattern);
-
-  const projectModeUrl = new URL(projectModeCalls.at(-1) || projectModeCalls[0]);
-  assert(
-    projectModeUrl.searchParams.get("projectId") === fixtures.projectId,
-    "Project-mode requisition history must be scoped to the locked project."
-  );
-  assert(
-    projectModeUrl.searchParams.get("type") === "LIVE_PROJECT_PURCHASE",
-    "Project-mode requisition history must be limited to project purchases."
-  );
 
   const workshopModeCalls: string[] = [];
   await page.route(requisitionsRoutePattern, async (route) => {
@@ -480,7 +447,7 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
       }
     );
     await waitForHydratedApp(page);
-    await page.locator("#expenses-requisition-workflow").getByText("Maintenance Request").first().waitFor({ state: "visible" });
+    await page.locator("#expenses-requisition-workflow").getByText("Inventory Stock-up Request").first().waitFor({ state: "visible" });
     await waitFor(
       () => maintenanceWorkshopCalls.length > 0,
       10_000,
@@ -492,12 +459,12 @@ async function testPurchaseRequestsModeSplit(page: Page, baseUrl: string, fixtur
       maintenanceWorkshopCalls.at(-1) || maintenanceWorkshopCalls[0]
     );
     assert(
-      maintenanceWorkshopUrl.searchParams.get("type") === "MAINTENANCE_PURCHASE",
-      "Workshop maintenance-context requisition history must use maintenance purchase type."
+      maintenanceWorkshopUrl.searchParams.get("type") === "INVENTORY_STOCK_UP",
+      "Workshop purchase history must remain limited to inventory stock-up requests."
     );
     assert(
-      maintenanceWorkshopUrl.searchParams.get("maintenanceRequestId") === fixtures.maintenanceRequestId,
-      "Workshop maintenance-context requisition history must stay scoped to the maintenance request."
+      maintenanceWorkshopUrl.searchParams.get("maintenanceRequestId") === null,
+      "Maintenance context must not turn workshop replenishment into a maintenance purchase."
     );
   }
 }
@@ -951,8 +918,7 @@ async function createFixtures(baseUrl: string, sessionCookie: string, runToken: 
     | null = null;
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     const response = await postJson(baseUrl, "/api/requisitions", sessionCookie, {
-      type: "LIVE_PROJECT_PURCHASE",
-      projectId: project.id,
+      type: "INVENTORY_STOCK_UP",
       categoryId,
       subcategoryId: asString(matchingSubcategory?.id) || null,
       requestedVendorName: `Interaction Supplier ${runToken}`,

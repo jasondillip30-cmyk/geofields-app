@@ -23,7 +23,6 @@ export const MODE_VISIBLE_NAV_LABELS: Record<WorkspaceMode, string[]> = {
     "Rigs",
     "Breakdowns",
     "Inventory",
-    "Purchase Requests",
     "Project Operations"
   ],
   workshop: ["Inventory", "Maintenance", "Rigs", "Approvals", "Purchase Requests", "Activity Log"]
@@ -97,7 +96,7 @@ const WORKSPACE_ROUTE_RULES: Array<{
     test: (pathname) =>
       pathname.startsWith("/expenses") ||
       pathname.startsWith("/purchasing/receipt-follow-up"),
-    rule: { allowedModes: ["project", "workshop"], recommendedMode: "project" }
+    rule: { allowedModes: ["workshop"], recommendedMode: "workshop" }
   },
   {
     test: (pathname) => pathname.startsWith("/spending"),

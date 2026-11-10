@@ -6,6 +6,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { nullableFilter, parseDateOrNull, parseNumeric, roundCurrency } from "@/lib/inventory-server";
+import {
+  canOpenMaintenanceForRig,
+  maintenanceRigEligibilityMessage
+} from "@/lib/maintenance-workflow";
 import { prisma } from "@/lib/prisma";
 
 const maintenanceInclude = {
@@ -157,9 +161,14 @@ export async function POST(request: NextRequest) {
     if (!rig) {
       return NextResponse.json({ message: "Rig not found." }, { status: 404 });
     }
-    if (rig.status !== "IDLE") {
+    if (
+      !canOpenMaintenanceForRig({
+        rigStatus: rig.status,
+        breakdownReportId: breakdown?.id || null
+      })
+    ) {
       return NextResponse.json(
-        { message: "Only idle rigs can be reported for workshop maintenance." },
+        { message: maintenanceRigEligibilityMessage(rig.status) },
         { status: 400 }
       );
     }

@@ -111,8 +111,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "projects:view",
     "rigs:view",
     "breakdowns:view",
-    "breakdowns:submit",
-    "requisitions:view"
+    "breakdowns:submit"
   ]
 };
 

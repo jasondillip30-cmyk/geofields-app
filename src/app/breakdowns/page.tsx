@@ -431,17 +431,10 @@ export default function BreakdownsPage() {
           reason: "Create and manage repair work linked to breakdowns.",
           pageKey: "maintenance",
           sectionId: "maintenance-log-section"
-        },
-        {
-          label: "Open Purchase Requests",
-          href: buildHref("/expenses"),
-          reason: "Create breakdown-linked procurement requests.",
-          pageKey: "expenses",
-          sectionId: "expenses-requisition-workflow"
         }
       ],
       notes: [
-        "Breakdowns are operational events; maintenance and purchasing should link back to the event."
+        "Breakdowns are operational events; maintenance and inventory usage should link back to the event."
       ]
     }),
     [
@@ -724,25 +717,16 @@ export default function BreakdownsPage() {
     }
   }
 
-  function goToBreakdownPartsRequest(record: BreakdownRecord) {
-    const query = new URLSearchParams({
-      section: "items",
-      usageReason: "BREAKDOWN",
-      breakdownId: record.id
-    });
-    closeBreakdownDetail();
-    router.push(`/inventory?${query.toString()}`);
-  }
-
-  function goToBreakdownPurchaseRequest(record: BreakdownRecord) {
-    const query = new URLSearchParams({
-      breakdownId: record.id
-    });
-    if (record.project?.id) {
-      query.set("projectId", record.project.id);
+  function goToBreakdownMaintenance(record: BreakdownRecord) {
+    const linkedMaintenance = linkedMaintenanceRows[0] || null;
+    const query = new URLSearchParams();
+    if (linkedMaintenance?.id) {
+      query.set("maintenanceRequestId", linkedMaintenance.id);
+    } else {
+      query.set("breakdownId", record.id);
     }
     closeBreakdownDetail();
-    router.push(`/expenses?${query.toString()}`);
+    router.push(`/maintenance?${query.toString()}`);
   }
 
   const selectedRecordIsOpen = selectedRecord
@@ -800,8 +784,7 @@ export default function BreakdownsPage() {
       detailLoading={detailLoading}
       detailError={detailError}
       closeBreakdownDetail={closeBreakdownDetail}
-      goToBreakdownPartsRequest={goToBreakdownPartsRequest}
-      goToBreakdownPurchaseRequest={goToBreakdownPurchaseRequest}
+      goToBreakdownMaintenance={goToBreakdownMaintenance}
       resolveBreakdown={resolveBreakdown}
     />
   );

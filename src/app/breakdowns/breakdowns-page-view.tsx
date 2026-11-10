@@ -84,8 +84,7 @@ interface BreakdownsPageViewProps {
   detailLoading: boolean;
   detailError: string | null;
   closeBreakdownDetail: () => void;
-  goToBreakdownPartsRequest: (record: BreakdownRecord) => void;
-  goToBreakdownPurchaseRequest: (record: BreakdownRecord) => void;
+  goToBreakdownMaintenance: (record: BreakdownRecord) => void;
   resolveBreakdown: (record: BreakdownRecord) => Promise<void>;
 }
 
@@ -139,8 +138,7 @@ export function BreakdownsPageView({
   detailLoading,
   detailError,
   closeBreakdownDetail,
-  goToBreakdownPartsRequest,
-  goToBreakdownPurchaseRequest,
+  goToBreakdownMaintenance,
   resolveBreakdown
 }: BreakdownsPageViewProps) {
   return (
@@ -533,8 +531,7 @@ export function BreakdownsPageView({
           loading={detailLoading}
           error={detailError}
           onClose={closeBreakdownDetail}
-          onRequestParts={goToBreakdownPartsRequest}
-          onCreatePurchaseRequest={goToBreakdownPurchaseRequest}
+          onOpenMaintenance={goToBreakdownMaintenance}
           onResolve={(record) => {
             void resolveBreakdown(record);
           }}
