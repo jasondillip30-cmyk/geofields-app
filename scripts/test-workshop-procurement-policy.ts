@@ -5,7 +5,10 @@ import {
   isRequisitionTypeCreatableForRole
 } from "../src/lib/auth/requisition-access";
 import { canAccess } from "../src/lib/auth/permissions";
-import { canOpenMaintenanceForRig } from "../src/lib/maintenance-workflow";
+import {
+  buildBreakdownMaintenanceHref,
+  canOpenMaintenanceForRig
+} from "../src/lib/maintenance-workflow";
 import { resolveWorkspaceRouteRule } from "../src/lib/workspace-mode";
 
 const workshopRoles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC"] as const;
@@ -28,6 +31,10 @@ const purchaseRouteRule = resolveWorkspaceRouteRule("/expenses");
 assert.deepEqual(purchaseRouteRule?.allowedModes, ["workshop"]);
 assert.equal(purchaseRouteRule?.recommendedMode, "workshop");
 
+const maintenanceRouteRule = resolveWorkspaceRouteRule("/maintenance");
+assert.deepEqual(maintenanceRouteRule?.allowedModes, ["workshop"]);
+assert.equal(maintenanceRouteRule?.recommendedMode, "workshop");
+
 assert.equal(
   canOpenMaintenanceForRig({ rigStatus: "IDLE", breakdownReportId: null }),
   true
@@ -43,6 +50,18 @@ assert.equal(
 assert.equal(
   canOpenMaintenanceForRig({ rigStatus: "ACTIVE", breakdownReportId: "breakdown-1" }),
   false
+);
+
+assert.equal(
+  buildBreakdownMaintenanceHref({
+    breakdownReportId: "breakdown-1",
+    maintenanceRequestId: "maintenance-1"
+  }),
+  "/maintenance?workspace=workshop&maintenanceRequestId=maintenance-1"
+);
+assert.equal(
+  buildBreakdownMaintenanceHref({ breakdownReportId: "breakdown-1" }),
+  "/maintenance?workspace=workshop&breakdownId=breakdown-1"
 );
 
 console.log("Workshop procurement policy regression checks passed.");

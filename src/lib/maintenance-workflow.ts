@@ -19,3 +19,19 @@ export function maintenanceRigEligibilityMessage(rigStatus: string | null | unde
   }
   return "Maintenance can be opened for idle rigs or from a linked breakdown report.";
 }
+
+export function buildBreakdownMaintenanceHref({
+  breakdownReportId,
+  maintenanceRequestId
+}: {
+  breakdownReportId: string;
+  maintenanceRequestId?: string | null;
+}) {
+  const query = new URLSearchParams({ workspace: "workshop" });
+  if (maintenanceRequestId?.trim()) {
+    query.set("maintenanceRequestId", maintenanceRequestId.trim());
+  } else {
+    query.set("breakdownId", breakdownReportId.trim());
+  }
+  return `/maintenance?${query.toString()}`;
+}

@@ -31,6 +31,7 @@ import { BreakdownsPageView } from "@/app/breakdowns/breakdowns-page-view";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { isBreakdownOpenStatus, normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { buildScopedHref } from "@/lib/drilldown";
+import { buildBreakdownMaintenanceHref } from "@/lib/maintenance-workflow";
 
 export default function BreakdownsPage() {
   const router = useRouter();
@@ -719,14 +720,13 @@ export default function BreakdownsPage() {
 
   function goToBreakdownMaintenance(record: BreakdownRecord) {
     const linkedMaintenance = linkedMaintenanceRows[0] || null;
-    const query = new URLSearchParams();
-    if (linkedMaintenance?.id) {
-      query.set("maintenanceRequestId", linkedMaintenance.id);
-    } else {
-      query.set("breakdownId", record.id);
-    }
     closeBreakdownDetail();
-    router.push(`/maintenance?${query.toString()}`);
+    router.push(
+      buildBreakdownMaintenanceHref({
+        breakdownReportId: record.id,
+        maintenanceRequestId: linkedMaintenance?.id
+      })
+    );
   }
 
   const selectedRecordIsOpen = selectedRecord
