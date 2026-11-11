@@ -13,6 +13,10 @@ export function canManageExpenseApprovalActions(role: string | null | undefined)
   return role === "ADMIN" || role === "MANAGER";
 }
 
+export function canManageRequisitionApprovalActions(role: string | null | undefined) {
+  return role === "ADMIN" || role === "MANAGER" || role === "OFFICE";
+}
+
 export function canViewApprovalWorkspace(role: string | null | undefined) {
   return canRoleAccess(role, "reports:view");
 }
@@ -30,7 +34,7 @@ export function canManageMaintenanceApprovalActions(role: string | null | undefi
 }
 
 export function canManageInventoryApprovalActions(role: string | null | undefined) {
-  return canRoleAccess(role, "inventory:manage");
+  return canRoleAccess(role, "inventory:approve");
 }
 
 function canRoleAccess(role: string | null | undefined, permission: Parameters<typeof canAccess>[1]) {

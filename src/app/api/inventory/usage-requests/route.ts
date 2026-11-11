@@ -73,10 +73,18 @@ export async function GET(request: NextRequest) {
     return auth.response;
   }
 
-  const canManageInventory = canAccess(auth.session.role, "inventory:manage");
+  const statusFilter = parseUsageRequestStatusFilter(request.nextUrl.searchParams.get("status"));
+  const canManageInventoryRequests =
+    canAccess(auth.session.role, "inventory:manage") ||
+    canAccess(auth.session.role, "inventory:approve");
+  const canViewSharedShortages =
+    auth.session.role === "MECHANIC" && statusFilter === "WAITING_FOR_STOCK";
   const scopeParam = (request.nextUrl.searchParams.get("scope") || "").toLowerCase();
   const requestedByParam = (request.nextUrl.searchParams.get("requestedBy") || "").toLowerCase();
-  const mineOnly = !canManageInventory || scopeParam === "mine" || requestedByParam === "me";
+  const mineOnly =
+    (!canManageInventoryRequests && !canViewSharedShortages) ||
+    scopeParam === "mine" ||
+    requestedByParam === "me";
 
   const fromDate = parseDateOrNull(request.nextUrl.searchParams.get("from"));
   const toDate = parseDateOrNull(request.nextUrl.searchParams.get("to"), true);
@@ -88,7 +96,6 @@ export async function GET(request: NextRequest) {
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
   const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
   const drillReportId = nullableFilter(request.nextUrl.searchParams.get("drillReportId"));
-  const statusFilter = parseUsageRequestStatusFilter(request.nextUrl.searchParams.get("status"));
   const date = buildDateFilter(fromDate, toDate);
 
   const statusWhere = buildUsageStatusWhere(statusFilter, mineOnly);

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
+import { canManageRequisitionApprovalActions } from "@/lib/auth/approval-policy";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { isRequisitionTypeAllowedForRole } from "@/lib/auth/requisition-access";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
@@ -33,9 +33,9 @@ export async function POST(
     );
   }
 
-  if (!canManageExpenseApprovalActions(auth.session.role)) {
+  if (!canManageRequisitionApprovalActions(auth.session.role)) {
     return NextResponse.json(
-      { message: "Only Admin or Manager can approve or reject requisitions." },
+      { message: "Only Admin, Manager, or Office can approve or reject requisitions." },
       { status: 403 }
     );
   }

@@ -54,7 +54,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ requestId: string }> }
 ) {
-  const auth = await requireApiPermission(request, "inventory:manage");
+  const auth = await requireApiPermission(request, "inventory:approve");
   if (!auth.ok) {
     return auth.response;
   }

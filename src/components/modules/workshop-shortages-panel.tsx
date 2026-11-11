@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { Card } from "@/components/ui/card";
+import { useRole } from "@/components/layout/role-provider";
 import { formatNumber } from "@/lib/utils";
 
 interface WorkshopShortageRow {
@@ -22,6 +23,7 @@ interface WorkshopShortageRow {
 }
 
 export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number }) {
+  const { role } = useRole();
   const [rows, setRows] = useState<WorkshopShortageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -97,13 +99,17 @@ export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number 
                   <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
                     Replenishment submitted
                   </span>
-                ) : (
+                ) : role === "ADMIN" || role === "MANAGER" || role === "OFFICE" ? (
                   <Link
                     href={`/expenses?workspace=workshop&shortageRequestId=${encodeURIComponent(row.id)}`}
                     className="gf-btn-primary shrink-0 px-3 py-1.5 text-xs"
                   >
                     Prepare stock-up request
                   </Link>
+                ) : (
+                  <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600">
+                    Waiting for Office
+                  </span>
                 )}
               </div>
             );

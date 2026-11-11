@@ -6,6 +6,10 @@ import {
 } from "../src/lib/auth/requisition-access";
 import { canAccess } from "../src/lib/auth/permissions";
 import {
+  canManageInventoryApprovalActions,
+  canManageRequisitionApprovalActions
+} from "../src/lib/auth/approval-policy";
+import {
   buildBreakdownMaintenanceHref,
   canOpenMaintenanceForRig
 } from "../src/lib/maintenance-workflow";
@@ -26,6 +30,11 @@ assert.deepEqual(getCreatableRequisitionTypesForRole("FIELD"), []);
 assert.deepEqual(getCreatableRequisitionTypesForRole("STAFF"), []);
 assert.equal(canAccess("FIELD", "requisitions:view"), false);
 assert.equal(canAccess("MECHANIC", "requisitions:view"), true);
+assert.equal(canAccess("OFFICE", "inventory:approve"), true);
+assert.equal(canAccess("OFFICE", "inventory:manage"), false);
+assert.equal(canManageInventoryApprovalActions("OFFICE"), true);
+assert.equal(canManageRequisitionApprovalActions("OFFICE"), true);
+assert.equal(canManageInventoryApprovalActions("MECHANIC"), false);
 
 const purchaseRouteRule = resolveWorkspaceRouteRule("/expenses");
 assert.deepEqual(purchaseRouteRule?.allowedModes, ["workshop"]);

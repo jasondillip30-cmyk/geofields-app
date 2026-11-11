@@ -394,6 +394,7 @@ export async function POST(request: NextRequest) {
   if (
     sourceUsageRequest &&
     !canAccess(auth.session.role, "inventory:manage") &&
+    !canAccess(auth.session.role, "inventory:approve") &&
     sourceUsageRequest.requestedById !== auth.session.userId
   ) {
     return NextResponse.json(

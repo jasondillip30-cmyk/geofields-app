@@ -15,7 +15,7 @@ import { useRole } from "@/components/layout/role-provider";
 import type { WorkflowAssistModel } from "@/components/layout/workflow-assist-panel";
 import {
   canManageDrillingApprovalActions,
-  canManageExpenseApprovalActions,
+  canManageRequisitionApprovalActions,
   canManageInventoryApprovalActions
 } from "@/lib/auth/approval-policy";
 import { REQUISITION_APPROVAL_QUEUE_STATUS } from "@/lib/requisition-lifecycle";
@@ -84,7 +84,7 @@ export default function ApprovalsPage() {
   const [focusedSectionId, setFocusedSectionId] = useState<string | null>(null);
   const [assistTarget, setAssistTarget] = useState<CopilotFocusTarget | null>(null);
   const canManageDrillingApprovals = canManageDrillingApprovalActions(user?.role);
-  const canManageRequisitionApprovals = canManageExpenseApprovalActions(user?.role);
+  const canManageRequisitionApprovals = canManageRequisitionApprovalActions(user?.role);
   const canManageInventoryApprovals = canManageInventoryApprovalActions(user?.role);
   const isApprovalWorkspaceViewOnly =
     !canManageDrillingApprovals &&
