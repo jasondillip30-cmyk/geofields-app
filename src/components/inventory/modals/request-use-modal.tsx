@@ -17,7 +17,6 @@ export function RequestUseModal({
   open,
   onClose,
   onSubmit,
-  onContinueToPurchaseRequest,
   form,
   onFormChange,
   projects,
@@ -33,7 +32,6 @@ export function RequestUseModal({
   open: boolean;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
-  onContinueToPurchaseRequest: () => void;
   form: UseRequestFormState;
   onFormChange: Dispatch<SetStateAction<UseRequestFormState>>;
   projects: Array<{
@@ -293,7 +291,7 @@ export function RequestUseModal({
         : false;
   const projectedStockWarning =
     hasStockShortage
-      ? "Requested quantity exceeds stock on hand. Approval will be blocked unless stock is replenished."
+      ? "Stock is short. Submit this request so the workshop can replenish the item and keep the maintenance need linked."
       : null;
 
   return (
@@ -360,13 +358,6 @@ export function RequestUseModal({
         {projectedStockWarning && (
           <div className="space-y-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900">
             <p>{projectedStockWarning}</p>
-            <button
-              type="button"
-              onClick={onContinueToPurchaseRequest}
-              className="rounded-md border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-200"
-            >
-              Create purchase request
-            </button>
           </div>
         )}
         {errorMessage && (
@@ -752,26 +743,20 @@ export function RequestUseModal({
             <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
               Cancel
             </button>
-            {hasStockShortage && (
-              <button
-                type="button"
-                onClick={onContinueToPurchaseRequest}
-                className="rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
-              >
-                Create purchase request
-              </button>
-            )}
             <button
               type="submit"
               disabled={
                 submitting ||
                 item?.status !== "ACTIVE" ||
-                hasStockShortage ||
                 !hasRequiredContextSelection
               }
               className="gf-btn-primary px-3 py-1.5 text-xs"
             >
-              {submitting ? "Submitting..." : "Submit usage request"}
+              {submitting
+                ? "Submitting..."
+                : hasStockShortage
+                  ? "Submit shortage request"
+                  : "Submit usage request"}
             </button>
           </div>
         </form>

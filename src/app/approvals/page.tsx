@@ -328,7 +328,7 @@ export default function ApprovalsPage() {
   );
 
   const updateInventoryStatus = useCallback(
-    async (requestId: string, action: "approve" | "reject") => {
+    async (requestId: string, action: "approve" | "issue" | "reject") => {
       if (!canManageInventoryApprovals) {
         const message = "You do not have permission to approve or reject inventory usage requests.";
         setInventoryActionError(message);
@@ -370,16 +370,20 @@ export default function ApprovalsPage() {
         }
 
         setNotice(
-          action === "approve"
-            ? "Inventory usage request approved and stock updated."
-            : "Inventory usage request rejected."
+          action === "issue"
+            ? "Inventory item issued and stock updated."
+            : action === "approve"
+              ? "Inventory usage request approved and stock updated."
+              : "Inventory usage request rejected."
         );
         setInventoryActionToast({
           tone: "success",
           message:
-            action === "approve"
-              ? "Inventory usage request approved. Stock was updated and history recorded."
-              : "Inventory usage request rejected. No stock movement was recorded."
+            action === "issue"
+              ? "Inventory item issued. Stock, movement history, and linked cost were recorded."
+              : action === "approve"
+                ? "Inventory usage request approved. Stock was updated and history recorded."
+                : "Inventory usage request rejected. No stock movement was recorded."
         });
         setInventoryActionError(null);
         setInventoryRowWarnings((current) => {

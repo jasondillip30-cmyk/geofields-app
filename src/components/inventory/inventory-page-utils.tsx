@@ -110,6 +110,12 @@ export function formatUsageRequestDecision(requestRow: UsageRequestLike) {
   if (requestRow.status === "PENDING") {
     return "Pending manager review";
   }
+  if (requestRow.status === "WAITING_FOR_STOCK") {
+    return "Waiting for workshop replenishment";
+  }
+  if (requestRow.status === "READY_TO_ISSUE") {
+    return "Stock replenished • ready for issue";
+  }
   return "Awaiting review";
 }
 

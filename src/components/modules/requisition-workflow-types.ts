@@ -38,6 +38,7 @@ export interface RequisitionRow {
   requestedVendorId: string | null;
   requestedVendorName: string | null;
   notes: string | null;
+  sourceUsageRequestId: string | null;
   submittedAt: string;
   submittedBy: {
     userId: string;
@@ -131,6 +132,7 @@ export interface RequisitionInitialContext {
   projectId?: string;
   breakdownId?: string;
   maintenanceRequestId?: string;
+  shortageRequestId?: string;
 }
 
 export interface RequisitionWorkflowCardProps {
@@ -143,6 +145,7 @@ export interface RequisitionWorkflowCardProps {
 }
 
 export interface RequisitionFormState {
+  sourceUsageRequestId: string;
   type: RequisitionType | "";
   liveProjectSpendType: LiveProjectSpendType | "";
   clientId: string;
@@ -180,6 +183,7 @@ export function createInitialFormState(initialContext?: RequisitionInitialContex
     !prefilledBreakdownPurchase &&
     prefilledProjectId.length > 0;
   return {
+    sourceUsageRequestId: initialContext?.shortageRequestId?.trim() || "",
     type: (
       prefilledMaintenancePurchase
         ? "MAINTENANCE_PURCHASE"

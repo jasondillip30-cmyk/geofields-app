@@ -212,7 +212,7 @@ export async function loadMyUsageRequestsMine({
   status,
   filters
 }: {
-  status: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
+  status: "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED";
   filters?: InventoryFilterScope;
 }) {
   const query = new URLSearchParams();

@@ -72,7 +72,7 @@ export interface ApprovalsWorkspaceCardProps {
   onDrillingStatus: (rowId: string, action: "approve" | "reject") => void;
   onOpenInventoryBatchReview: (batchId: string) => void;
   onInventoryNoteChange: (rowId: string, value: string) => void;
-  onInventoryStatus: (rowId: string, action: "approve" | "reject") => void;
+  onInventoryStatus: (rowId: string, action: "approve" | "issue" | "reject") => void;
   onRequisitionNoteChange: (rowId: string, value: string) => void;
   onRequisitionStatus: (rowId: string, action: "approve" | "reject") => void;
   onTabChange: (tab: ApprovalTab) => void;
@@ -540,8 +540,14 @@ export function ApprovalsWorkspaceCard({
                         </span>,
                         <div key={`${row.id}-status`} className="flex flex-wrap items-center gap-1">
                           <StatusBadge
-                            label={row.status === "PENDING" ? "Pending" : "Submitted"}
-                            tone={row.status === "PENDING" ? "amber" : "blue"}
+                            label={
+                              row.status === "READY_TO_ISSUE"
+                                ? "Ready to issue"
+                                : row.status === "PENDING"
+                                  ? "Pending"
+                                  : "Submitted"
+                            }
+                            tone={row.status === "READY_TO_ISSUE" ? "green" : row.status === "PENDING" ? "amber" : "blue"}
                           />
                           {inventoryRowWarnings[row.id] ? <StatusBadge label={inventoryRowWarnings[row.id]} tone="red" /> : null}
                         </div>,
@@ -557,10 +563,10 @@ export function ApprovalsWorkspaceCard({
                           <button
                             type="button"
                             disabled={!canManageInventoryApprovals || actingRowId === row.id}
-                            onClick={() => onInventoryStatus(row.id, "approve")}
+                            onClick={() => onInventoryStatus(row.id, row.status === "READY_TO_ISSUE" ? "issue" : "approve")}
                             className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
                           >
-                            Approve
+                            {row.status === "READY_TO_ISSUE" ? "Issue item" : "Approve"}
                           </button>
                           <button
                             type="button"

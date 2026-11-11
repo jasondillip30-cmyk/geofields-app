@@ -17,6 +17,7 @@ import {
   roundCurrency
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
+import { deriveInitialUsageRequestStatus } from "@/lib/inventory-shortage-workflow";
 
 const requestInclude = {
   item: {
@@ -24,7 +25,10 @@ const requestInclude = {
       id: true,
       name: true,
       sku: true,
-      quantityInStock: true
+      category: true,
+      quantityInStock: true,
+      unitCost: true,
+      locationId: true
     }
   },
   project: { select: { id: true, name: true, clientId: true } },
@@ -80,6 +84,7 @@ export async function GET(request: NextRequest) {
   const projectId = nullableFilter(request.nextUrl.searchParams.get("projectId"));
   const clientId = nullableFilter(request.nextUrl.searchParams.get("clientId"));
   const itemId = nullableFilter(request.nextUrl.searchParams.get("itemId"));
+  const requestId = nullableFilter(request.nextUrl.searchParams.get("requestId"));
   const maintenanceRequestId = nullableFilter(request.nextUrl.searchParams.get("maintenanceRequestId"));
   const breakdownReportId = nullableFilter(request.nextUrl.searchParams.get("breakdownReportId"));
   const drillReportId = nullableFilter(request.nextUrl.searchParams.get("drillReportId"));
@@ -90,6 +95,7 @@ export async function GET(request: NextRequest) {
 
   const whereClauses: Prisma.InventoryUsageRequestWhereInput[] = [
     statusWhere,
+    ...(requestId ? [{ id: requestId }] : []),
     ...(mineOnly ? [{ requestedById: auth.session.userId }] : []),
     ...(rigId ? [{ rigId }] : []),
     ...(projectId ? [{ projectId }] : []),
@@ -562,7 +568,10 @@ export async function POST(request: NextRequest) {
         locationId: locationIdInput,
         requestedForDate: new Date(),
         requestedById: auth.session.userId,
-        status: "SUBMITTED"
+        status: deriveInitialUsageRequestStatus({
+          quantityRequested: roundCurrency(quantity),
+          quantityInStock: item.quantityInStock
+        })
       },
       include: requestInclude
     });
@@ -637,6 +646,8 @@ type UsageRequestStatusFilter =
   | "ALL"
   | "SUBMITTED"
   | "PENDING"
+  | "WAITING_FOR_STOCK"
+  | "READY_TO_ISSUE"
   | "APPROVED"
   | "REJECTED"
   | "DEFAULT";
@@ -650,6 +661,8 @@ function parseUsageRequestStatusFilter(rawStatus: string | null): UsageRequestSt
     normalized === "ALL" ||
     normalized === "SUBMITTED" ||
     normalized === "PENDING" ||
+    normalized === "WAITING_FOR_STOCK" ||
+    normalized === "READY_TO_ISSUE" ||
     normalized === "APPROVED" ||
     normalized === "REJECTED"
   ) {
@@ -673,6 +686,12 @@ function buildUsageStatusWhere(
   if (statusFilter === "PENDING") {
     return { status: "PENDING" };
   }
+  if (statusFilter === "WAITING_FOR_STOCK") {
+    return { status: "WAITING_FOR_STOCK" };
+  }
+  if (statusFilter === "READY_TO_ISSUE") {
+    return { status: "READY_TO_ISSUE" };
+  }
   if (statusFilter === "REJECTED") {
     return { status: "REJECTED" };
   }
@@ -680,7 +699,7 @@ function buildUsageStatusWhere(
     return {};
   }
   if (!mineOnly) {
-    return { status: { in: ["SUBMITTED", "PENDING"] as const } };
+    return { status: { in: ["SUBMITTED", "PENDING", "READY_TO_ISSUE"] as const } };
   }
   return {};
 }

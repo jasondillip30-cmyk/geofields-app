@@ -364,7 +364,14 @@ export interface InventoryUsageRequestRow {
   reasonType?: "MAINTENANCE" | "BREAKDOWN" | "DRILLING_REPORT" | "OTHER";
   drillReportId?: string | null;
   breakdownReportId?: string | null;
-  status: "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
+  status:
+    | "SUBMITTED"
+    | "PENDING"
+    | "WAITING_FOR_STOCK"
+    | "READY_TO_ISSUE"
+    | "APPROVED"
+    | "REJECTED";
+  replenishmentRequisitionId: string | null;
   decisionNote: string | null;
   requestedForDate: string | null;
   createdAt: string;

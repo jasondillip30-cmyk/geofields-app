@@ -100,6 +100,8 @@ export function UsageRequestStatusBadge({
   status:
     | "SUBMITTED"
     | "PENDING"
+    | "WAITING_FOR_STOCK"
+    | "READY_TO_ISSUE"
     | "APPROVED"
     | "REJECTED"
     | "PARTIALLY_APPROVED";
@@ -109,6 +111,10 @@ export function UsageRequestStatusBadge({
       ? "border-emerald-300 bg-emerald-100 text-emerald-800"
       : status === "REJECTED"
         ? "border-red-300 bg-red-100 text-red-800"
+        : status === "READY_TO_ISSUE"
+          ? "border-emerald-300 bg-emerald-100 text-emerald-800"
+          : status === "WAITING_FOR_STOCK"
+            ? "border-amber-300 bg-amber-100 text-amber-800"
         : status === "PARTIALLY_APPROVED"
           ? "border-amber-300 bg-amber-100 text-amber-800"
         : status === "PENDING"
@@ -117,6 +123,10 @@ export function UsageRequestStatusBadge({
   const label =
     status === "PARTIALLY_APPROVED"
       ? "Partially Approved"
+      : status === "WAITING_FOR_STOCK"
+        ? "Waiting for Stock"
+        : status === "READY_TO_ISSUE"
+          ? "Ready to Issue"
       : status.charAt(0) + status.slice(1).toLowerCase();
 
   return (

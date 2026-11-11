@@ -4,6 +4,7 @@ import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { parseInventoryCategory, roundCurrency } from "@/lib/inventory-server";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { derivePostReceiptUsageStatus } from "@/lib/inventory-shortage-workflow";
 import {
   buildApprovedReceiptSubmissionPayload,
   buildCompletedRequisitionPayload
@@ -357,6 +358,7 @@ export async function runReceiptCommitTransaction(
 
     let requisitionStatus: "PURCHASE_COMPLETED" | null = null;
     if (input.requisitionId && input.linkedRequisition && input.parsedRequisition) {
+      const parsedRequisition = input.parsedRequisition;
       const postedAtIso = new Date().toISOString();
       const postedCost = roundCurrency(
         (input.receiptTotal && input.receiptTotal > 0
@@ -364,7 +366,7 @@ export async function runReceiptCommitTransaction(
           : input.normalizedLines.reduce((sum, line) => sum + line.lineTotal, 0)) || 0
       );
       const nextRequisitionPayload = buildCompletedRequisitionPayload({
-        payload: input.parsedRequisition.payload,
+        payload: parsedRequisition.payload,
         submissionId: input.submissionId || null,
         receiptNumber:
           input.receiptNumber || input.traReceiptNumber || input.invoiceReference || null,
@@ -383,6 +385,51 @@ export async function runReceiptCommitTransaction(
         }
       });
 
+      const sourceUsageRequestId = parsedRequisition.payload.sourceUsageRequestId;
+      if (sourceUsageRequestId) {
+        const sourceUsageRequest = await tx.inventoryUsageRequest.findUnique({
+          where: { id: sourceUsageRequestId },
+          select: {
+            id: true,
+            quantity: true,
+            status: true,
+            replenishmentRequisitionId: true,
+            item: { select: { quantityInStock: true } }
+          }
+        });
+        if (
+          sourceUsageRequest &&
+          sourceUsageRequest.replenishmentRequisitionId === input.requisitionId
+        ) {
+          const nextUsageStatus = derivePostReceiptUsageStatus({
+            currentStatus: sourceUsageRequest.status,
+            quantityRequested: sourceUsageRequest.quantity,
+            quantityInStock: sourceUsageRequest.item.quantityInStock
+          });
+          if (nextUsageStatus === "READY_TO_ISSUE") {
+            await tx.inventoryUsageRequest.update({
+              where: { id: sourceUsageRequest.id },
+              data: { status: "READY_TO_ISSUE" }
+            });
+            await recordAuditLog({
+              db: tx,
+              module: "inventory_usage_requests",
+              entityType: "inventory_usage_request",
+              entityId: sourceUsageRequest.id,
+              action: "stock_replenished",
+              description: `Receipt posting made usage request ${sourceUsageRequest.id} ready to issue.`,
+              before: { status: sourceUsageRequest.status },
+              after: {
+                status: nextUsageStatus,
+                requisitionId: input.requisitionId,
+                stock: sourceUsageRequest.item.quantityInStock
+              },
+              actor: auditActorFromSession(input.session)
+            });
+          }
+        }
+      }
+
       await recordAuditLog({
         db: tx,
         module: "expenses",
@@ -391,7 +438,7 @@ export async function runReceiptCommitTransaction(
         action: "purchase_complete",
         description: `${input.session.name} completed requisition purchase posting ${nextRequisitionPayload.requisitionCode}.`,
         before: {
-          status: input.parsedRequisition.payload.status
+          status: parsedRequisition.payload.status
         },
         after: {
           status: nextRequisitionPayload.status,

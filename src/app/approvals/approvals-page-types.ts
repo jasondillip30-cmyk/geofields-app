@@ -24,7 +24,8 @@ export interface InventoryUsageApprovalRow {
   id: string;
   quantity: number;
   reason: string;
-  status: "SUBMITTED" | "PENDING";
+  status: "SUBMITTED" | "PENDING" | "READY_TO_ISSUE";
+  replenishmentRequisitionId?: string | null;
   createdAt: string;
   requestedForDate: string | null;
   item: { id: string; name: string; sku: string };

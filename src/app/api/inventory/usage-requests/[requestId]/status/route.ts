@@ -67,8 +67,8 @@ export async function POST(
   const payload = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   const action = typeof payload?.action === "string" ? payload.action.toLowerCase() : "";
   const note = typeof payload?.note === "string" ? payload.note.trim() : "";
-  if (action !== "approve" && action !== "reject") {
-    return NextResponse.json({ message: "Action must be approve or reject." }, { status: 400 });
+  if (action !== "approve" && action !== "issue" && action !== "reject") {
+    return NextResponse.json({ message: "Action must be approve, issue, or reject." }, { status: 400 });
   }
 
   const existing = await prisma.inventoryUsageRequest.findUnique({
@@ -79,8 +79,15 @@ export async function POST(
   if (!existing) {
     return NextResponse.json({ message: "Usage request not found." }, { status: 404 });
   }
-  if (existing.status !== "SUBMITTED" && existing.status !== "PENDING") {
-    return NextResponse.json({ message: "Only submitted usage requests can be updated." }, { status: 409 });
+  if (
+    existing.status !== "SUBMITTED" &&
+    existing.status !== "PENDING" &&
+    existing.status !== "READY_TO_ISSUE"
+  ) {
+    return NextResponse.json({ message: "Only submitted or ready-to-issue requests can be updated." }, { status: 409 });
+  }
+  if (action === "issue" && existing.status !== "READY_TO_ISSUE") {
+    return NextResponse.json({ message: "Only a ready-to-issue request can be issued." }, { status: 409 });
   }
 
   if (action === "reject" && note.length < 3) {
@@ -135,7 +142,7 @@ export async function POST(
         const approvalLock = await tx.inventoryUsageRequest.updateMany({
           where: {
             id: existing.id,
-            status: { in: ["SUBMITTED", "PENDING"] },
+            status: { in: ["SUBMITTED", "PENDING", "READY_TO_ISSUE"] },
             approvedMovementId: null
           },
           data: {
@@ -208,7 +215,7 @@ export async function POST(
       const approvalLock = await tx.inventoryUsageRequest.updateMany({
         where: {
           id: existing.id,
-          status: { in: ["SUBMITTED", "PENDING"] },
+          status: { in: ["SUBMITTED", "PENDING", "READY_TO_ISSUE"] },
           approvedMovementId: null
         },
         data: {
@@ -317,8 +324,8 @@ export async function POST(
         module: "inventory_usage_requests",
         entityType: "inventory_usage_request",
         entityId: approved.id,
-        action: "approve",
-        description: `${auth.session.name} approved usage request ${approved.id}.`,
+        action: existing.status === "READY_TO_ISSUE" ? "issue" : "approve",
+        description: `${auth.session.name} ${existing.status === "READY_TO_ISSUE" ? "issued" : "approved"} usage request ${approved.id}.`,
         before: { status: existing.status, stock: currentItem.quantityInStock },
         after: {
           status: approved.status,

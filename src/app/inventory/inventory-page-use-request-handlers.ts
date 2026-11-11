@@ -25,8 +25,6 @@ type CreateInventoryUseRequestHandlersParams = {
   preselectedRigId: string;
   useRequestForm: UseRequestFormState;
   openMaintenanceRequestsForSelectedRig: MaintenanceContextOption[];
-  selectedBreakdownContext: BreakdownContextOption | null;
-  selectedMaintenanceContext: MaintenanceContextOption | null;
   setUseRequestError: (value: string | null) => void;
   setUseRequestForm: (value: UseRequestFormState) => void;
   setRequestUseModalOpen: (value: boolean) => void;
@@ -34,9 +32,8 @@ type CreateInventoryUseRequestHandlersParams = {
   setErrorMessage: (value: string | null) => void;
   setNotice: (value: string | null) => void;
   setUsageRequestToast: (value: { tone: "success" | "error"; message: string } | null) => void;
-  setUsageRequestStatusFilter: (value: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => void;
-  loadMyUsageRequests: (status?: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => Promise<void>;
-  routerPush: (href: string) => void;
+  setUsageRequestStatusFilter: (value: "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED") => void;
+  loadMyUsageRequests: (status?: "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED") => Promise<void>;
   readApiError: (response: Response, fallback: string) => Promise<string>;
 };
 
@@ -54,8 +51,6 @@ export function createInventoryUseRequestHandlers({
   preselectedRigId,
   useRequestForm,
   openMaintenanceRequestsForSelectedRig,
-  selectedBreakdownContext,
-  selectedMaintenanceContext,
   setUseRequestError,
   setUseRequestForm,
   setRequestUseModalOpen,
@@ -65,7 +60,6 @@ export function createInventoryUseRequestHandlers({
   setUsageRequestToast,
   setUsageRequestStatusFilter,
   loadMyUsageRequests,
-  routerPush,
   readApiError
 }: CreateInventoryUseRequestHandlersParams) {
   function openRequestUseModal() {
@@ -177,11 +171,6 @@ export function createInventoryUseRequestHandlers({
       if (selectedItemDetails.data.status !== "ACTIVE") {
         throw new Error("Only active inventory items can be requested.");
       }
-      if (quantity > selectedItemDetails.data.quantityInStock) {
-        throw new Error(
-          "Requested quantity is above stock on hand. Ask workshop inventory to replenish this item first."
-        );
-      }
       const isLockedProjectUseFlow = isSingleProjectScope && Boolean(scopedProject?.id);
       const effectiveReasonType: UseRequestFormState["reasonType"] = isLockedProjectUseFlow
         ? "DRILLING_REPORT"
@@ -268,10 +257,21 @@ export function createInventoryUseRequestHandlers({
         throw new Error(await readApiError(response, "Failed to submit item usage request."));
       }
 
-      setNotice("Inventory usage request submitted for approval.");
+      const responsePayload = (await response.json().catch(() => null)) as
+        | { data?: { status?: string } }
+        | null;
+      const isWaitingForStock = responsePayload?.data?.status === "WAITING_FOR_STOCK";
+
+      setNotice(
+        isWaitingForStock
+          ? "Shortage recorded. The workshop can now prepare a linked stock-up request."
+          : "Inventory usage request submitted for approval."
+      );
       setUsageRequestToast({
         tone: "success",
-        message: "Usage request submitted."
+        message: isWaitingForStock
+          ? "Shortage request recorded and waiting for workshop stock."
+          : "Usage request submitted."
       });
       setUsageRequestStatusFilter("ALL");
       setUseRequestError(null);
@@ -307,70 +307,9 @@ export function createInventoryUseRequestHandlers({
     setUseRequestError(null);
   }
 
-  function continueToPurchaseRequest() {
-    const isLockedProjectUseFlow = isSingleProjectScope && Boolean(scopedProject?.id);
-    const effectiveReasonType: UseRequestFormState["reasonType"] = isLockedProjectUseFlow
-      ? "DRILLING_REPORT"
-      : useRequestForm.reasonType;
-    const query = new URLSearchParams();
-
-    if (effectiveReasonType === "BREAKDOWN") {
-      if (useRequestForm.breakdownReportId) {
-        query.set("breakdownId", useRequestForm.breakdownReportId);
-      }
-      if (selectedBreakdownContext?.project?.id) {
-        query.set("projectId", selectedBreakdownContext.project.id);
-      }
-    } else if (effectiveReasonType === "DRILLING_REPORT") {
-      if (isLockedProjectUseFlow && scopedProject?.id) {
-        query.set("projectId", scopedProject.id);
-      } else if (useRequestForm.projectId) {
-        query.set("projectId", useRequestForm.projectId);
-      }
-      if (useRequestForm.rigId) {
-        query.set("rigId", useRequestForm.rigId);
-      }
-    } else if (effectiveReasonType === "MAINTENANCE") {
-      if (!useRequestForm.maintenanceRigId) {
-        setUseRequestError("Select a rig under maintenance first.");
-        return;
-      }
-      if (openMaintenanceRequestsForSelectedRig.length === 0) {
-        setUseRequestError("No open maintenance case exists for this rig. Open maintenance first.");
-        return;
-      }
-      if (
-        openMaintenanceRequestsForSelectedRig.length > 1 &&
-        !useRequestForm.maintenanceRequestId
-      ) {
-        setUseRequestError(
-          "Select which open maintenance case this purchase request belongs to."
-        );
-        return;
-      }
-      const resolvedMaintenanceContext =
-        selectedMaintenanceContext ||
-        (openMaintenanceRequestsForSelectedRig.length === 1
-          ? openMaintenanceRequestsForSelectedRig[0]
-          : null);
-      if (resolvedMaintenanceContext?.project?.id) {
-        query.set("projectId", resolvedMaintenanceContext.project.id);
-      }
-      if (resolvedMaintenanceContext?.id) {
-        query.set("maintenanceRequestId", resolvedMaintenanceContext.id);
-      }
-    }
-
-    const destination = query.toString() ? `/expenses?${query.toString()}` : "/expenses";
-    setRequestUseModalOpen(false);
-    setUseRequestError(null);
-    routerPush(destination);
-  }
-
   return {
     openRequestUseModal,
     submitUseRequest,
-    closeRequestUseModal,
-    continueToPurchaseRequest
+    closeRequestUseModal
   };
 }

@@ -72,7 +72,10 @@ export function RequisitionWorkflowCard({
     roleForcedType
   });
   const hasPrefilledContext = Boolean(
-    initialContext?.projectId || initialContext?.maintenanceRequestId || initialContext?.breakdownId
+    initialContext?.projectId ||
+      initialContext?.maintenanceRequestId ||
+      initialContext?.breakdownId ||
+      initialContext?.shortageRequestId
   );
 
   const [loading, setLoading] = useState(true);
@@ -364,6 +367,89 @@ export function RequisitionWorkflowCard({
   useEffect(() => {
     void loadRequisitionSetup();
   }, [loadRequisitionSetup]);
+
+  useEffect(() => {
+    const shortageRequestId = initialContext?.shortageRequestId?.trim();
+    if (!shortageRequestId || setupLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const query = new URLSearchParams({ requestId: shortageRequestId, status: "ALL" });
+        const response = await fetch(`/api/inventory/usage-requests?${query.toString()}`, {
+          cache: "no-store"
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | {
+              data?: Array<{
+                id: string;
+                status: string;
+                quantity: number;
+                reason: string;
+                replenishmentRequisitionId?: string | null;
+                locationId?: string | null;
+                item?: {
+                  name?: string;
+                  category?: string;
+                  quantityInStock?: number;
+                  unitCost?: number;
+                  locationId?: string | null;
+                } | null;
+              }>;
+              message?: string;
+            }
+          | null;
+        if (!response.ok) {
+          throw new Error(payload?.message || "Failed to load the shortage request.");
+        }
+        const shortage = payload?.data?.[0];
+        if (!shortage || shortage.status !== "WAITING_FOR_STOCK") {
+          throw new Error("This shortage is no longer waiting for workshop replenishment.");
+        }
+        if (shortage.replenishmentRequisitionId) {
+          throw new Error("This shortage already has a linked replenishment requisition.");
+        }
+        const quantityInStock = Number(shortage.item?.quantityInStock || 0);
+        const replenishQuantity = Math.max(0, Number(shortage.quantity || 0) - quantityInStock);
+        const itemCategory = normalizeSearchText(shortage.item?.category || "");
+        const category = setupCategories.find(
+          (entry) => normalizeSearchText(entry.name) === itemCategory
+        );
+        if (cancelled) {
+          return;
+        }
+        setForm((current) => ({
+          ...current,
+          sourceUsageRequestId: shortage.id,
+          type: "INVENTORY_STOCK_UP",
+          inventoryReason: "LOW_STOCK",
+          stockLocationId: shortage.locationId || shortage.item?.locationId || current.stockLocationId,
+          categoryId: category?.id || current.categoryId,
+          category: category?.name || current.category,
+          shortReason: `Replenish stock for usage request ${shortage.id}: ${shortage.reason}`,
+          itemName: shortage.item?.name || current.itemName,
+          quantity: replenishQuantity > 0 ? String(replenishQuantity) : current.quantity,
+          estimatedUnitCost: String(Number(shortage.item?.unitCost || 0))
+        }));
+        setWizardStep(2);
+        setNotice("Workshop shortage loaded. Review the stock location, category, and quantity before submitting.");
+      } catch (shortageError) {
+        if (!cancelled) {
+          setError(
+            shortageError instanceof Error
+              ? shortageError.message
+              : "Failed to load the shortage request."
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialContext?.shortageRequestId, setupCategories, setupLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -747,7 +833,11 @@ export function RequisitionWorkflowCard({
         }
 
         setNotice("Purchase request submitted.");
-        setForm(createInitialFormState(initialContext));
+        setForm(
+          initialContext?.shortageRequestId
+            ? createInitialFormState()
+            : createInitialFormState(initialContext)
+        );
         setWizardStep(minimumWizardStep);
         await loadRequisitions();
         if (onWorkflowChanged) {

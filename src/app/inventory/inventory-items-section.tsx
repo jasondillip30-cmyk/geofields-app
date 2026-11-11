@@ -97,9 +97,9 @@ export function InventoryItemsSection({
     usedQuantity: number;
     usedValue: number;
   } | null;
-  usageRequestStatusFilter: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED";
+  usageRequestStatusFilter: "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED";
   setUsageRequestStatusFilter: Dispatch<
-    SetStateAction<"ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED">
+    SetStateAction<"ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED">
   >;
   usageRequestsLoading: boolean;
   myUsageRequests: InventoryUsageRequestRow[];
@@ -375,7 +375,7 @@ export function InventoryItemsSection({
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
-                    {(["ALL", "SUBMITTED", "PENDING", "APPROVED", "REJECTED"] as const).map((statusOption) => (
+                    {(["ALL", "SUBMITTED", "PENDING", "WAITING_FOR_STOCK", "READY_TO_ISSUE", "APPROVED", "REJECTED"] as const).map((statusOption) => (
                       <button
                         key={`usage-status-${statusOption}`}
                         type="button"
@@ -389,7 +389,11 @@ export function InventoryItemsSection({
                       >
                         {statusOption === "ALL"
                           ? "All"
-                          : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
+                          : statusOption === "WAITING_FOR_STOCK"
+                            ? "Waiting for stock"
+                            : statusOption === "READY_TO_ISSUE"
+                              ? "Ready to issue"
+                              : statusOption.charAt(0) + statusOption.slice(1).toLowerCase()}
                       </button>
                     ))}
                   </div>

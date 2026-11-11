@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { canAccess } from "@/lib/auth/permissions";
 import {
   getAllowedRequisitionTypesForRole,
   isRequisitionTypeCreatableForRole
@@ -43,6 +44,7 @@ interface RequisitionRowOutput {
   requestedVendorId: string | null;
   requestedVendorName: string | null;
   notes: string | null;
+  sourceUsageRequestId: string | null;
   submittedAt: string;
   submittedBy: {
     userId: string;
@@ -359,6 +361,63 @@ export async function POST(request: NextRequest) {
   };
   const requestedVendorIdInput = normalizeNullableId(body?.requestedVendorId);
   const requestedVendorNameInput = normalizeNullableText(body?.requestedVendorName);
+  const sourceUsageRequestId = normalizeNullableId(body?.sourceUsageRequestId);
+
+  if (sourceUsageRequestId && type !== "INVENTORY_STOCK_UP") {
+    return NextResponse.json(
+      { message: "Shortage replenishment must use an inventory stock-up requisition." },
+      { status: 400 }
+    );
+  }
+
+  const sourceUsageRequest = sourceUsageRequestId
+    ? await prisma.inventoryUsageRequest.findUnique({
+        where: { id: sourceUsageRequestId },
+        select: {
+          id: true,
+          status: true,
+          requestedById: true,
+          replenishmentRequisitionId: true,
+          item: { select: { id: true, name: true } }
+        }
+      })
+    : null;
+  if (sourceUsageRequestId && !sourceUsageRequest) {
+    return NextResponse.json({ message: "Linked shortage request was not found." }, { status: 404 });
+  }
+  if (sourceUsageRequest && sourceUsageRequest.status !== "WAITING_FOR_STOCK") {
+    return NextResponse.json(
+      { message: "Only requests waiting for stock can create a replenishment requisition." },
+      { status: 409 }
+    );
+  }
+  if (
+    sourceUsageRequest &&
+    !canAccess(auth.session.role, "inventory:manage") &&
+    sourceUsageRequest.requestedById !== auth.session.userId
+  ) {
+    return NextResponse.json(
+      { message: "You can only replenish shortage requests you submitted." },
+      { status: 403 }
+    );
+  }
+  if (sourceUsageRequest?.replenishmentRequisitionId) {
+    return NextResponse.json(
+      { message: "This shortage already has a linked replenishment requisition." },
+      { status: 409 }
+    );
+  }
+  if (
+    sourceUsageRequest &&
+    !lineItems.some(
+      (line) => normalizeMasterDataKey(line.description) === normalizeMasterDataKey(sourceUsageRequest.item.name)
+    )
+  ) {
+    return NextResponse.json(
+      { message: "The replenishment requisition must include the shortage item." },
+      { status: 400 }
+    );
+  }
 
   if (type !== "MAINTENANCE_PURCHASE" && providedContext.maintenanceRequestId) {
     return NextResponse.json(
@@ -688,6 +747,7 @@ export async function POST(request: NextRequest) {
     requestedVendorId,
     requestedVendorName,
     notes: normalizeNullableText(body?.notes),
+    sourceUsageRequestId,
     submittedAt: submittedAt.toISOString(),
     submittedBy: {
       userId: auth.session.userId,
@@ -736,6 +796,20 @@ export async function POST(request: NextRequest) {
         generatedById: auth.session.userId
       }
     });
+
+    if (sourceUsageRequestId) {
+      const linked = await tx.inventoryUsageRequest.updateMany({
+        where: {
+          id: sourceUsageRequestId,
+          status: "WAITING_FOR_STOCK",
+          replenishmentRequisitionId: null
+        },
+        data: { replenishmentRequisitionId: createdRow.id }
+      });
+      if (linked.count !== 1) {
+        throw new Error("ShortageRequisitionAlreadyLinked");
+      }
+    }
 
     await recordAuditLog({
       db: tx,
@@ -796,6 +870,7 @@ function serializeRequisitionRow(
     requestedVendorId: payload.requestedVendorId,
     requestedVendorName: payload.requestedVendorName,
     notes: payload.notes,
+    sourceUsageRequestId: payload.sourceUsageRequestId || null,
     submittedAt: payload.submittedAt,
     submittedBy: payload.submittedBy,
     context: {

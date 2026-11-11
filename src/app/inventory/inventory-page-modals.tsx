@@ -70,7 +70,6 @@ export function InventoryPageModals({
   usageBatchDetailModalOpen,
   closeUsageBatchDetailModal,
   selectedUsageBatch,
-  continueToPurchaseRequest,
   useRequestForm,
   setUseRequestForm,
   openMaintenanceRequests,
@@ -129,7 +128,6 @@ export function InventoryPageModals({
   usageBatchDetailModalOpen: boolean;
   closeUsageBatchDetailModal: () => void;
   selectedUsageBatch: InventoryUsageBatchRow | null;
-  continueToPurchaseRequest: () => void;
   useRequestForm: UseRequestFormState;
   setUseRequestForm: Dispatch<SetStateAction<UseRequestFormState>>;
   openMaintenanceRequests: MaintenanceContextOption[];
@@ -198,7 +196,6 @@ export function InventoryPageModals({
         open={requestUseModalOpen}
         onClose={closeRequestUseModal}
         onSubmit={submitUseRequest}
-        onContinueToPurchaseRequest={continueToPurchaseRequest}
         form={useRequestForm}
         onFormChange={setUseRequestForm}
         projects={projects}

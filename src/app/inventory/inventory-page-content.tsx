@@ -153,7 +153,7 @@ function InventoryPageContent() {
   const [usageRequestsLoading, setUsageRequestsLoading] = useState(false);
   const [usageBatchRequestsLoading, setUsageBatchRequestsLoading] = useState(false);
   const [usageRequestStatusFilter, setUsageRequestStatusFilter] = useState<
-    "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED"
+    "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED"
   >("ALL");
   const [usageBatchStatusFilter, setUsageBatchStatusFilter] = useState<
     "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED" | "PARTIALLY_APPROVED"
@@ -237,9 +237,7 @@ function InventoryPageContent() {
     openMaintenanceRequests,
     openBreakdownReports,
     maintenanceRigOptions,
-    selectedMaintenanceContext,
     openMaintenanceRequestsForSelectedRig,
-    selectedBreakdownContext,
     stockAlertRows,
     filteredMovements,
     visibleMovements,
@@ -360,7 +358,7 @@ function InventoryPageContent() {
   ]);
 
   const loadMyUsageRequests = useCallback(
-    async (statusOverride?: "ALL" | "SUBMITTED" | "PENDING" | "APPROVED" | "REJECTED") => {
+    async (statusOverride?: "ALL" | "SUBMITTED" | "PENDING" | "WAITING_FOR_STOCK" | "READY_TO_ISSUE" | "APPROVED" | "REJECTED") => {
       const requestSeq = ++usageRequestFetchSeq.current;
       setUsageRequestsLoading(true);
       try {
@@ -655,8 +653,7 @@ function InventoryPageContent() {
   const {
     openRequestUseModal,
     submitUseRequest,
-    closeRequestUseModal,
-    continueToPurchaseRequest
+    closeRequestUseModal
   } = createInventoryUseRequestHandlers({
     selectedItemDetails,
     isSingleProjectScope,
@@ -671,8 +668,6 @@ function InventoryPageContent() {
     preselectedRigId,
     useRequestForm,
     openMaintenanceRequestsForSelectedRig,
-    selectedBreakdownContext,
-    selectedMaintenanceContext,
     setUseRequestError,
     setUseRequestForm,
     setRequestUseModalOpen,
@@ -682,7 +677,6 @@ function InventoryPageContent() {
     setUsageRequestToast,
     setUsageRequestStatusFilter,
     loadMyUsageRequests,
-    routerPush: (href) => router.push(href),
     readApiError
   });
 
@@ -1091,7 +1085,6 @@ function InventoryPageContent() {
           usageBatchDetailModalOpen={usageBatchDetailModalOpen}
           closeUsageBatchDetailModal={closeUsageBatchDetail}
           selectedUsageBatch={selectedUsageBatchDetails}
-          continueToPurchaseRequest={continueToPurchaseRequest}
           useRequestForm={useRequestForm}
           setUseRequestForm={setUseRequestForm}
           openMaintenanceRequests={openMaintenanceRequests}

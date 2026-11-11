@@ -131,6 +131,7 @@ export function buildCreateRequisitionPayload({
 }) {
   return {
     type: form.type,
+    sourceUsageRequestId: form.sourceUsageRequestId || null,
     liveProjectSpendType:
       form.type === "LIVE_PROJECT_PURCHASE"
         ? form.breakdownReportId

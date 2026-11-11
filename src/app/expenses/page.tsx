@@ -1,8 +1,10 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { RequisitionWorkflowCard } from "@/components/modules/requisition-workflow-card";
+import { WorkshopShortagesPanel } from "@/components/modules/workshop-shortages-panel";
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { Card } from "@/components/ui/card";
@@ -33,12 +35,14 @@ export default function ExpensesPage() {
 }
 
 function ExpensesPageContent() {
+  const searchParams = useSearchParams();
   const { filters } = useAnalyticsFilters();
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [projects, setProjects] = useState<ProjectOption[]>([]);
   const [rigs, setRigs] = useState<RigOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [shortagesRefreshToken, setShortagesRefreshToken] = useState(0);
   const isProjectLocked = filters.workspaceMode === "project" && filters.projectId !== "all";
 
   const loadReferenceData = useCallback(async (options?: { preserveUi?: boolean }) => {
@@ -127,6 +131,7 @@ function ExpensesPageContent() {
         </section>
 
         <section id="expenses-requisition-section" className="gf-section">
+          <WorkshopShortagesPanel refreshToken={shortagesRefreshToken} />
           {loading ? (
             <Card title="Loading Purchase Request Workspace">
               <p className="text-sm text-ink-600">Loading clients, projects, rigs, and requisition history...</p>
@@ -137,7 +142,13 @@ function ExpensesPageContent() {
               clients={clients}
               projects={projects}
               rigs={rigs}
-              onWorkflowChanged={() => loadReferenceData({ preserveUi: true })}
+              initialContext={{
+                shortageRequestId: searchParams.get("shortageRequestId") || undefined
+              }}
+              onWorkflowChanged={async () => {
+                setShortagesRefreshToken((current) => current + 1);
+                await loadReferenceData({ preserveUi: true });
+              }}
             />
           )}
         </section>
