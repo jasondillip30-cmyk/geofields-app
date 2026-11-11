@@ -50,7 +50,6 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "rigs:view",
     "rigs:manage",
     "inventory:view",
-    "inventory:approve",
     "inventory:manage",
     "employees:view",
     "employees:manage"
@@ -75,7 +74,6 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "rigs:view",
     "rigs:manage",
     "inventory:view",
-    "inventory:approve",
     "inventory:manage",
     "employees:view",
     "employees:manage"

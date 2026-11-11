@@ -47,6 +47,11 @@ async function main() {
     await ensureServerReachable(baseUrl);
 
     const adminCookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
+    const officeCookie = await loginAndGetCookie(
+      baseUrl,
+      process.env.SMOKE_OFFICE_EMAIL || "office@geofields.co.tz",
+      process.env.SMOKE_OFFICE_PASSWORD || "Office123!"
+    );
     const mechanicCookie = await loginAndGetCookie(baseUrl, mechanicEmail, mechanicPassword);
 
     const [adminUser, mechanicUser, client, project, rig, inventoryItem, supplier] = await Promise.all([
@@ -145,7 +150,7 @@ async function main() {
     const rejectResult = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${usageReject.id}/status`,
-      adminCookie,
+      officeCookie,
       { action: "reject", note: "Smoke test rejection" }
     );
     assert(rejectResult.ok, `Inventory usage reject failed (${rejectResult.status}): ${rejectResult.text}`);
@@ -174,7 +179,7 @@ async function main() {
     const approveResult = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${usageApprove.id}/status`,
-      adminCookie,
+      officeCookie,
       { action: "approve", note: "Smoke test approval" }
     );
     assert(approveResult.ok, `Inventory usage approve failed (${approveResult.status}): ${approveResult.text}`);
@@ -202,7 +207,7 @@ async function main() {
     const approveAgainResult = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${usageApprove.id}/status`,
-      adminCookie,
+      officeCookie,
       { action: "approve", note: "Smoke test duplicate approval" }
     );
     assert(

@@ -14,7 +14,18 @@ export function canManageExpenseApprovalActions(role: string | null | undefined)
 }
 
 export function canManageRequisitionApprovalActions(role: string | null | undefined) {
-  return role === "ADMIN" || role === "MANAGER" || role === "OFFICE";
+  return canManageExpenseApprovalActions(role);
+}
+
+export function canReviewRequisition(
+  role: string | null | undefined,
+  reviewerId: string | null | undefined,
+  requisition: { type: string; submittedBy: { userId: string } }
+) {
+  if (requisition.type === "INVENTORY_STOCK_UP") {
+    return role === "MANAGER" && Boolean(reviewerId) && reviewerId !== requisition.submittedBy.userId;
+  }
+  return canManageRequisitionApprovalActions(role);
 }
 
 export function canViewApprovalWorkspace(role: string | null | undefined) {

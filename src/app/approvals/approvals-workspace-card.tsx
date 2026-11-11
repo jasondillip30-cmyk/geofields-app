@@ -53,7 +53,7 @@ export interface ApprovalsWorkspaceCardProps {
   actingRowId: string | null;
   canManageDrillingApprovals: boolean;
   canManageInventoryApprovals: boolean;
-  canManageRequisitionApprovals: boolean;
+  canReviewRequisitionRow: (row: RequisitionApprovalRow) => boolean;
   focusedRowId: string | null;
   focusedSectionId: string | null;
   highValueReceiptThreshold: number;
@@ -84,7 +84,7 @@ export function ApprovalsWorkspaceCard({
   actingRowId,
   canManageDrillingApprovals,
   canManageInventoryApprovals,
-  canManageRequisitionApprovals,
+  canReviewRequisitionRow,
   focusedRowId,
   focusedSectionId,
   highValueReceiptThreshold,
@@ -308,11 +308,9 @@ export function ApprovalsWorkspaceCard({
                   : ""
               }`}
             >
-              {!canManageRequisitionApprovals ? (
-                <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  View only: requisition approval actions are available to ADMIN and MANAGER roles.
-                </div>
-              ) : null}
+              <p className="border-b border-slate-200 px-3 py-2 text-xs text-ink-600">
+                Workshop replenishment requires review by a Manager other than the requester.
+              </p>
               <div className="max-h-[620px] overflow-auto">
                 <DataTable
                   compact
@@ -330,6 +328,7 @@ export function ApprovalsWorkspaceCard({
                   ]}
                   rows={sortedRequisitionRows.map((row) => {
                     const pendingMeta = getPendingAgeMeta(row.submittedAt);
+                    const canReview = canReviewRequisitionRow(row);
                     return [
                       formatReceiptSubmissionDate(row.submittedAt, row.submittedAt),
                       row.requisitionCode,
@@ -341,18 +340,18 @@ export function ApprovalsWorkspaceCard({
                       </span>,
                       pendingMeta ? <StatusBadge key={`${row.id}-pending`} label={pendingMeta.label} tone={pendingMeta.badgeTone} /> : "-",
                       row.submittedBy.name || "-",
-                      <input
+                      canReview ? <input
                         key={`${row.id}-comment`}
                         type="text"
                         value={requisitionNotes[row.id] || ""}
                         onChange={(event) => onRequisitionNoteChange(row.id, event.target.value)}
-                        placeholder="Optional rejection reason"
+                        placeholder="Reason required to reject"
                         className="w-52 rounded-md border border-slate-200 px-2 py-1 text-xs"
-                      />,
-                      <div key={`${row.id}-actions`} className="flex flex-wrap gap-2">
+                      /> : "-",
+                      canReview ? <div key={`${row.id}-actions`} className="flex flex-wrap gap-2">
                         <button
                           type="button"
-                          disabled={!canManageRequisitionApprovals || actingRowId === row.id}
+                          disabled={actingRowId === row.id}
                           onClick={() => onRequisitionStatus(row.id, "approve")}
                           className="rounded-md border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -360,13 +359,13 @@ export function ApprovalsWorkspaceCard({
                         </button>
                         <button
                           type="button"
-                          disabled={!canManageRequisitionApprovals || actingRowId === row.id}
+                          disabled={actingRowId === row.id}
                           onClick={() => onRequisitionStatus(row.id, "reject")}
                           className="rounded-md border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Reject
                         </button>
-                      </div>
+                      </div> : "View only"
                     ];
                   })}
                   rowIds={sortedRequisitionRows.map((row) => `ai-focus-${makeApprovalFocusRowId("requisition", row.id)}`)}
@@ -489,7 +488,7 @@ export function ApprovalsWorkspaceCard({
           >
             {!canManageInventoryApprovals ? (
               <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                View only: approval actions are available to ADMIN and MANAGER roles.
+                View only: Office reviews inventory usage requests and issues stock.
               </div>
             ) : null}
             <div className="max-h-[620px] overflow-auto space-y-3 p-3">

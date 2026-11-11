@@ -23,13 +23,15 @@ export async function GET(
     return auth.response;
   }
 
-  const canManageInventory = canAccess(auth.session.role, "inventory:manage");
+  const canViewAllRequests =
+    canAccess(auth.session.role, "inventory:manage") ||
+    canAccess(auth.session.role, "inventory:approve");
   const scopeParam = (request.nextUrl.searchParams.get("scope") || "").toLowerCase();
   const requestedByParam = (
     request.nextUrl.searchParams.get("requestedBy") || ""
   ).toLowerCase();
   const mineOnly =
-    !canManageInventory || scopeParam === "mine" || requestedByParam === "me";
+    !canViewAllRequests || scopeParam === "mine" || requestedByParam === "me";
 
   const { batchId } = await context.params;
   if (!batchId) {

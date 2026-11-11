@@ -117,6 +117,11 @@ async function main() {
     await ensureServerReachable(baseUrl);
 
     const adminCookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
+    const managerCookie = await loginAndGetCookie(
+      baseUrl,
+      process.env.SMOKE_MANAGER_EMAIL || "manager@geofields.co.tz",
+      process.env.SMOKE_MANAGER_PASSWORD || "Manager123!"
+    );
     const [adminUser, project] = await Promise.all([
       prisma.user.findUnique({
         where: { email: adminEmail.toLowerCase() },
@@ -238,10 +243,10 @@ async function main() {
     created.requisitionId = createdRequisition.id;
 
     const [requisitionApprove, requisitionReject] = await Promise.all([
-      postJson(baseUrl, `/api/requisitions/${createdRequisition.id}/status`, adminCookie, {
+      postJson(baseUrl, `/api/requisitions/${createdRequisition.id}/status`, managerCookie, {
         action: "approve"
       }),
-      postJson(baseUrl, `/api/requisitions/${createdRequisition.id}/status`, adminCookie, {
+      postJson(baseUrl, `/api/requisitions/${createdRequisition.id}/status`, managerCookie, {
         action: "reject",
         reason: "mutation race reject"
       })

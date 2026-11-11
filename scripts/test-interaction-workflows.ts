@@ -78,7 +78,17 @@ async function main() {
     });
 
     await runStep("requisition status action UI validation + approve flow", async () => {
-      await testRequisitionStatusActions(page, baseUrl, fixtures!);
+      const managerCookie = await loginAndGetCookie(
+        baseUrl,
+        process.env.SMOKE_MANAGER_EMAIL || "manager@geofields.co.tz",
+        process.env.SMOKE_MANAGER_PASSWORD || "Manager123!"
+      );
+      await setSessionCookie(context!, baseUrl, managerCookie);
+      try {
+        await testRequisitionStatusActions(page, baseUrl, fixtures!);
+      } finally {
+        await setSessionCookie(context!, baseUrl, sessionCookie);
+      }
     });
 
     await runStep("purchase requests mode split + project lock scoping", async () => {
@@ -353,7 +363,7 @@ async function testRequisitionStatusActions(page: Page, baseUrl: string, fixture
   await row.getByRole("button", { name: "Reject" }).click();
   await page.getByText("Please enter a rejection reason (minimum 3 characters).").first().waitFor({ state: "visible" });
 
-  await row.getByPlaceholder("Optional rejection reason").fill("Interaction validation note");
+  await row.getByPlaceholder("Reason required to reject").fill("Interaction validation note");
 
   let statusCalls = 0;
   const statusUrl = `**/api/requisitions/${fixtures.requisitionId}/status`;

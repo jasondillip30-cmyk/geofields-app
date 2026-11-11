@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { canManageRequisitionApprovalActions } from "@/lib/auth/approval-policy";
+import { canManageRequisitionApprovalActions, canReviewRequisition } from "@/lib/auth/approval-policy";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { isRequisitionTypeAllowedForRole } from "@/lib/auth/requisition-access";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
@@ -35,7 +35,7 @@ export async function POST(
 
   if (!canManageRequisitionApprovalActions(auth.session.role)) {
     return NextResponse.json(
-      { message: "Only Admin, Manager, or Office can approve or reject requisitions." },
+      { message: "Only Managers can decide workshop replenishment requests. Other requisitions can be reviewed by Admin or Manager." },
       { status: 403 }
     );
   }
@@ -58,6 +58,12 @@ export async function POST(
   }
   if (!isRequisitionTypeAllowedForRole(auth.session.role, parsed.payload.type)) {
     return NextResponse.json({ message: "Requisition not found." }, { status: 404 });
+  }
+  if (!canReviewRequisition(auth.session.role, auth.session.userId, parsed.payload)) {
+    return NextResponse.json(
+      { message: "Workshop replenishment must be reviewed by a Manager other than the requester." },
+      { status: 403 }
+    );
   }
 
   const rejectionReason = typeof body?.reason === "string" ? body.reason.trim() : "";

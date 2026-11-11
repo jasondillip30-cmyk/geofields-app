@@ -74,6 +74,11 @@ async function main() {
     await purgeDanglingSmokeArtifacts(prisma);
     await ensureServerReachable(baseUrl);
     const adminCookie = await loginAndGetCookie(baseUrl, adminEmail, adminPassword);
+    const officeCookie = await loginAndGetCookie(
+      baseUrl,
+      process.env.SMOKE_OFFICE_EMAIL || "office@geofields.co.tz",
+      process.env.SMOKE_OFFICE_PASSWORD || "Office123!"
+    );
     const mechanicCookie = await loginAndGetCookie(baseUrl, mechanicEmail, mechanicPassword);
 
     const project = await findOperationalProjectCandidate();
@@ -277,7 +282,7 @@ async function main() {
     const approveMaintenanceUsage = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${created.maintenanceUsageRequestId}/status`,
-      adminCookie,
+      officeCookie,
       { action: "approve", note: "Operational smoke approve maintenance usage." }
     );
     assert(
@@ -296,7 +301,7 @@ async function main() {
     const approveBreakdownUsage = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${created.breakdownUsageRequestId}/status`,
-      adminCookie,
+      officeCookie,
       { action: "approve", note: "Operational smoke approve breakdown usage." }
     );
     assert(
@@ -313,7 +318,7 @@ async function main() {
     const approveStandaloneMaintenanceUsage = await postJson(
       baseUrl,
       `/api/inventory/usage-requests/${created.standaloneMaintenanceUsageRequestId}/status`,
-      adminCookie,
+      officeCookie,
       { action: "approve", note: "Operational smoke approve standalone maintenance usage." }
     );
     assert(

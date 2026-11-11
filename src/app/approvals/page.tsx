@@ -16,6 +16,7 @@ import type { WorkflowAssistModel } from "@/components/layout/workflow-assist-pa
 import {
   canManageDrillingApprovalActions,
   canManageRequisitionApprovalActions,
+  canReviewRequisition,
   canManageInventoryApprovalActions
 } from "@/lib/auth/approval-policy";
 import { REQUISITION_APPROVAL_QUEUE_STATUS } from "@/lib/requisition-lifecycle";
@@ -85,6 +86,10 @@ export default function ApprovalsPage() {
   const [assistTarget, setAssistTarget] = useState<CopilotFocusTarget | null>(null);
   const canManageDrillingApprovals = canManageDrillingApprovalActions(user?.role);
   const canManageRequisitionApprovals = canManageRequisitionApprovalActions(user?.role);
+  const canReviewRequisitionRow = useCallback(
+    (row: RequisitionApprovalRow) => canReviewRequisition(user?.role, user?.id, row),
+    [user?.role, user?.id]
+  );
   const canManageInventoryApprovals = canManageInventoryApprovalActions(user?.role);
   const isApprovalWorkspaceViewOnly =
     !canManageDrillingApprovals &&
@@ -240,7 +245,8 @@ export default function ApprovalsPage() {
 
   const updateRequisitionStatus = useCallback(
     async (requisitionId: string, action: "approve" | "reject") => {
-      if (!canManageRequisitionApprovals) {
+      const row = requisitionRows.find((entry) => entry.id === requisitionId);
+      if (!row || !canReviewRequisitionRow(row)) {
         setActionError("You do not have permission to approve or reject purchase requisitions.");
         return;
       }
@@ -282,7 +288,7 @@ export default function ApprovalsPage() {
         setActingRowId(null);
       }
     },
-    [canManageRequisitionApprovals, requisitionNotes, refreshApprovalsWorkspace]
+    [canReviewRequisitionRow, requisitionRows, requisitionNotes, refreshApprovalsWorkspace]
   );
 
   const updateDrillingStatus = useCallback(
@@ -1108,7 +1114,7 @@ export default function ApprovalsPage() {
           actingRowId={actingRowId}
           canManageDrillingApprovals={canManageDrillingApprovals}
           canManageInventoryApprovals={canManageInventoryApprovals}
-          canManageRequisitionApprovals={canManageRequisitionApprovals}
+          canReviewRequisitionRow={canReviewRequisitionRow}
           focusedRowId={focusedRowId}
           focusedSectionId={focusedSectionId}
           highValueReceiptThreshold={highValueReceiptThreshold}

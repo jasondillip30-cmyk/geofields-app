@@ -7,7 +7,8 @@ import {
 import { canAccess } from "../src/lib/auth/permissions";
 import {
   canManageInventoryApprovalActions,
-  canManageRequisitionApprovalActions
+  canManageRequisitionApprovalActions,
+  canReviewRequisition
 } from "../src/lib/auth/approval-policy";
 import {
   buildBreakdownMaintenanceHref,
@@ -33,8 +34,20 @@ assert.equal(canAccess("MECHANIC", "requisitions:view"), true);
 assert.equal(canAccess("OFFICE", "inventory:approve"), true);
 assert.equal(canAccess("OFFICE", "inventory:manage"), false);
 assert.equal(canManageInventoryApprovalActions("OFFICE"), true);
-assert.equal(canManageRequisitionApprovalActions("OFFICE"), true);
+assert.equal(canManageRequisitionApprovalActions("OFFICE"), false);
+assert.equal(canManageInventoryApprovalActions("MANAGER"), false);
+assert.equal(canManageInventoryApprovalActions("ADMIN"), false);
 assert.equal(canManageInventoryApprovalActions("MECHANIC"), false);
+const stockUpRequest = {
+  type: "INVENTORY_STOCK_UP",
+  submittedBy: { userId: "requester" }
+};
+assert.equal(canReviewRequisition("MANAGER", "reviewer", stockUpRequest), true);
+assert.equal(canReviewRequisition("MANAGER", "requester", stockUpRequest), false);
+assert.equal(canReviewRequisition("MANAGER", null, stockUpRequest), false);
+assert.equal(canReviewRequisition("OFFICE", "reviewer", stockUpRequest), false);
+assert.equal(canReviewRequisition("ADMIN", "reviewer", stockUpRequest), false);
+assert.equal(canReviewRequisition("ADMIN", "reviewer", { ...stockUpRequest, type: "LIVE_PROJECT_PURCHASE" }), true);
 
 const purchaseRouteRule = resolveWorkspaceRouteRule("/expenses");
 assert.deepEqual(purchaseRouteRule?.allowedModes, ["workshop"]);
