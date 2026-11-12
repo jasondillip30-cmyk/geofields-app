@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 
@@ -1279,69 +1275,6 @@ function formatErrorForDebug(error: unknown) {
     name: "UnknownError",
     message: String(error)
   };
-}
-
-export async function saveReceiptFile({
-  originalFile,
-  normalizedFileBuffer,
-  normalizedMimeType,
-  auditMetadata
-}: {
-  originalFile: File;
-  normalizedFileBuffer: Buffer;
-  normalizedMimeType: string;
-  auditMetadata: ReceiptUploadAuditMetadata;
-}) {
-  const uploadsDir = path.join(process.cwd(), "public", "uploads", "inventory-receipts");
-  await mkdir(uploadsDir, { recursive: true });
-  const normalizedExtension =
-    extensionFromMimeType(normalizedMimeType) ||
-    (originalFile.name.includes(".") ? originalFile.name.split(".").pop() : "bin") ||
-    "bin";
-  const safeFileBase = `${Date.now()}-${randomUUID()}`;
-  const safeFileName = `${safeFileBase}.${normalizedExtension}`;
-  const absoluteFilePath = path.join(uploadsDir, safeFileName);
-  const metadataFileName = `${safeFileBase}.meta.json`;
-  const metadataPath = path.join(uploadsDir, metadataFileName);
-  await writeFile(absoluteFilePath, normalizedFileBuffer);
-  await writeFile(
-    metadataPath,
-    JSON.stringify(
-      {
-        ...auditMetadata,
-        stored: {
-          createdAt: new Date().toISOString(),
-          storedFileName: safeFileName,
-          storedMimeType: normalizedMimeType,
-          storedSize: normalizedFileBuffer.length
-        }
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
-
-  return {
-    receiptUrl: `/uploads/inventory-receipts/${safeFileName}`,
-    receiptFileName: originalFile.name
-  };
-}
-
-function extensionFromMimeType(mimeType: string) {
-  if (mimeType === "application/pdf") {
-    return "pdf";
-  }
-  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
-    return "jpg";
-  }
-  if (mimeType === "image/png") {
-    return "png";
-  }
-  if (mimeType === "image/webp") {
-    return "webp";
-  }
-  return "";
 }
 
 export async function suggestSupplier({

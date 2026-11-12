@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
 import type { EntryApprovalStatus, Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -11,6 +7,7 @@ import { isSupportedExpenseCategory } from "@/lib/expense-categories";
 import { filterRecognizedApprovedExpenses } from "@/lib/financial-expense-recognition";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { savePrivateReceiptUpload } from "@/lib/private-receipt-storage";
 
 export const runtime = "nodejs";
 
@@ -130,7 +127,7 @@ export async function POST(request: NextRequest) {
     return auth.response;
   }
 
-  const input = await parseExpenseInput(request);
+  const input = await parseExpenseInput(request, auth.session.userId);
   if (!input.ok) {
     return input.response;
   }
@@ -195,12 +192,11 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ data: serializeExpenseForClient(created) }, { status: 201 });
 }
 
-async function parseExpenseInput(request: NextRequest) {
+async function parseExpenseInput(request: NextRequest, owner: string) {
   const contentType = request.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const form = await request.formData();
     const fileUpload = form.get("receipt");
-    const uploadedReceipt = fileUpload instanceof File ? await saveReceiptFile(fileUpload) : null;
 
     const expenseDate = parseDate(asString(form.get("date")));
     const amount = parseAmount(asString(form.get("amount")));
@@ -221,6 +217,15 @@ async function parseExpenseInput(request: NextRequest) {
           { status: 400 }
         )
       };
+    }
+
+    let uploadedReceipt = null;
+    if (fileUpload instanceof File) {
+      try {
+        uploadedReceipt = await savePrivateReceiptUpload(owner, fileUpload);
+      } catch {
+        return { ok: false as const, response: NextResponse.json({ message: "Receipt could not be saved." }, { status: 503 }) };
+      }
     }
 
     return {
@@ -337,25 +342,6 @@ async function validateClientProject(clientId: string | null, projectId: string 
       clientId: normalizedClientId,
       projectId: normalizedProjectId
     }
-  };
-}
-
-async function saveReceiptFile(receipt: File) {
-  if (receipt.size <= 0) {
-    return null;
-  }
-
-  const uploadsDir = path.join(process.cwd(), "public", "uploads", "receipts");
-  await mkdir(uploadsDir, { recursive: true });
-  const extension = receipt.name.includes(".") ? receipt.name.split(".").pop() : "bin";
-  const safeFileName = `${Date.now()}-${randomUUID()}.${extension}`;
-  const absoluteFilePath = path.join(uploadsDir, safeFileName);
-  const arrayBuffer = await receipt.arrayBuffer();
-  await writeFile(absoluteFilePath, Buffer.from(arrayBuffer));
-
-  return {
-    receiptUrl: `/uploads/receipts/${safeFileName}`,
-    receiptFileName: receipt.name
   };
 }
 

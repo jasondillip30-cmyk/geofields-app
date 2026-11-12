@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
 import type { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -20,6 +16,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { postStockCorrection } from "@/lib/inventory-stock-corrections";
 import { lockInventoryStock } from "@/lib/inventory-stock-lock";
+import { savePrivateReceiptUpload } from "@/lib/private-receipt-storage";
 
 export const runtime = "nodejs";
 
@@ -170,7 +167,7 @@ export async function POST(request: NextRequest) {
     return auth.response;
   }
 
-  const parsed = await parseMovementInput(request);
+  const parsed = await parseMovementInput(request, auth.session.userId);
   if (!parsed.ok) {
     return parsed.response;
   }
@@ -458,12 +455,11 @@ export async function POST(request: NextRequest) {
   return NextResponse.json(result, { status: 201 });
 }
 
-async function parseMovementInput(request: NextRequest) {
+async function parseMovementInput(request: NextRequest, owner: string) {
   const contentType = request.headers.get("content-type") || "";
 
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
-    const savedReceipt = formData.get("receipt") instanceof File ? await saveReceiptFile(formData.get("receipt") as File) : null;
 
     const movementType = parseMovementType(asString(formData.get("movementType")));
     const quantity = parseNumeric(asString(formData.get("quantity")));
@@ -482,6 +478,16 @@ async function parseMovementInput(request: NextRequest) {
         ok: false as const,
         response: NextResponse.json({ message: validationError }, { status: 400 })
       };
+    }
+
+    const upload = formData.get("receipt");
+    let savedReceipt = null;
+    if (upload instanceof File && movementType !== "ADJUSTMENT") {
+      try {
+        savedReceipt = await savePrivateReceiptUpload(owner, upload);
+      } catch {
+        return { ok: false as const, response: NextResponse.json({ message: "Receipt could not be saved." }, { status: 503 }) };
+      }
     }
 
     return {
@@ -629,23 +635,4 @@ function nullableNumber(value: string) {
     return null;
   }
   return parsed;
-}
-
-async function saveReceiptFile(receipt: File) {
-  if (receipt.size <= 0) {
-    return null;
-  }
-
-  const uploadsDir = path.join(process.cwd(), "public", "uploads", "inventory-receipts");
-  await mkdir(uploadsDir, { recursive: true });
-  const extension = receipt.name.includes(".") ? receipt.name.split(".").pop() : "bin";
-  const safeFileName = `${Date.now()}-${randomUUID()}.${extension}`;
-  const absoluteFilePath = path.join(uploadsDir, safeFileName);
-  const arrayBuffer = await receipt.arrayBuffer();
-  await writeFile(absoluteFilePath, Buffer.from(arrayBuffer));
-
-  return {
-    receiptUrl: `/uploads/inventory-receipts/${safeFileName}`,
-    receiptFileName: receipt.name
-  };
 }

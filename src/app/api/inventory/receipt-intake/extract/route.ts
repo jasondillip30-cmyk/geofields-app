@@ -5,6 +5,7 @@ import type { InventoryCategory } from "@prisma/client";
 import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { receiptTraceLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { savePrivateReceipt, usesPrivateBlobReceipts } from "@/lib/private-receipt-storage";
 import {
   isReceiptExtractorDecodeOnlyPayload,
   isReceiptExtractorFailurePayload,
@@ -33,7 +34,6 @@ import {
   resolveNormalizationQualityOutcome,
   resolveReceiptUploadIngestion,
   resolveReceiptIntakeMessage,
-  saveReceiptFile,
   suggestSupplier,
   truncateLogValue
 } from "@/app/api/inventory/receipt-intake/extract/extract-route-helpers";
@@ -345,7 +345,8 @@ export async function POST(request: NextRequest) {
     if (!(receiptFileEntry instanceof File)) {
       return apiError(400, "Receipt file is required.");
     }
-    const extractorMode = resolveReceiptExtractorMode();
+    // The remote extractor currently returns its own file URLs. Hosted receipt evidence must stay private.
+    const extractorMode = usesPrivateBlobReceipts() ? "local" : resolveReceiptExtractorMode();
     const extractorSource = resolveExtractorSource(formData);
     let servedBy: ExtractServedBy = extractorMode === "shadow" ? "shadow_local" : "local";
     let remoteAttemptStatus = "not_attempted";
@@ -609,12 +610,16 @@ export async function POST(request: NextRequest) {
     });
     logRouteStage(isPdfUpload ? "pdf_branch_entered" : "image_branch_entered");
 
-    savedFile = await saveReceiptFile({
-      originalFile: receiptFileEntry,
-      normalizedFileBuffer: ingestedUpload.fileBuffer,
-      normalizedMimeType: ingestedUpload.effectiveMimeType,
-      auditMetadata: ingestedUpload.auditMetadata
-    });
+    try {
+      savedFile = await savePrivateReceipt({
+        owner: auth.session.userId,
+        fileName: receiptFileEntry.name,
+        buffer: ingestedUpload.fileBuffer,
+        mimeType: ingestedUpload.effectiveMimeType
+      });
+    } catch {
+      return apiError(503, "Receipt could not be saved. Try uploading again.");
+    }
     const fileBuffer = ingestedUpload.fileBuffer;
     logRouteStage("file_loaded", {
       bytes: fileBuffer.length,
