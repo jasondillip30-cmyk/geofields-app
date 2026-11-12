@@ -10,6 +10,7 @@ import {
   PROJECT_CONTRACT_TYPE_LABEL
 } from "@/lib/project-commercials";
 import { prisma } from "@/lib/prisma";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 export async function GET(
   request: NextRequest,
@@ -81,7 +82,7 @@ export async function GET(
       project: {
         id: project.id,
         name: project.name,
-        status: project.status,
+        status: resolveProjectOperationalStatus(project),
         startDate: project.startDate,
         endDate: project.endDate,
         client: project.client,

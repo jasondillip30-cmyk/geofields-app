@@ -6,6 +6,7 @@ import type { AuthSession } from "@/lib/auth/session-types";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 type LinkageType = "RIG" | "PROJECT" | "MAINTENANCE";
 type SourceRecordType = "EXPENSE" | "INVENTORY_MOVEMENT";
@@ -141,6 +142,8 @@ export async function GET(request: NextRequest) {
           id: true,
           name: true,
           status: true,
+          endDate: true,
+          closedAt: true,
           clientId: true,
           client: { select: { id: true, name: true } }
         },
@@ -260,7 +263,7 @@ export async function GET(request: NextRequest) {
       projects: projects.map((project) => ({
         id: project.id,
         name: project.name,
-        status: project.status,
+        status: resolveProjectOperationalStatus(project),
         clientId: project.clientId,
         clientName: project.client?.name || ""
       })),
