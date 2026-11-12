@@ -191,13 +191,15 @@ function ProjectSetupPageContent() {
     }
   }, [addModeBillingTemplates, billingLineCode, editingBillingCode]);
 
+  const hasActiveBillingLine = billingRateItems.some((line) => line.isActive);
   const stepIssues = useMemo(
     () =>
       validateProjectSetupStep({
         form,
-        step: currentStep
+        step: currentStep,
+        hasActiveBillingLine
       }),
-    [currentStep, form]
+    [currentStep, form, hasActiveBillingLine]
   );
 
   const reviewSummary = useMemo(() => {
@@ -479,7 +481,7 @@ function ProjectSetupPageContent() {
       return;
     }
 
-    const finalStepIssues = validateProjectSetupStep({ form, step: 6 });
+    const finalStepIssues = validateProjectSetupStep({ form, step: 6, hasActiveBillingLine });
     if (finalStepIssues.length > 0) {
       setCurrentStep(6);
       setFormError(finalStepIssues[0]);
@@ -719,7 +721,7 @@ function ProjectSetupPageContent() {
                     <button
                       type="button"
                       onClick={() => void saveProject()}
-                      disabled={saving}
+                      disabled={saving || stepIssues.length > 0}
                       className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-60"
                     >
                       {saving ? "Saving..." : form.id ? "Update Project" : "Create Project"}

@@ -10,13 +10,16 @@ import type {
 } from "./project-setup-types";
 import { BILLABLE_ITEM_TEMPLATES } from "./project-setup-types";
 import { resolveScheduledProjectStatus } from "@/lib/project-status-policy";
+import { NEW_PROJECT_BILLING_REQUIRED } from "@/lib/project-billing-rate-card";
 
 export function validateProjectSetupStep({
   form,
-  step
+  step,
+  hasActiveBillingLine
 }: {
   form: ProjectFormState;
   step: ProjectSetupStep;
+  hasActiveBillingLine: boolean;
 }) {
   const issues: string[] = [];
   const locationValue = form.locationMode === "NEW" ? form.locationNew.trim() : form.locationExisting.trim();
@@ -43,6 +46,9 @@ export function validateProjectSetupStep({
   }
 
   if (step >= 3) {
+    if (!form.id && !hasActiveBillingLine) {
+      issues.push(NEW_PROJECT_BILLING_REQUIRED);
+    }
     if (form.budgetAmount && (!Number.isFinite(Number(form.budgetAmount)) || Number(form.budgetAmount) <= 0)) {
       issues.push("Budget must be a positive number.");
     }

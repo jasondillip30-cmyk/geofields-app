@@ -339,7 +339,7 @@ export function ProjectSetupStepSections({
             ) : null}
             {activeBillingRateItems.length === 0 ? (
               <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-                No billable lines yet. You can finish setup now and add lines later.
+                {form.id ? "No active billable lines." : "Add a billing line to continue."}
               </p>
             ) : null}
           </div>

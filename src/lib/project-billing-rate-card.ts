@@ -1,5 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
+export const NEW_PROJECT_BILLING_REQUIRED = "Add at least one active billing line before creating the project.";
+
 export interface ProjectBillingRateItemInput {
   itemCode: string;
   label: string;

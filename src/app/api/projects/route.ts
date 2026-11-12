@@ -4,6 +4,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import {
+  NEW_PROJECT_BILLING_REQUIRED,
   parseProjectBillingRateItemsInput,
   replaceProjectBillingRateItems
 } from "@/lib/project-billing-rate-card";
@@ -183,6 +184,9 @@ export async function POST(request: NextRequest) {
   }
   if (billingRateItemsResult.error) {
     return NextResponse.json({ message: billingRateItemsResult.error }, { status: 400 });
+  }
+  if (!billingRateItemsResult.items.some((line) => line.isActive)) {
+    return NextResponse.json({ message: NEW_PROJECT_BILLING_REQUIRED }, { status: 400 });
   }
 
   const parsedStartDate = new Date(startDate);
