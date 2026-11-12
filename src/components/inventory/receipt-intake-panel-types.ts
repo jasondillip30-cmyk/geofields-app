@@ -51,6 +51,12 @@ export type ScanFailureStage =
   | "FRONTEND_MAPPING_EMPTY";
 export type IntakeAllocationStatus = "ALLOCATED" | "PARTIALLY_ALLOCATED" | "UNALLOCATED";
 
+export interface ReceiptCompletionDetails {
+  destinationLabel: string;
+  destination: string;
+  totalAmount: string;
+}
+
 export const RECEIPT_INTAKE_DEBUG_ENABLED =
   process.env.NEXT_PUBLIC_RECEIPT_INTAKE_DEBUG_UI === "1" &&
   process.env.NODE_ENV !== "production";
@@ -65,6 +71,7 @@ export interface ReceiptIntakePanelProps {
     sku: string;
     category: string;
     minimumStockLevel: number;
+    locationId?: string | null;
   }>;
   suppliers: Array<{ id: string; name: string }>;
   locations: Array<{ id: string; name: string }>;
@@ -82,6 +89,8 @@ export interface ReceiptIntakePanelProps {
     category?: string | null;
     subcategory?: string | null;
     requestedVendorName?: string | null;
+    requestedVendorId?: string | null;
+    stockLocationId?: string | null;
     clientId?: string | null;
     projectId?: string | null;
     rigId?: string | null;

@@ -166,6 +166,7 @@ export function buildCreateRequisitionPayload({
     subcategoryId: form.subcategoryId || null,
     requestedVendorId: form.requestedVendorId || null,
     requestedVendorName: form.requestedVendorName || null,
+    stockLocationId: form.type === "INVENTORY_STOCK_UP" ? form.stockLocationId || null : null,
     notes: buildRequestNote({
       type: form.type,
       shortReason: form.shortReason,

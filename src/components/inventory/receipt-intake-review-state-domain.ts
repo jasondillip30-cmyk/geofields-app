@@ -6,6 +6,25 @@ import type {
 } from "@/components/inventory/receipt-intake-panel-types";
 import { isLikelyTraPlaceholderText } from "@/lib/inventory-receipt-intake-tra-supplier";
 
+export function resolveRequisitionStockLocation(
+  requisition: { type: string; stockLocationId?: string | null; notes?: string | null },
+  locations: ReceiptIntakePanelProps["locations"]
+): string | null {
+  if (requisition.type !== "INVENTORY_STOCK_UP") return null;
+  if (requisition.stockLocationId) {
+    return locations.some((location) => location.id === requisition.stockLocationId)
+      ? requisition.stockLocationId
+      : null;
+  }
+
+  // Older requisitions stored the selected location in the first note segment.
+  const match = requisition.notes?.match(/^Stock location: ([^|]+)/);
+  const name = match?.[1]?.trim().toLowerCase();
+  if (!name) return null;
+  const candidates = locations.filter((location) => location.name.trim().toLowerCase() === name);
+  return candidates.length === 1 ? candidates[0].id : null;
+}
+
 export function mapRequisitionCategoryToInventoryCategory(value: string | null | undefined): string {
   if (!value) {
     return "OTHER";
@@ -58,7 +77,8 @@ export function resolveRequisitionEstimatedTotal(initialRequisition: ReceiptInta
 
 export function mapRequisitionLineItems(
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"],
-  classification: ReceiptClassification
+  classification: ReceiptClassification,
+  items: ReceiptIntakePanelProps["items"] = []
 ): ReviewLineState[] {
   if (!initialRequisition || !Array.isArray(initialRequisition.lineItems)) {
     return [];
@@ -73,6 +93,13 @@ export function mapRequisitionLineItems(
       if (!description) {
         return null;
       }
+      const matches = initialRequisition.type === "INVENTORY_STOCK_UP"
+        ? items.filter((item) =>
+            item.name.trim().toLowerCase() === description.toLowerCase() &&
+            (!initialRequisition.stockLocationId || item.locationId === initialRequisition.stockLocationId)
+          )
+        : [];
+      const matchedItem = matches.length === 1 ? matches[0] : null;
       const quantity = Number(line.quantity || 0);
       const unitPrice = Number(line.estimatedUnitCost || 0);
       const total = Number(line.estimatedTotalCost || 0);
@@ -87,16 +114,16 @@ export function mapRequisitionLineItems(
         unitPrice: String(safeUnitPrice),
         lineTotal: String(safeTotal),
         extractionConfidence: "MEDIUM",
-        selectedCategory,
+        selectedCategory: matchedItem?.category || selectedCategory,
         suggestedCategory: selectedCategory === "OTHER" ? null : selectedCategory,
         categoryReason: `Prefilled from approved requisition category${subcategorySuffix || ""}.`,
         mode:
           classification === "EXPENSE_ONLY"
             ? "EXPENSE_ONLY"
-            : classification === "INTERNAL_TRANSFER"
+            : classification === "INTERNAL_TRANSFER" || matchedItem
               ? "MATCH"
               : "NEW",
-        selectedItemId: "",
+        selectedItemId: matchedItem?.id || "",
         matchConfidence: "NONE",
         matchScore: 0,
         newItemName: description,

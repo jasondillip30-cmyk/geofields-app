@@ -290,11 +290,16 @@ export function buildReceiptMetadataNote({
 
 export function resolveIntakeAllocationStatus({
   clientId,
-  projectId
+  projectId,
+  workflowType
 }: {
   clientId: string | null;
   projectId: string | null;
+  workflowType?: ReceiptWorkflowType | null;
 }): IntakeAllocationStatus {
+  if (workflowType === "STOCK_PURCHASE") {
+    return "ALLOCATED";
+  }
   if (clientId && projectId) {
     return "ALLOCATED";
   }

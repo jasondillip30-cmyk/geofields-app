@@ -138,7 +138,7 @@ export async function POST(request: NextRequest) {
       locationToId
     }
   }));
-  let allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
+  let allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId, workflowType });
 
   if (receiptType === "EXPENSE_ONLY" && !expenseOnlyCategory) {
     return NextResponse.json({ message: "Expense-only receipts require an expense category (Travel, Food, Fuel, or Misc)." }, { status: 400 });
@@ -446,7 +446,7 @@ export async function POST(request: NextRequest) {
   if (workflowType === "MAINTENANCE_PURCHASE" && !rigId) {
     return NextResponse.json({ message: "Maintenance Purchase (Rig Repair) requires linking a rig before submission." }, { status: 400 });
   }
-  allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId });
+  allocationStatus = resolveIntakeAllocationStatus({ clientId, projectId, workflowType });
 
   const existingItemById = new Map(existingItems.map((item) => [item.id, item]));
   const supplierNameRaw = typeof body?.receipt?.supplierName === "string" ? body.receipt.supplierName.trim() : "";

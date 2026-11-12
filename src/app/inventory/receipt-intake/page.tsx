@@ -12,6 +12,7 @@ import { canAccess } from "@/lib/auth/permissions";
 import { REQUISITION_RECEIPT_ELIGIBLE_STATUS } from "@/lib/requisition-lifecycle";
 import { MetricCard } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
+import { resolveRequisitionStockLocation } from "@/components/inventory/receipt-intake-review-state-domain";
 import { ReceiptIntakeHistorySection } from "./receipt-intake-history-section";
 import { ReceiptIntakeScanSection } from "./receipt-intake-scan-section";
 import type {
@@ -138,6 +139,8 @@ function InventoryReceiptIntakePageContent() {
         category: selectedApprovedRequisition.category,
         subcategory: selectedApprovedRequisition.subcategory,
         requestedVendorName: selectedApprovedRequisition.requestedVendorName,
+        requestedVendorId: suppliers.find((supplier) => supplier.id === selectedApprovedRequisition.requestedVendorId)?.id ?? null,
+        stockLocationId: resolveRequisitionStockLocation(selectedApprovedRequisition, locations),
         clientId: selectedApprovedRequisition.context.clientId,
         projectId: selectedApprovedRequisition.context.projectId,
         rigId: selectedApprovedRequisition.context.rigId,
@@ -150,14 +153,16 @@ function InventoryReceiptIntakePageContent() {
       return urlRequisitionPrefill;
     }
     return null;
-  }, [selectedApprovedRequisition, selectedRequisitionId, urlRequisitionPrefill]);
+  }, [locations, selectedApprovedRequisition, selectedRequisitionId, suppliers, urlRequisitionPrefill]);
   const activeRequisitionPrefill = useMemo<RequisitionPrefill | null>(
     () => (entryMode === "REQUISITION" ? selectedRequisitionPrefill : null),
     [entryMode, selectedRequisitionPrefill]
   );
   const [panelGuidedStep, setPanelGuidedStep] = useState<1 | 2 | 3 | 4>(1);
   const canRenderReceiptPanel =
-    entryMode === "MANUAL" || Boolean(activeRequisitionPrefill) || Boolean(activeSubmission);
+    entryMode === "MANUAL" ||
+    Boolean(activeSubmission) ||
+    Boolean(activeRequisitionPrefill && (!loading || selectedApprovedRequisition));
   const workflowStepLabels = [
     "1. Receipt",
     "2. Items",
@@ -245,12 +250,13 @@ function InventoryReceiptIntakePageContent() {
       setSuppliers((suppliersPayload.data || []).map((entry: { id: string; name: string }) => ({ id: entry.id, name: entry.name })));
       setLocations((locationsPayload.data || []).map((entry: { id: string; name: string }) => ({ id: entry.id, name: entry.name })));
       setItems(
-        (itemsPayload.data || []).map((entry: { id: string; name: string; sku: string; category: string; minimumStockLevel: number }) => ({
+        (itemsPayload.data || []).map((entry: ReferenceItem) => ({
           id: entry.id,
           name: entry.name,
           sku: entry.sku,
           category: entry.category,
-          minimumStockLevel: entry.minimumStockLevel
+          minimumStockLevel: entry.minimumStockLevel,
+          locationId: entry.locationId
         }))
       );
       setMaintenanceRequests(
@@ -289,6 +295,9 @@ function InventoryReceiptIntakePageContent() {
             subcategory: typeof entry.subcategory === "string" ? entry.subcategory : null,
             requestedVendorName:
               typeof entry.requestedVendorName === "string" ? entry.requestedVendorName : null,
+            requestedVendorId: entry.requestedVendorId || null,
+            stockLocationId: entry.stockLocationId || null,
+            notes: entry.notes || null,
             submittedAt: entry.submittedAt,
             context: {
               clientId: entry.context?.clientId || null,

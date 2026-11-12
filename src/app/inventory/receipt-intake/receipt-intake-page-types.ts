@@ -30,6 +30,7 @@ export interface ReferenceItem {
   sku: string;
   category: string;
   minimumStockLevel: number;
+  locationId?: string | null;
 }
 
 export interface ReferenceMaintenanceRequest {
@@ -162,6 +163,8 @@ export interface RequisitionPrefill {
   category: string | null;
   subcategory: string | null;
   requestedVendorName: string | null;
+  requestedVendorId?: string | null;
+  stockLocationId?: string | null;
   clientId: string | null;
   projectId: string | null;
   rigId: string | null;
@@ -193,6 +196,9 @@ export interface ApprovedRequisitionRow {
   category: string | null;
   subcategory: string | null;
   requestedVendorName: string | null;
+  requestedVendorId?: string | null;
+  stockLocationId?: string | null;
+  notes?: string | null;
   submittedAt: string;
   context: {
     clientId: string | null;

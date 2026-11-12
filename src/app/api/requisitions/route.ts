@@ -44,6 +44,7 @@ interface RequisitionRowOutput {
   subcategoryId: string | null;
   requestedVendorId: string | null;
   requestedVendorName: string | null;
+  stockLocationId: string | null;
   notes: string | null;
   sourceUsageRequestId: string | null;
   submittedAt: string;
@@ -363,6 +364,15 @@ export async function POST(request: NextRequest) {
   const requestedVendorIdInput = normalizeNullableId(body?.requestedVendorId);
   const requestedVendorNameInput = normalizeNullableText(body?.requestedVendorName);
   const sourceUsageRequestId = normalizeNullableId(body?.sourceUsageRequestId);
+  const stockLocationId = type === "INVENTORY_STOCK_UP"
+    ? normalizeNullableId(body?.stockLocationId)
+    : null;
+  if (stockLocationId && !await prisma.inventoryLocation.findUnique({
+    where: { id: stockLocationId },
+    select: { id: true }
+  })) {
+    return NextResponse.json({ message: "Selected stock location was not found." }, { status: 404 });
+  }
 
   if (sourceUsageRequestId && type !== "INVENTORY_STOCK_UP") {
     return NextResponse.json(
@@ -766,6 +776,7 @@ export async function POST(request: NextRequest) {
     subcategoryId,
     requestedVendorId,
     requestedVendorName,
+    stockLocationId,
     notes: normalizeNullableText(body?.notes),
     sourceUsageRequestId,
     submittedAt: submittedAt.toISOString(),
@@ -902,6 +913,7 @@ function serializeRequisitionRow(
     subcategoryId: payload.subcategoryId,
     requestedVendorId: payload.requestedVendorId,
     requestedVendorName: payload.requestedVendorName,
+    stockLocationId: payload.stockLocationId ?? null,
     notes: payload.notes,
     sourceUsageRequestId: payload.sourceUsageRequestId || null,
     submittedAt: payload.submittedAt,

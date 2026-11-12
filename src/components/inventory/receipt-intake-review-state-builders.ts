@@ -46,6 +46,7 @@ import {
 } from "@/components/inventory/receipt-intake-review-state-primitives";
 import { mapExtractedLines } from "@/components/inventory/receipt-intake-review-state-lines";
 import {
+  mapRequisitionLineItems,
   normalizeSupplierName,
   resolveRequisitionLink
 } from "@/components/inventory/receipt-intake-review-state-domain";
@@ -434,8 +435,12 @@ export function buildReviewStateFromPayload({
     requisitionType: requisitionLink.type,
     receiptUrl: payload.receipt?.url || "",
     receiptFileName: payload.receipt?.fileName || receiptFileName,
-    supplierId: asString(supplierSuggestion.supplierId),
-    supplierName: resolvedSupplierName,
+    supplierId: asString(supplierSuggestion.supplierId) ||
+      (!resolvedSupplierName && initialRequisition?.type === "INVENTORY_STOCK_UP"
+        ? initialRequisition.requestedVendorId || ""
+        : ""),
+    supplierName: resolvedSupplierName ||
+      (initialRequisition?.type === "INVENTORY_STOCK_UP" ? initialRequisition.requestedVendorName || "" : ""),
     tin: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -510,7 +515,7 @@ export function buildReviewStateFromPayload({
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
     maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
-    locationToId: "",
+    locationToId: initialRequisition?.type === "INVENTORY_STOCK_UP" ? initialRequisition.stockLocationId || "" : "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,
@@ -547,7 +552,8 @@ export function buildManualAssistReview({
   fallbackMode,
   receiptClassification,
   receiptWorkflowChoice,
-  initialRequisition
+  initialRequisition,
+  items = []
 }: {
   payload: unknown;
   receiptFileName: string;
@@ -558,6 +564,7 @@ export function buildManualAssistReview({
   receiptClassification: ReceiptClassification;
   receiptWorkflowChoice: ReceiptWorkflowChoice | "";
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+  items?: ReceiptIntakePanelProps["items"];
 }): ReviewState {
   const root = asRecord(payload);
   const extracted = asRecord(root?.extracted);
@@ -626,7 +633,10 @@ export function buildManualAssistReview({
         createExpense: workflowConfig.createExpense
       };
   const extractedLines = mapExtractedLines(extracted?.lines);
-  const lines = extractedLines;
+  const useApprovedStockDetails = initialRequisition?.type === "INVENTORY_STOCK_UP";
+  const lines = extractedLines.length || !useApprovedStockDetails
+    ? extractedLines
+    : mapRequisitionLineItems(initialRequisition, effectiveClassification, items);
   const scannedReceiptNumber = readStringFieldValue({
     header: extractedHeader,
     qrParsedFields,
@@ -675,7 +685,7 @@ export function buildManualAssistReview({
 
   const warnings = [
     calmMessage(warning),
-    ...(extractedLines.length === 0
+    ...(lines.length === 0
       ? ["No scanned receipt line items were extracted. Add scanned line items manually if needed."]
       : []),
     ...(Array.isArray(extracted?.warnings)
@@ -689,8 +699,10 @@ export function buildManualAssistReview({
     requisitionType: requisitionLink.type,
     receiptUrl: asString(receipt?.url),
     receiptFileName: asString(receipt?.fileName) || receiptFileName,
-    supplierId: asString(supplierSuggestion?.supplierId),
-    supplierName: resolvedSupplierName,
+    supplierId: asString(supplierSuggestion?.supplierId) ||
+      (!resolvedSupplierName && useApprovedStockDetails ? initialRequisition.requestedVendorId || "" : ""),
+    supplierName: resolvedSupplierName ||
+      (useApprovedStockDetails ? initialRequisition.requestedVendorName || "" : ""),
     tin: readStringFieldValue({
       header: extractedHeader,
       qrParsedFields,
@@ -774,7 +786,7 @@ export function buildManualAssistReview({
     rigId: requisitionLink.rigId || defaultRigForWorkflow,
     maintenanceRequestId: requisitionLink.maintenanceRequestId || "",
     locationFromId: "",
-    locationToId: "",
+    locationToId: useApprovedStockDetails ? initialRequisition.stockLocationId || "" : "",
     expenseOnlyCategory: "",
     createExpense: receiptConfig.createExpense,
     receiptPurpose: receiptConfig.receiptPurpose,

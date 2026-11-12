@@ -11,6 +11,7 @@ import { ReceiptIntakePanelContent } from "@/components/inventory/receipt-intake
 import { applyReviewLinePatch, createManualSeededReview, fetchFocusedRecordPayload, handleReceiptCaptureModeSwitch, handleQrPointerDownSelection, handleQrPointerMoveSelection, handleQrPointerUpSelection, handleReceiptFileSelection, resetFocusedRecordOverlayState, resetScanSessionStateValues } from "@/components/inventory/receipt-intake-panel-actions";
 import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
 import { formatCurrency } from "@/lib/utils";
+import type { ReceiptCompletionDetails } from "@/components/inventory/receipt-intake-panel-types";
 export type { ExpenseOnlyCategory, FieldConfidence, QrDecodeStatus, QrLookupStatus, QrParseStatus, ReadabilityConfidence, ReceiptClassification, ReceiptFollowUpStage, ReceiptIntakePanelProps, ReceiptSnapshotLine, ReceiptWorkflowChoice, RequisitionComparisonResult, ReviewLineState, ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage, IntakeAllocationStatus, DuplicatePromptState, QrCropSelection, ExtractState, ReceiptPurpose } from "@/components/inventory/receipt-intake-panel-types";
 const EXTRACT_REQUEST_TIMEOUT_MS = 65_000;
 const EXTRACT_REQUEST_TIMEOUT_MESSAGE =
@@ -76,10 +77,7 @@ export function ReceiptIntakePanel({
   const [mismatchOverrideAccepted, setMismatchOverrideAccepted] = useState(false);
   const [showScannedDetails, setShowScannedDetails] = useState(false);
   const [showFinalizePostingOptions, setShowFinalizePostingOptions] = useState(false);
-  const [finalizeSuccess, setFinalizeSuccess] = useState<{
-    projectName: string;
-    totalAmount: string;
-  } | null>(null);
+  const [finalizeSuccess, setFinalizeSuccess] = useState<ReceiptCompletionDetails | null>(null);
   const [lastScanDiagnostics, setLastScanDiagnostics] = useState<ScanDiagnosticsState | null>(null);
   const [hasScanAttempted, setHasScanAttempted] = useState(false);
   const showDeveloperDebugUi = process.env.NEXT_PUBLIC_RECEIPT_INTAKE_DEBUG_UI === "1";
@@ -176,7 +174,8 @@ export function ReceiptIntakePanel({
           ? mapRequisitionTypeToReceiptClassification(initialRequisition.type)
           : resolveWorkflowSelectionConfig(workflowChoice).classification),
       receiptWorkflowChoice: workflowChoice,
-      initialRequisition
+      initialRequisition,
+      items
     });
     setReview(seededReview);
     setMismatchOverrideAccepted(false);
@@ -190,6 +189,7 @@ export function ReceiptIntakePanel({
     defaultClientId,
     defaultRigId,
     initialRequisition,
+    items,
     manualInputSelected,
     receiptClassification,
     receiptWorkflowChoice,
@@ -341,6 +341,7 @@ export function ReceiptIntakePanel({
       review,
       activeSubmission,
       initialRequisition,
+      items,
       receiptWorkflowChoice,
       receiptClassification,
       defaultClientId,
@@ -470,7 +471,8 @@ export function ReceiptIntakePanel({
           fallbackMode: "SCAN_FAILURE",
           receiptClassification: selectedWorkflowConfig.classification,
           receiptWorkflowChoice: selectedWorkflowChoice,
-          initialRequisition
+          initialRequisition,
+          items
         });
         setReview(fallbackReview);
         setMismatchOverrideAccepted(false);
@@ -537,7 +539,8 @@ export function ReceiptIntakePanel({
       fallbackMode: "SCAN_FAILURE",
       receiptClassification: selectedWorkflowConfig.classification,
       receiptWorkflowChoice: selectedWorkflowChoice,
-      initialRequisition
+      initialRequisition,
+      items
     });
     setReview(fallbackReview);
     setMismatchOverrideAccepted(false);
@@ -623,7 +626,8 @@ export function ReceiptIntakePanel({
         fallbackMode: "SCAN_FAILURE",
         receiptClassification: selectedWorkflowConfig.classification,
         receiptWorkflowChoice,
-        initialRequisition
+        initialRequisition,
+        items
       });
       setReview(fallbackReview);
       setMismatchOverrideAccepted(false);
@@ -804,9 +808,14 @@ export function ReceiptIntakePanel({
       }
       const submissionStatus = asString(payload?.data?.submissionStatus);
       const submissionReference = asString(payload?.data?.submissionId);
-      const projectName =
-        projects.find((project) => project.id === nextReview.projectId)?.name || "No linked project";
-      const totalAmount = formatMoneyText(nextReview.total, nextReview.currency);
+      const isStockPurchase = resolveWorkflowChoiceFromReview(nextReview) === "STOCK_PURCHASE";
+      const completionDetails = {
+        destinationLabel: isStockPurchase ? "Stock location" : "Project",
+        destination: isStockPurchase
+          ? locations.find((location) => location.id === nextReview.locationToId)?.name || "Workshop inventory"
+          : projects.find((project) => project.id === nextReview.projectId)?.name || "No linked project",
+        totalAmount: formatMoneyText(String(payload.data.totals?.total ?? nextReview.total), nextReview.currency)
+      };
       if (submissionStatus === "PENDING_REVIEW") {
         setNoticeTone("SUCCESS");
         setNotice(
@@ -815,10 +824,7 @@ export function ReceiptIntakePanel({
             : "Submitted for review. A manager/admin will verify and finalize posting."
         );
         setLastSavedAllocationStatus(normalizeAllocationStatus(payload?.data?.allocationStatus));
-        setFinalizeSuccess({
-          projectName,
-          totalAmount
-        });
+        setFinalizeSuccess(completionDetails);
         setReview(null);
         setActiveSubmissionId(null);
         setReceiptFile(null);
@@ -880,10 +886,7 @@ export function ReceiptIntakePanel({
         }
       }
       setLastSavedAllocationStatus(allocationStatus);
-      setFinalizeSuccess({
-        projectName,
-        totalAmount
-      });
+      setFinalizeSuccess(completionDetails);
       setReview(null);
       setActiveSubmissionId(null);
       setReceiptFile(null);

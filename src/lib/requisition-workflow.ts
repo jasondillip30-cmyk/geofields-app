@@ -36,6 +36,7 @@ export interface PurchaseRequisitionPayload {
   subcategoryId: string | null;
   requestedVendorId: string | null;
   requestedVendorName: string | null;
+  stockLocationId?: string | null;
   notes: string | null;
   sourceUsageRequestId?: string | null;
   submittedAt: string;
@@ -166,6 +167,7 @@ export function parsePurchaseRequisitionPayload(
       subcategoryId: readNullableString(root.subcategoryId),
       requestedVendorId: readNullableString(root.requestedVendorId),
       requestedVendorName: readNullableString(root.requestedVendorName),
+      stockLocationId: readNullableString(root.stockLocationId),
       notes: readNullableString(root.notes),
       sourceUsageRequestId: readNullableString(root.sourceUsageRequestId),
       submittedAt: readString(root.submittedAt) || new Date(0).toISOString(),

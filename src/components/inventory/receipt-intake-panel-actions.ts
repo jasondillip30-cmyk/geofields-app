@@ -9,6 +9,7 @@ import type {
   NoticeTone,
   QrCropSelection,
   ReceiptClassification,
+  ReceiptCompletionDetails,
   ReceiptIntakePanelProps,
   ReceiptWorkflowChoice,
   ReviewLineState,
@@ -32,7 +33,8 @@ export function createManualSeededReview({
   fallbackMode,
   receiptClassification,
   receiptWorkflowChoice,
-  initialRequisition
+  initialRequisition,
+  items
 }: {
   payload?: unknown;
   receiptFileName?: string;
@@ -43,6 +45,7 @@ export function createManualSeededReview({
   receiptClassification: ReceiptClassification;
   receiptWorkflowChoice: ReceiptWorkflowChoice;
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+  items: ReceiptIntakePanelProps["items"];
 }) {
   const workflowConfig = resolveWorkflowSelectionConfig(receiptWorkflowChoice);
   const effectiveClassification =
@@ -59,7 +62,8 @@ export function createManualSeededReview({
     fallbackMode,
     receiptClassification: effectiveClassification,
     receiptWorkflowChoice,
-    initialRequisition
+    initialRequisition,
+    items
   });
 }
 
@@ -69,6 +73,7 @@ export function handleReceiptCaptureModeSwitch({
   review,
   activeSubmission,
   initialRequisition,
+  items,
   receiptWorkflowChoice,
   receiptClassification,
   defaultClientId,
@@ -85,12 +90,13 @@ export function handleReceiptCaptureModeSwitch({
   review: ReviewState | null;
   activeSubmission: ReceiptIntakePanelProps["activeSubmission"];
   initialRequisition: ReceiptIntakePanelProps["initialRequisition"];
+  items: ReceiptIntakePanelProps["items"];
   receiptWorkflowChoice: ReceiptWorkflowChoice | "";
   receiptClassification: ReceiptClassification | "";
   defaultClientId: string;
   defaultRigId: string;
   setReview: Dispatch<SetStateAction<ReviewState | null>>;
-  setFinalizeSuccess: Dispatch<SetStateAction<{ projectName: string; totalAmount: string } | null>>;
+  setFinalizeSuccess: Dispatch<SetStateAction<ReceiptCompletionDetails | null>>;
   setNoticeTone: Dispatch<SetStateAction<NoticeTone>>;
   setNotice: Dispatch<SetStateAction<string | null>>;
   setError: Dispatch<SetStateAction<string | null>>;
@@ -119,7 +125,8 @@ export function handleReceiptCaptureModeSwitch({
         ? mapRequisitionTypeToReceiptClassification(initialRequisition.type)
         : resolveWorkflowSelectionConfig(workflowChoice).classification),
     receiptWorkflowChoice: workflowChoice,
-    initialRequisition
+    initialRequisition,
+    items
   });
   setReview(seededReview);
   setFinalizeSuccess(null);
@@ -132,7 +139,20 @@ export function handleReceiptCaptureModeSwitch({
 export function applyReviewLinePatch(current: ReviewState, lineId: string, patch: Partial<ReviewLineState>): ReviewState {
   return {
     ...current,
-    lines: current.lines.map((line) => (line.id === lineId ? { ...line, ...patch } : line))
+    lines: current.lines.map((line) => {
+      if (line.id !== lineId) return line;
+      const next = { ...line, ...patch };
+      if (
+        current.requisitionType === "INVENTORY_STOCK_UP" &&
+        line.id.startsWith("req-") &&
+        patch.lineTotal === undefined &&
+        (patch.quantity !== undefined || patch.unitPrice !== undefined)
+      ) {
+        const total = Number(next.quantity) * Number(next.unitPrice);
+        next.lineTotal = Number.isFinite(total) && total >= 0 ? total.toFixed(2) : "";
+      }
+      return next;
+    })
   };
 }
 
@@ -267,7 +287,7 @@ export function handleReceiptFileSelection({
   receiptPreviewUrl: string;
   setReceiptFile: Dispatch<SetStateAction<File | null>>;
   setReceiptPreviewUrl: Dispatch<SetStateAction<string>>;
-  setFinalizeSuccess: Dispatch<SetStateAction<{ projectName: string; totalAmount: string } | null>>;
+  setFinalizeSuccess: Dispatch<SetStateAction<ReceiptCompletionDetails | null>>;
   resetScanSessionState: () => void;
   setError: Dispatch<SetStateAction<string | null>>;
   setNotice: Dispatch<SetStateAction<string | null>>;

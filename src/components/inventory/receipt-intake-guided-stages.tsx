@@ -13,6 +13,7 @@ import type {
   IntakeAllocationStatus,
   QrCropSelection,
   ReceiptCaptureMode,
+  ReceiptCompletionDetails,
   ReceiptFollowUpStage,
   ReceiptIntakePanelProps,
   ReceiptWorkflowChoice,
@@ -21,8 +22,8 @@ import type {
 } from "@/components/inventory/receipt-intake-panel-types";
 
 interface ReceiptIntakeGuidedStagesProps {
-  finalizeSuccess: { projectName: string; totalAmount: string } | null;
-  setFinalizeSuccess: Dispatch<SetStateAction<{ projectName: string; totalAmount: string } | null>>;
+  finalizeSuccess: ReceiptCompletionDetails | null;
+  setFinalizeSuccess: Dispatch<SetStateAction<ReceiptCompletionDetails | null>>;
   resetScanSessionState: () => void;
   setFollowUpStage: Dispatch<SetStateAction<ReceiptFollowUpStage>>;
   followUpStage: ReceiptFollowUpStage;
@@ -171,7 +172,7 @@ export function ReceiptIntakeGuidedStages({
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
           <p className="text-base font-semibold text-emerald-900">Receipt posted successfully</p>
           <div className="mt-2 grid gap-1 text-sm text-emerald-900 sm:grid-cols-2">
-            <p><span className="font-medium">Project:</span> {finalizeSuccess.projectName}</p>
+            <p><span className="font-medium">{finalizeSuccess.destinationLabel}:</span> {finalizeSuccess.destination}</p>
             <p><span className="font-medium">Total:</span> {finalizeSuccess.totalAmount}</p>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
