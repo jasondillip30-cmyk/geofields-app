@@ -64,7 +64,10 @@ export default function SpendingPage() {
   const isSingleProjectScope = scopeProjectId.length > 0;
   const canViewFinance = Boolean(role && canAccess(role, "finance:view"));
   const canViewDrilling = Boolean(role && canAccess(role, "drilling:view"));
-  const canCreateDrillingReport = Boolean(role && canAccess(role, "drilling:submit"));
+  const canSubmitDrillingReport = Boolean(role && canAccess(role, "drilling:submit"));
+  const [drillingProject, setDrillingProject] = useState<{ id: string; status: string } | null>(null);
+  const canCreateDrillingReport =
+    canSubmitDrillingReport && drillingProject?.id === scopeProjectId && drillingProject.status === "ACTIVE";
 
   const [workspaceView, setWorkspaceView] = useState<SpendingWorkspaceView>("overview");
   const [activeView, setActiveView] = useState<"expenses" | "revenue">("expenses");
@@ -103,6 +106,27 @@ export default function SpendingPage() {
   const [drillingEntryNotice, setDrillingEntryNotice] = useState<string | null>(null);
   const [requestedWorkspaceView, setRequestedWorkspaceView] =
     useState<SpendingWorkspaceView | null>(null);
+
+  useEffect(() => {
+    if (!scopeProjectId || !canSubmitDrillingReport || workspaceView !== "drilling-reports") return;
+    const controller = new AbortController();
+
+    async function loadDrillingProject() {
+      try {
+        const response = await fetch("/api/projects", { cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error("Project lookup failed");
+        const { data } = (await response.json()) as { data: Array<{ id: string; status: string }> };
+        if (!controller.signal.aborted) {
+          setDrillingProject(data.find((project) => project.id === scopeProjectId) ?? null);
+        }
+      } catch {
+        if (!controller.signal.aborted) setDrillingProject(null);
+      }
+    }
+
+    void loadDrillingProject();
+    return () => controller.abort();
+  }, [canSubmitDrillingReport, scopeProjectId, workspaceView]);
 
   useEffect(() => {
     if (workspaceQuery !== "project" || !projectIdQuery || projectIdQuery === "all") {
@@ -734,29 +758,20 @@ export default function SpendingPage() {
     router.push(query ? `/spending/profit?${query}` : "/spending/profit");
   }, [canViewFinance, filters.from, filters.to, isSingleProjectScope, router, scopeProjectId]);
 
-  const openSpendingDrillingReports = useCallback(() => {
-    if (!isSingleProjectScope) {
-      return;
-    }
-    const params = new URLSearchParams();
-    params.set("projectId", scopeProjectId);
-    if (filters.from) params.set("from", filters.from);
-    if (filters.to) params.set("to", filters.to);
-    const query = params.toString();
-    router.push(query ? `/spending/drilling-reports?${query}` : "/spending/drilling-reports");
-  }, [filters.from, filters.to, isSingleProjectScope, router, scopeProjectId]);
-
   const spendingDrillingReportsHref = useMemo(() => {
     if (!isSingleProjectScope) {
       return "/spending/drilling-reports";
     }
-    const params = new URLSearchParams();
-    params.set("projectId", scopeProjectId);
+    const params = new URLSearchParams({ workspace: "project", projectId: scopeProjectId });
     if (filters.from) params.set("from", filters.from);
     if (filters.to) params.set("to", filters.to);
     const query = params.toString();
     return query ? `/spending/drilling-reports?${query}` : "/spending/drilling-reports";
   }, [filters.from, filters.to, isSingleProjectScope, scopeProjectId]);
+
+  const openSpendingDrillingReports = useCallback(() => {
+    if (isSingleProjectScope) router.push(spendingDrillingReportsHref);
+  }, [isSingleProjectScope, router, spendingDrillingReportsHref]);
 
   const openDrillingEntryModal = useCallback(() => {
     if (!isSingleProjectScope || !canCreateDrillingReport) {

@@ -107,11 +107,22 @@ export default function SpendingDrillingReportsPage() {
   }, [filters.from, filters.to, selectedPeriodKey, timePeriodView]);
   const effectiveFrom = selectedPeriodRange?.from || filters.from;
   const effectiveTo = selectedPeriodRange?.to || filters.to;
+  const reviewHref = `/drilling-reports?${new URLSearchParams({
+    view: "review",
+    workspace: "project",
+    projectId: scopeProjectId,
+    clientId: filters.clientId,
+    rigId: filters.rigId,
+    from: filters.from,
+    to: filters.to
+  })}`;
 
   const spendingHref = useMemo(() => {
     const params = new URLSearchParams();
     if (isSingleProjectScope) {
+      params.set("workspace", "project");
       params.set("projectId", scopeProjectId);
+      params.set("view", "drilling-reports");
     }
     if (filters.from) params.set("from", filters.from);
     if (filters.to) params.set("to", filters.to);
@@ -440,8 +451,12 @@ export default function SpendingDrillingReportsPage() {
               }
             >
               <p className="text-sm text-slate-600">
-                Browse daily drilling reports here. Use the Drilling workspace to record new report entries.
+                This list shows approved reports. To check a submission or correct a rejected report,
+                open report status.
               </p>
+              <Link href={reviewHref} className="gf-btn-subtle mt-3">
+                Review report status
+              </Link>
             </Card>
 
             <section className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">

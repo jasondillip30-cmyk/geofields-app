@@ -116,8 +116,8 @@ export function DrillingReportEntryFormCard({
 
   return (
     <Card
-      title="New drilling report"
-      subtitle="Record today's drilling activity for the locked project."
+      title={formMode === "edit" ? "Correct drilling report" : "New drilling report"}
+      subtitle={formMode === "edit" ? "Update the report and resubmit it for approval." : "Record today's drilling activity for the locked project."}
       action={
         <Link href={spendingReportsHref} className="gf-btn-subtle">
           View reports in Project Operations
@@ -252,10 +252,15 @@ export function DrillingReportEntryFormCard({
                       holeNumber: value
                     }))
                   }
-                  options={formProjectHoleProgress.map((hole) => ({
-                    value: hole.holeNumber,
-                    label: `${hole.holeNumber} (current depth ${formatNumber(hole.currentDepth)}m)`
-                  }))}
+                  options={[
+                    ...(formMode === "edit" && form.selectedHoleNumber && !selectedHoleProgress
+                      ? [{ value: form.selectedHoleNumber, label: form.selectedHoleNumber }]
+                      : []),
+                    ...formProjectHoleProgress.map((hole) => ({
+                      value: hole.holeNumber,
+                      label: `${hole.holeNumber} (current depth ${formatNumber(hole.currentDepth)}m)`
+                    }))
+                  ]}
                   required
                 />
                 <ReadOnlyField

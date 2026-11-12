@@ -7,20 +7,16 @@ import { AccessGate } from "@/components/layout/access-gate";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { useRole } from "@/components/layout/role-provider";
-import { WorkflowAssistPanel } from "@/components/layout/workflow-assist-panel";
 import { Card } from "@/components/ui/card";
 import { canUseElevatedDrillingEdit } from "@/lib/auth/approval-policy";
 import { canAccess } from "@/lib/auth/permissions";
 import { buildScopedHref } from "@/lib/drilldown";
 import {
   buildDrillReportDirectCostSummary,
-  buildDrillOperationalKpiSummary,
-  buildProjectDirectCostSummaryFromReports,
-  buildProjectOperationalKpiSummaryFromReports
+  buildDrillOperationalKpiSummary
 } from "@/lib/drilling-direct-cost-summary";
 import { formatNumber } from "@/lib/utils";
 import {
-  SummaryItem,
   buildProjectBillingSummary,
   createEmptyForm
 } from "./drilling-reports-page-utils";
@@ -46,7 +42,6 @@ import {
   type RigOption,
   type StagedConsumableLine
 } from "./drilling-reports-page-types";
-import { DrillingReportsProjectSummarySection } from "./drilling-reports-project-summary-section";
 import { DrillingReportsWorkspaceShellCard } from "./drilling-reports-workspace-shell-card";
 import { useDrillingReportsFormDerived } from "./drilling-reports-page-form-derived";
 import { useDrillingReportsFocus } from "./drilling-reports-page-focus";
@@ -254,6 +249,7 @@ export default function DrillingReportsPage() {
   const spendingReportsHref = useMemo(() => {
     const params = new URLSearchParams();
     if (scopedProjectId) {
+      params.set("workspace", "project");
       params.set("projectId", scopedProjectId);
     }
     if (filters.from) {
@@ -350,27 +346,6 @@ export default function DrillingReportsPage() {
     () => buildProjectBillingSummary(selectedProject),
     [selectedProject]
   );
-  const selectedProjectDirectCostSummary = useMemo(
-    () =>
-      buildProjectDirectCostSummaryFromReports(
-        reports.map((report) => ({
-          billableAmount: report.billableAmount,
-          inventoryMovements: report.inventoryMovements || []
-        }))
-      ),
-    [reports]
-  );
-  const selectedProjectOperationalKpis = useMemo(
-    () =>
-      buildProjectOperationalKpiSummaryFromReports(
-        reports.map((report) => ({
-          totalMetersDrilled: report.totalMetersDrilled,
-          workHours: report.workHours,
-          inventoryMovements: report.inventoryMovements || []
-        }))
-      ),
-    [reports]
-  );
   const selectedReportDirectCostSummary = useMemo(
     () =>
       selectedReport
@@ -395,14 +370,14 @@ export default function DrillingReportsPage() {
 
   const canEditReport = useCallback(
     (report: DrillReportRecord) => {
-      if (report.approvalStatus === "APPROVED") return false;
+      if (!canCreateReport || selectedProject?.status !== "ACTIVE" || report.approvalStatus === "APPROVED") return false;
       const elevatedEditor = canUseElevatedDrillingEdit(user?.role);
       if (elevatedEditor) {
         return true;
       }
-      return !report.submittedBy?.id || report.submittedBy.id === user?.id;
+      return Boolean(user?.id && report.submittedBy?.id === user.id);
     },
-    [user?.id, user?.role]
+    [canCreateReport, selectedProject?.status, user?.id, user?.role]
   );
 
   const formProject = useMemo(
@@ -438,11 +413,7 @@ export default function DrillingReportsPage() {
   }, [formProjectRigOptions]);
 
   useEffect(() => {
-    if (!canCreateReport || !isSingleProjectScope || !scopedProjectId) {
-      setIsFormOpen(false);
-      return;
-    }
-    setIsFormOpen(true);
+    setIsFormOpen(false);
   }, [canCreateReport, isSingleProjectScope, scopedProjectId]);
 
   useEffect(() => {
@@ -636,7 +607,7 @@ export default function DrillingReportsPage() {
     [filters]
   );
 
-  const { focusedRowId, focusedSectionId, reportingWorkflowAssist } = useDrillingReportsFocus({
+  const { focusedRowId, focusedSectionId } = useDrillingReportsFocus({
     filters,
     stats,
     reports,
@@ -863,39 +834,20 @@ export default function DrillingReportsPage() {
           />
         ) : null}
 
-        <DrillingReportsProjectSummarySection
-          selectedProject={selectedProject}
-          selectedProjectRigsLabel={selectedProjectRigsLabel}
-          selectedProjectBillingSummary={selectedProjectBillingSummary}
-          selectedProjectDirectCostSummary={selectedProjectDirectCostSummary}
-          selectedProjectOperationalKpis={selectedProjectOperationalKpis}
-          stats={stats}
-        />
-
         <Card
-          className="hidden"
-          title="Record-first workspace"
-          subtitle="Use this page to create and edit drilling reports. Analysis and report browsing now live in Project Operations."
+          title="Review report status"
           action={
             <Link href={spendingReportsHref} className="gf-btn-subtle">
-              View reports in Project Operations
+              View approved reports
             </Link>
           }
         >
-          <div className="grid gap-3 md:grid-cols-3">
-            <SummaryItem label="Total meters drilled" value={formatNumber(stats.totalMeters)} />
-            <SummaryItem label="Total reports" value={String(stats.reportsLogged)} />
-            <SummaryItem label="Average work hours" value={formatNumber(stats.averageWorkHours)} />
-          </div>
-          <p className="mt-3 text-xs text-slate-600">
-            Record/edit stays here. Report list and detail are now in Project Operations to keep finance + report context together.
+          <p className="text-sm text-slate-600">
+            Check submissions and correct rejected reports. Only approved reports count toward revenue.
           </p>
         </Card>
 
-        <section className="hidden grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(320px,1fr)]">
-          <div className="xl:col-span-2">
-            <WorkflowAssistPanel model={reportingWorkflowAssist} />
-          </div>
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(320px,1fr)]">
           <DrillingReportsBrowserSection
             focusedSectionId={focusedSectionId}
             focusedRowId={focusedRowId}
@@ -905,9 +857,10 @@ export default function DrillingReportsPage() {
             reports={reports}
             selectedReportId={selectedReportId}
             onSelectReport={setSelectedReportId}
-            canCreateReport={canCreateReport}
+            canCreateReport={canCreateReport && selectedProject?.status === "ACTIVE"}
             onCreateReport={openCreateReportModal}
             selectedReport={selectedReport}
+            canViewFinance={Boolean(user?.role && canAccess(user.role, "finance:view"))}
             selectedReportDirectCostSummary={selectedReportDirectCostSummary}
             selectedReportOperationalKpis={selectedReportOperationalKpis}
             buildInventoryMovementHref={(movementId) =>
@@ -918,7 +871,7 @@ export default function DrillingReportsPage() {
             }
             canEditReport={canEditReport}
             onEditReport={openEditReportModal}
-            canReopenReport={canUseElevatedDrillingEdit(user?.role)}
+            canReopenReport={selectedProject?.status === "ACTIVE" && canUseElevatedDrillingEdit(user?.role)}
             onReopenReport={async (reportId) => {
               const response = await fetch(`/api/drilling-reports/${encodeURIComponent(reportId)}/status`, {
                 method: "POST",

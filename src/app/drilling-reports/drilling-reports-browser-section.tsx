@@ -29,6 +29,7 @@ interface DrillingReportsBrowserSectionProps {
   canCreateReport: boolean;
   onCreateReport: () => void;
   selectedReport: DrillReportRecord | null;
+  canViewFinance: boolean;
   selectedReportDirectCostSummary: DrillReportDirectCostSummary | null;
   selectedReportOperationalKpis: DrillOperationalKpiSummary | null;
   buildInventoryMovementHref: (movementId: string) => string;
@@ -50,6 +51,7 @@ export function DrillingReportsBrowserSection({
   canCreateReport,
   onCreateReport,
   selectedReport,
+  canViewFinance,
   selectedReportDirectCostSummary,
   selectedReportOperationalKpis,
   buildInventoryMovementHref,
@@ -185,10 +187,12 @@ export function DrillingReportsBrowserSection({
                 <DetailRow label="Crew" value={formatCrewSummary(selectedReport)} />
                 <DetailRow label="Approval status" value={formatApprovalStatus(selectedReport.approvalStatus)} />
                 {selectedReport.rejectionReason && <DetailRow label="Rejection reason" value={selectedReport.rejectionReason} />}
-                <DetailRow
-                  label={selectedReport.approvalStatus === "APPROVED" ? "Revenue" : "Estimated revenue"}
-                  value={formatCurrency(selectedReport.billableAmount)}
-                />
+                {canViewFinance && (
+                  <DetailRow
+                    label={selectedReport.approvalStatus === "APPROVED" ? "Revenue" : "Estimated revenue"}
+                    value={formatCurrency(selectedReport.billableAmount)}
+                  />
+                )}
                 <DetailRow label="Comments" value={selectedReport.comments || "-"} />
                 <DetailRow label="Recorded by" value={selectedReport.submittedBy?.fullName || "-"} />
                 <DetailRow
@@ -199,7 +203,7 @@ export function DrillingReportsBrowserSection({
                 <DetailRow label="Updated At" value={formatDateTime(selectedReport.updatedAt)} />
               </div>
 
-              {selectedReportDirectCostSummary ? (
+              {canViewFinance && selectedReport.approvalStatus === "APPROVED" && selectedReportDirectCostSummary ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Basic financial summary
@@ -237,18 +241,18 @@ export function DrillingReportsBrowserSection({
                           : formatNumber(selectedReportOperationalKpis.metersPerHour)
                       }
                     />
-                    <DetailRow
+                    {canViewFinance && <DetailRow
                       label="Consumables cost used"
                       value={formatCurrency(selectedReportOperationalKpis.consumablesCostUsed)}
-                    />
-                    <DetailRow
+                    />}
+                    {canViewFinance && <DetailRow
                       label="Consumables cost per meter"
                       value={
                         selectedReportOperationalKpis.consumablesCostPerMeter === null
                           ? "—"
                           : formatCurrency(selectedReportOperationalKpis.consumablesCostPerMeter)
                       }
-                    />
+                    />}
                   </div>
                   <p className="mt-2 text-xs text-slate-600">
                     Operational KPIs only: based on drilling activity and consumables used. This is not full project margin.
@@ -274,7 +278,7 @@ export function DrillingReportsBrowserSection({
                         <p className="truncate">
                           {formatNumber(movementRow.quantity)} x {movementRow.item?.name || "Item"}
                         </p>
-                        <p className="font-medium">{formatCurrency(movementRow.totalCost || 0)}</p>
+                        {canViewFinance && <p className="font-medium">{formatCurrency(movementRow.totalCost || 0)}</p>}
                         {movementRow.id ? (
                           <a
                             href={buildInventoryMovementHref(movementRow.id)}
