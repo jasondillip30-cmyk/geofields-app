@@ -135,7 +135,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen overflow-x-hidden bg-app-gradient">
+    <div className="min-h-screen overflow-x-clip bg-app-gradient">
       <AnalyticsFiltersProvider>
         <AiCopilotProvider>
           <ChunkLoadRecovery />

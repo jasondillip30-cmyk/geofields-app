@@ -118,7 +118,7 @@ export function MetricCard({
   const interactive = Boolean(href) && !disabled;
   const content = (
     <>
-      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="break-words text-[13px] font-semibold uppercase tracking-wide text-slate-600 sm:text-xs">{label}</p>
       <p className="mt-1.5 text-[1.72rem] font-semibold tracking-tight text-ink-900">{value}</p>
       {change && <p className={cn("mt-2 text-sm font-medium", toneClass[tone])}>{change}</p>}
       {!interactive && href && (

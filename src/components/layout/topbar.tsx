@@ -528,16 +528,16 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
       className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur md:px-6"
     >
       <div className="space-y-2.5">
-        <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight text-ink-900">{pageMeta.title}</h1>
+            <h1 className="break-words text-lg font-semibold tracking-tight text-ink-900 sm:text-xl">{pageMeta.title}</h1>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <button
               type="button"
               onClick={onToggleSidebar}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-ink-700 hover:bg-slate-50 lg:hidden"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white text-ink-700 hover:bg-slate-50 lg:hidden"
               aria-label="Open navigation menu"
             >
               <PanelLeft size={16} />
@@ -555,7 +555,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               <button
                 type="button"
                 onClick={triggerOpenLaunch}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50"
+                className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-ink-700 hover:bg-slate-50 lg:min-h-0 lg:text-xs"
               >
                 Globe view
               </button>
@@ -580,7 +580,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               <button
                 type="button"
                 onClick={() => void logout()}
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50 sm:hidden"
+                className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-ink-700 hover:bg-slate-50 sm:hidden"
               >
                 Logout
               </button>
@@ -588,16 +588,13 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-2.5">
-          <div className="flex items-start justify-between gap-2 lg:hidden">
-            <div className="min-w-0 space-y-0.5">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Date</p>
-              <p className="truncate text-sm font-medium text-ink-900">{dateRangeSummary}</p>
-            </div>
+        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-1 lg:py-2.5">
+          <div className="flex items-center justify-between gap-2 lg:hidden">
+            <p className="min-w-0 truncate text-sm font-medium text-ink-900">{dateRangeSummary}</p>
             <button
               type="button"
               onClick={() => setMobileFiltersOpen(true)}
-              className="gf-btn-secondary px-3 py-2 text-xs"
+              className="gf-btn-secondary min-h-11 shrink-0 px-3 py-2 text-sm"
             >
               Date
             </button>
@@ -685,7 +682,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               </span>
             ) : null}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <div className="mb-1 mt-1 flex flex-wrap items-center gap-2 text-[13px] lg:mb-0 lg:mt-2 lg:text-xs">
             <span
               className={cn(
                 "rounded-full px-2.5 py-0.5",

@@ -20,7 +20,11 @@ export function ProjectRecordDrilling({ projectId, reportsHref }: { projectId: s
       >
         Record drilling
       </button>
-      {submitted && <p role="status" className="mt-2 text-sm text-emerald-800">Report submitted for approval.</p>}
+      {submitted && (
+        <p role="status" className="mt-2 text-sm text-emerald-800">
+          Report submitted for approval. It will count toward revenue after approval.
+        </p>
+      )}
       {open && (
         <DrillingEntry
           open={open}
