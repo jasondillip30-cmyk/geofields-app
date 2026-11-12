@@ -99,6 +99,7 @@ interface RequisitionWorkflowLayoutProps {
   estimatedTotal: number;
   setupLoading: boolean;
   categoryOptions: RequisitionCategoryOption[];
+  shortageCategory: { inventoryLabel: string; suggestedName?: string } | null;
   unitOptions: string[];
   hasStartedRequest: boolean;
   loading: boolean;
@@ -145,6 +146,7 @@ export function RequisitionWorkflowLayout({
   estimatedTotal,
   setupLoading,
   categoryOptions,
+  shortageCategory,
   unitOptions,
   hasStartedRequest,
   loading,
@@ -246,6 +248,7 @@ export function RequisitionWorkflowLayout({
               unitOptions={unitOptions}
               estimatedTotal={estimatedTotal}
               categoryOptions={categoryOptions}
+              shortageCategory={shortageCategory}
               setupLoading={setupLoading}
               applyCategorySelection={autocomplete.applyCategorySelection}
               onSubcategoryFocus={() => autocomplete.setSubcategoryFocused(true)}

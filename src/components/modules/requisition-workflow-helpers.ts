@@ -1,10 +1,36 @@
 import { normalizeNameForComparison } from "@/lib/name-normalization";
+import { formatInventoryCategory } from "@/lib/inventory";
 import type {
   InventoryReason,
   MaintenancePriority,
+  RequisitionCategoryOption,
   RequisitionRow,
   RequisitionType
 } from "./requisition-workflow-types";
+
+const confirmedPurchaseCategories: Readonly<Partial<Record<string, string>>> = {
+  HYDRAULIC: "Materials"
+};
+
+export function resolveShortagePurchaseCategory(
+  inventoryCategory: string | null | undefined,
+  categories: RequisitionCategoryOption[]
+) {
+  const key = inventoryCategory?.trim().toUpperCase();
+  const inventoryLabel = formatInventoryCategory(key);
+  if (!key) return { inventoryLabel, category: null };
+
+  const matches = (name: string) => categories.filter(
+    (category) => normalizeSearchText(category.name) === normalizeSearchText(name)
+  );
+  const exactMatches = matches(inventoryLabel);
+  if (exactMatches.length > 0) {
+    return { inventoryLabel, category: exactMatches.length === 1 ? exactMatches[0] : null };
+  }
+  const mappedName = confirmedPurchaseCategories[key];
+  const mappedMatches = mappedName ? matches(mappedName) : [];
+  return { inventoryLabel, category: mappedMatches.length === 1 ? mappedMatches[0] : null };
+}
 
 export function buildRequisitionRowSummary({
   row,

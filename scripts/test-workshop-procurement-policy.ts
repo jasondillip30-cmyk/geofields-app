@@ -15,6 +15,23 @@ import {
   canOpenMaintenanceForRig
 } from "../src/lib/maintenance-workflow";
 import { resolveWorkspaceRouteRule } from "../src/lib/workspace-mode";
+import { resolveShortagePurchaseCategory } from "../src/components/modules/requisition-workflow-helpers";
+
+const materials = { id: "materials", name: "Materials" };
+const hydraulic = { id: "hydraulic", name: "Hydraulic" };
+const spareParts = { id: "spare-parts", name: "Spare Parts" };
+assert.deepEqual(resolveShortagePurchaseCategory("HYDRAULIC", [materials]), {
+  inventoryLabel: "Hydraulic",
+  category: materials
+});
+assert.equal(resolveShortagePurchaseCategory("HYDRAULIC", [materials, hydraulic]).category, hydraulic);
+assert.equal(resolveShortagePurchaseCategory("SPARE_PARTS", [spareParts]).category, spareParts);
+assert.equal(resolveShortagePurchaseCategory("OILS", [materials]).category, null);
+assert.equal(resolveShortagePurchaseCategory("HYDRAULIC", []).category, null);
+assert.equal(
+  resolveShortagePurchaseCategory("HYDRAULIC", [materials, { id: "other", name: "materials" }]).category,
+  null
+);
 
 const workshopRoles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC"] as const;
 for (const role of workshopRoles) {

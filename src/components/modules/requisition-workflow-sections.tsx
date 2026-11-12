@@ -550,6 +550,7 @@ interface RequisitionStepThreeSectionProps {
   unitOptions: string[];
   estimatedTotal: number;
   categoryOptions: RequisitionCategoryOption[];
+  shortageCategory: { inventoryLabel: string; suggestedName?: string } | null;
   setupLoading: boolean;
   applyCategorySelection: (categoryId: string) => void;
   onSubcategoryFocus: () => void;
@@ -580,6 +581,7 @@ export function RequisitionStepThreeSection({
   unitOptions,
   estimatedTotal,
   categoryOptions,
+  shortageCategory,
   setupLoading,
   applyCategorySelection,
   onSubcategoryFocus,
@@ -728,6 +730,14 @@ export function RequisitionStepThreeSection({
             <p className="mt-1 text-xs text-amber-800">
               No categories are configured in setup yet. Add setup categories before submitting
               requests.
+            </p>
+          )}
+          {shortageCategory && categoryOptions.length > 0 && (
+            <p className="mt-1 text-xs text-slate-600">
+              Inventory category: {shortageCategory.inventoryLabel}.{" "}
+              {shortageCategory.suggestedName
+                ? `Suggested purchase category: ${shortageCategory.suggestedName}. Confirm or change it.`
+                : "Choose a purchase category for this item."}
             </p>
           )}
         </label>

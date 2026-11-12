@@ -17,7 +17,8 @@ import {
   buildRequisitionRowSummary,
   formatIsoDate,
   isMaintenanceRecordOpen,
-  normalizeSearchText
+  normalizeSearchText,
+  resolveShortagePurchaseCategory
 } from "./requisition-workflow-helpers";
 import { useRequisitionWorkflowAutocomplete } from "./requisition-workflow-autocomplete";
 import {
@@ -83,6 +84,11 @@ export function RequisitionWorkflowCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [shortageCategory, setShortageCategory] = useState<{
+    requestId: string;
+    inventoryLabel: string;
+    suggestedName?: string;
+  } | null>(null);
   const [statusFilter, setStatusFilter] = useState<RequisitionStatus | "all">("all");
   const [rows, setRows] = useState<RequisitionRow[]>([]);
   const [setupCategories, setSetupCategories] = useState<RequisitionCategoryOption[]>([]);
@@ -415,21 +421,24 @@ export function RequisitionWorkflowCard({
         }
         const quantityInStock = Number(shortage.item?.quantityInStock || 0);
         const replenishQuantity = Math.max(0, Number(shortage.quantity || 0) - quantityInStock);
-        const itemCategory = normalizeSearchText(shortage.item?.category || "");
-        const category = setupCategories.find(
-          (entry) => normalizeSearchText(entry.name) === itemCategory
+        const { inventoryLabel, category } = resolveShortagePurchaseCategory(
+          shortage.item?.category,
+          setupCategories
         );
         if (cancelled) {
           return;
         }
+        setShortageCategory({ requestId: shortage.id, inventoryLabel, suggestedName: category?.name });
         setForm((current) => ({
           ...current,
           sourceUsageRequestId: shortage.id,
           type: "INVENTORY_STOCK_UP",
           inventoryReason: "LOW_STOCK",
           stockLocationId: shortage.locationId || shortage.item?.locationId || current.stockLocationId,
-          categoryId: category?.id || current.categoryId,
-          category: category?.name || current.category,
+          categoryId: category?.id || "",
+          category: category?.name || "",
+          subcategoryId: "",
+          subcategory: "",
           shortReason: `Replenish stock for usage request ${shortage.id}: ${shortage.reason}`,
           itemName: shortage.item?.name || current.itemName,
           quantity: replenishQuantity > 0 ? String(replenishQuantity) : current.quantity,
@@ -1038,6 +1047,7 @@ export function RequisitionWorkflowCard({
       estimatedTotal={estimatedTotal}
       setupLoading={setupLoading}
       categoryOptions={categoryOptions}
+      shortageCategory={shortageCategory?.requestId === form.sourceUsageRequestId ? shortageCategory : null}
       unitOptions={unitOptions}
       hasStartedRequest={hasStartedRequest}
       loading={loading}
