@@ -1,6 +1,7 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 import { roundCurrency } from "@/lib/inventory-server";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 import { buildProjectConsumablesPool } from "@/lib/project-consumables-pool";
 
 export interface DrillReportConsumableInput {
@@ -119,10 +120,7 @@ export async function postDrillReportConsumablesUsage({
     return;
   }
 
-  // Serialize approvals that draw from the same stock before rechecking availability.
-  await tx.$queryRaw`SELECT id FROM "InventoryItem"
-    WHERE id IN (${Prisma.join(lines.map((line) => line.itemId))})
-    ORDER BY id FOR UPDATE`;
+  await lockInventoryStock(tx, lines.map((line) => line.itemId));
   const poolByItemId = await validateDrillReportConsumables(tx, projectId, lines);
 
   for (const line of lines) {

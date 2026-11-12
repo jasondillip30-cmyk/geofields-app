@@ -19,6 +19,7 @@ import {
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 import { postStockCorrection } from "@/lib/inventory-stock-corrections";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 
 export const runtime = "nodejs";
 
@@ -335,33 +336,29 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const deltaQuantity = resolveDeltaQuantity(input.movementType, input.quantity);
-  const nextStock = roundCurrency(item.quantityInStock + deltaQuantity);
-  if (nextStock < 0 && !(input.allowNegativeStock && auth.session.role === "ADMIN")) {
-    return NextResponse.json(
-      {
-        message: `Stock cannot go negative. Current stock: ${item.quantityInStock}, requested change: ${deltaQuantity}.`
-      },
-      { status: 409 }
-    );
-  }
-
-  const effectiveUnitCost = input.unitCost ?? item.unitCost;
   const resolvedBreakdownReportId =
     input.breakdownReportId || maintenanceRequest?.breakdownReportId || null;
-  const totalCost =
-    input.totalCost !== null
-      ? roundCurrency(input.totalCost)
-      : roundCurrency(Math.abs(input.quantity) * Math.max(0, effectiveUnitCost || 0));
-
-  const nextLocationId =
-    input.movementType === "TRANSFER"
-      ? input.locationToId || item.locationId
-      : input.movementType === "IN"
-        ? input.locationToId || item.locationId
-        : item.locationId;
 
   const result = await prisma.$transaction(async (tx) => {
+    await lockInventoryStock(tx, [item.id]);
+    const current = await tx.inventoryItem.findUnique({ where: { id: item.id } });
+    if (!current) return { status: 404, message: "Inventory item not found." } as const;
+    const deltaQuantity = resolveDeltaQuantity(input.movementType, input.quantity);
+    const nextStock = roundCurrency(current.quantityInStock + deltaQuantity);
+    if (nextStock < 0 && !(input.allowNegativeStock && auth.session.role === "ADMIN")) {
+      return {
+        status: 409,
+        message: `Stock cannot go negative. Current stock: ${current.quantityInStock}, requested change: ${deltaQuantity}.`
+      } as const;
+    }
+    const effectiveUnitCost = input.unitCost ?? current.unitCost;
+    const totalCost = input.totalCost !== null
+      ? roundCurrency(input.totalCost)
+      : roundCurrency(Math.abs(input.quantity) * Math.max(0, effectiveUnitCost || 0));
+    const nextLocationId = input.movementType === "TRANSFER" || input.movementType === "IN"
+      ? input.locationToId || current.locationId
+      : current.locationId;
+
     let createdExpenseId = input.expenseId;
     if (!createdExpenseId && input.createExpense) {
       const expenseApprovalStatus = resolveExpenseApprovalStatus({
@@ -448,25 +445,17 @@ export async function POST(request: NextRequest) {
         drillReportId: input.drillReportId,
         breakdownReportId: resolvedBreakdownReportId,
         totalCost,
-        previousStock: item.quantityInStock,
+        previousStock: current.quantityInStock,
         nextStock
       },
       actor: auditActorFromSession(auth.session)
     });
 
-    return createdMovement;
+    return { data: createdMovement, meta: { previousStock: current.quantityInStock, nextStock } };
   });
 
-  return NextResponse.json(
-    {
-      data: result,
-      meta: {
-        previousStock: item.quantityInStock,
-        nextStock
-      }
-    },
-    { status: 201 }
-  );
+  if ("message" in result) return NextResponse.json({ message: result.message }, { status: result.status });
+  return NextResponse.json(result, { status: 201 });
 }
 
 async function parseMovementInput(request: NextRequest) {

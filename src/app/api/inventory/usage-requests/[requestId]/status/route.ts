@@ -8,6 +8,7 @@ import {
   deriveInventoryUsageReasonType
 } from "@/lib/inventory-usage-context";
 import { roundCurrency } from "@/lib/inventory-server";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 import { prisma } from "@/lib/prisma";
 
 const includeRequest = {
@@ -95,27 +96,34 @@ export async function POST(
   }
 
   if (action === "reject") {
-    const rejected = await prisma.inventoryUsageRequest.update({
-      where: { id: requestId },
-      data: {
-        status: "REJECTED",
-        decisionNote: note || null,
-        decidedById: auth.session.userId,
-        decidedAt: new Date()
-      }
+    const rejected = await prisma.$transaction(async (tx) => {
+      const changed = await tx.inventoryUsageRequest.updateMany({
+        where: { id: requestId, status: existing.status, approvedMovementId: null },
+        data: {
+          status: "REJECTED",
+          decisionNote: note,
+          decidedById: auth.session.userId,
+          decidedAt: new Date()
+        }
+      });
+      if (changed.count === 0) return null;
+      const next = await tx.inventoryUsageRequest.findUniqueOrThrow({ where: { id: requestId } });
+      await recordAuditLog({
+        db: tx,
+        module: "inventory_usage_requests",
+        entityType: "inventory_usage_request",
+        entityId: next.id,
+        action: "reject",
+        description: `${auth.session.name} rejected usage request ${next.id}.`,
+        before: { status: existing.status },
+        after: { status: next.status, decisionNote: next.decisionNote },
+        actor: auditActorFromSession(auth.session)
+      });
+      return next;
     });
-
-    await recordAuditLog({
-      module: "inventory_usage_requests",
-      entityType: "inventory_usage_request",
-      entityId: rejected.id,
-      action: "reject",
-      description: `${auth.session.name} rejected usage request ${rejected.id}.`,
-      before: { status: existing.status },
-      after: { status: rejected.status, decisionNote: rejected.decisionNote },
-      actor: auditActorFromSession(auth.session)
-    });
-
+    if (!rejected) {
+      return NextResponse.json({ message: "Usage request has already changed. Refresh and try again." }, { status: 409 });
+    }
     return NextResponse.json({ data: rejected });
   }
 
@@ -231,6 +239,7 @@ export async function POST(
         throw new Error("UsageRequestAlreadyProcessed");
       }
 
+      await lockInventoryStock(tx, [existing.itemId]);
       const currentItem = await tx.inventoryItem.findUnique({
         where: { id: existing.itemId },
         select: { id: true, quantityInStock: true, unitCost: true, locationId: true }

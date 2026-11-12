@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { recordAuditLog, auditActorFromSession } from "@/lib/audit";
 import { roundCurrency } from "@/lib/inventory-server";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 import { prisma } from "@/lib/prisma";
 
 class StockCorrectionError extends Error {
@@ -42,8 +43,11 @@ export async function postStockCorrection(
       }
 
       // Serialize corrections on the stock row so the audit records the actual before and after.
-      const [item] = await tx.$queryRaw<Array<{ name: string; quantityInStock: number }>>`
-        SELECT name, "quantityInStock" FROM "InventoryItem" WHERE id = ${itemId} FOR UPDATE`;
+      await lockInventoryStock(tx, [itemId]);
+      const item = await tx.inventoryItem.findUnique({
+        where: { id: itemId },
+        select: { name: true, quantityInStock: true }
+      });
       if (!item) throw new StockCorrectionError("Inventory item not found.", 404);
       if (original && await tx.inventoryMovement.findUnique({ where: { reversalOfId: original.id }, select: { id: true } })) {
         throw new StockCorrectionError("This movement already has a reversal.", 409);

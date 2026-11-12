@@ -9,6 +9,7 @@ import {
 } from "@/lib/inventory-usage-context";
 import { roundCurrency } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 
 import {
   serializeUsageRequestBatchForClient,
@@ -221,6 +222,11 @@ export async function POST(
 
       let approvedCount = 0;
       let rejectedCount = 0;
+      if (contextType !== "DRILLING_REPORT") {
+        await lockInventoryStock(tx, existing.lines
+          .filter((line) => decisionByLineId.get(line.id)?.action === "approve")
+          .map((line) => line.itemId));
+      }
 
       for (const line of existing.lines) {
         const lineDecision = decisionByLineId.get(line.id);

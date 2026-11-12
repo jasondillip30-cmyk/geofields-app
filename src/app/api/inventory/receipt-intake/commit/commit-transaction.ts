@@ -2,6 +2,7 @@ import type { InventoryCategory } from "@prisma/client";
 
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { parseInventoryCategory, roundCurrency } from "@/lib/inventory-server";
+import { lockInventoryStock } from "@/lib/inventory-stock-lock";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
 import { derivePostReceiptUsageStatus } from "@/lib/inventory-shortage-workflow";
@@ -98,6 +99,14 @@ export async function runReceiptCommitTransaction(
         throw new Error("ReceiptSubmissionFinalizeConflict");
       }
     }
+
+    const linkedUsageId = input.parsedRequisition?.payload.sourceUsageRequestId;
+    if (linkedUsageId) {
+      // Usage approval also locks the request before its item.
+      await tx.$queryRaw`SELECT id FROM "InventoryUsageRequest" WHERE id = ${linkedUsageId} FOR NO KEY UPDATE`;
+    }
+    await lockInventoryStock(tx, input.inventoryActionLines.flatMap((line) =>
+      line.mode === "MATCH" && line.selectedItemId ? [line.selectedItemId] : []));
 
     const supplier = await resolveSupplier({
       tx,
@@ -253,10 +262,15 @@ export async function runReceiptCommitTransaction(
         }
       });
 
+      // Read under the stock lock, including any earlier receipt line for this item.
+      const { quantityInStock } = await tx.inventoryItem.findUniqueOrThrow({
+        where: { id: resolvedItem.id },
+        select: { quantityInStock: true }
+      });
       const nextStock =
         input.receiptType === "INTERNAL_TRANSFER"
-          ? roundCurrency(resolvedItem.quantityInStock)
-          : roundCurrency(resolvedItem.quantityInStock + line.quantity);
+          ? roundCurrency(quantityInStock)
+          : roundCurrency(quantityInStock + line.quantity);
       await tx.inventoryItem.update({
         where: { id: resolvedItem.id },
         data: {
