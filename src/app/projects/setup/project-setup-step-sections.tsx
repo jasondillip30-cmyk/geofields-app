@@ -172,7 +172,7 @@ export function ProjectSetupStepSections({
               </span>
             </p>
             <p className="mt-1 text-xs text-slate-600">
-              Schedule signal: {derivedProjectStatus}. Editing dates does not automatically close an existing project.
+              Schedule status: {derivedProjectStatus}. Projects close after the scheduled end date. Editing a closed project does not reopen it.
             </p>
           </div>
         </div>

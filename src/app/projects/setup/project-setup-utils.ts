@@ -9,6 +9,7 @@ import type {
   ProjectStatusOption
 } from "./project-setup-types";
 import { BILLABLE_ITEM_TEMPLATES } from "./project-setup-types";
+import { resolveScheduledProjectStatus } from "@/lib/project-status-policy";
 
 export function validateProjectSetupStep({
   form,
@@ -95,21 +96,7 @@ export function deriveStatusFromDates(startDate: string, endDate: string): Proje
   if (!startDate) {
     return "PLANNED";
   }
-  const today = new Date();
-  const start = new Date(startDate);
-  if (Number.isNaN(start.getTime())) {
-    return "PLANNED";
-  }
-  if (endDate) {
-    const end = new Date(endDate);
-    if (!Number.isNaN(end.getTime()) && end < today) {
-      return "COMPLETED";
-    }
-  }
-  if (start > today) {
-    return "PLANNED";
-  }
-  return "ACTIVE";
+  return resolveScheduledProjectStatus(new Date(startDate), endDate ? new Date(endDate) : null);
 }
 
 export function normalizeSetupProfile(value: Partial<ProjectSetupProfile> | null | undefined): ProjectSetupProfile {

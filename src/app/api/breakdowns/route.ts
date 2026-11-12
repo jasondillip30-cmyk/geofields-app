@@ -5,6 +5,7 @@ import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-gu
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { prisma } from "@/lib/prisma";
+import { resolveProjectOperationalStatus, unclosedProjectWhere } from "@/lib/project-status-policy";
 
 function parseSeverity(value: unknown): UrgencyLevel {
   if (typeof value !== "string") {
@@ -86,12 +87,17 @@ export async function POST(request: NextRequest) {
       clientId: true,
       assignedRigId: true,
       backupRigId: true,
+      endDate: true,
+      closedAt: true,
       status: true
     }
   });
 
   if (!project) {
     return NextResponse.json({ message: "Project not found." }, { status: 404 });
+  }
+  if (resolveProjectOperationalStatus(project) === "COMPLETED") {
+    return NextResponse.json({ message: "This project is closed to new breakdown reports." }, { status: 400 });
   }
 
   const allowedRigIds = [project.assignedRigId, project.backupRigId].filter(
@@ -134,8 +140,8 @@ export async function POST(request: NextRequest) {
     });
 
     if (project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.ON_HOLD) {
-      await tx.project.update({
-        where: { id: project.id },
+      await tx.project.updateMany({
+        where: { id: project.id, status: project.status, ...unclosedProjectWhere() },
         data: {
           status: ProjectStatus.ON_HOLD
         }

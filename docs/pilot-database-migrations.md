@@ -32,7 +32,7 @@ and migration history against the intended starting state before proceeding.
   and then `migrate deploy`. Investigate partial artifacts before choosing a
   recovery procedure.
 - **Current schema with no migration history.** If the schema diff is empty,
-  rehearse baselining by marking each of the five repository migrations applied,
+  rehearse baselining by marking each repository migration applied,
   in directory order, with `npx prisma migrate resolve --applied <migration-name>`.
   Then run `migrate deploy` and confirm there are no pending migrations.
 - **Other schema drift or mixed history.** Inspect the exact differences and

@@ -10,6 +10,7 @@ import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { roundCurrency } from "@/lib/inventory-server";
 import { canCreateShortageReplenishment } from "@/lib/inventory-shortage-workflow";
 import { prisma } from "@/lib/prisma";
+import { unclosedProjectWhere } from "@/lib/project-status-policy";
 import {
   buildRequisitionCode,
   parseLiveProjectSpendType,
@@ -565,7 +566,8 @@ export async function POST(request: NextRequest) {
     const activeProjectForRig = await prisma.project.findFirst({
       where: {
         assignedRigId: rigId,
-        status: "ACTIVE"
+        status: "ACTIVE",
+        ...unclosedProjectWhere()
       },
       select: {
         id: true,

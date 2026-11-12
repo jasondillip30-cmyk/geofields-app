@@ -3,11 +3,13 @@ import { notFound } from "next/navigation";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { ProjectFinancialOverview } from "@/components/modules/project-financial-overview";
+import { ProjectCloseAction } from "@/components/modules/project-close-action";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
 import { prisma } from "@/lib/prisma";
 import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
+import { resolveProjectOperationalStatus, scheduledProjectCloseout } from "@/lib/project-status-policy";
 
 type ContractType = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 
@@ -54,6 +56,8 @@ export default async function ProjectWorkspacePage({
   }
 
   const spendingHref = `/spending?workspace=project&projectId=${encodeURIComponent(project.id)}`;
+  const status = resolveProjectOperationalStatus(project);
+  const closedAt = project.closedAt ?? scheduledProjectCloseout(project.endDate);
   const drillingReportsHref = `${spendingHref}&view=drilling-reports`;
   const primaryContractRate =
     project.billingRateItems.find((line) => line.unit.toLowerCase() === "meter")?.unitRate ||
@@ -82,7 +86,7 @@ export default async function ProjectWorkspacePage({
             >
               Open Drilling reports
             </Link>
-            <AccessGate denyBehavior="redirect" permission="projects:manage">
+            <AccessGate permission="projects:manage">
               <Link
                 href={`/projects/setup?editProjectId=${project.id}`}
                 className="rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-sm font-medium text-brand-800 hover:bg-brand-100"
@@ -90,6 +94,7 @@ export default async function ProjectWorkspacePage({
                 Edit project setup
               </Link>
             </AccessGate>
+            {status !== "COMPLETED" && <ProjectCloseAction projectId={project.id} />}
             <Link href="/projects" className="text-sm text-brand-700 underline-offset-2 hover:underline">
               Back to projects
             </Link>
@@ -108,13 +113,14 @@ export default async function ProjectWorkspacePage({
               ["Project", project.name],
               ["Client", project.client.name],
               ["Site / location", project.location || "-"],
-              ["Project status", formatStatus(project.status)],
+              ["Project status", formatStatus(status)],
               ["Assigned rig", project.assignedRig?.rigCode || "Unassigned"],
               ["Backup rig", project.backupRig?.rigCode || "Unassigned"],
               ["Project type", formatProjectType(project.contractType)],
               ["Contract rate", formatProjectContractRateDisplay(project)],
               ["Start date", formatDate(project.startDate)],
-              ["End date", project.endDate ? formatDate(project.endDate) : "-"],
+              ["Scheduled end date", project.endDate ? formatDate(project.endDate) : "-"],
+              ...(closedAt ? [["Closed on", formatDate(closedAt)]] : []),
               ["Description", project.description || "-"]
             ]}
           />

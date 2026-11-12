@@ -1,4 +1,4 @@
-import { Prisma, ProjectContractType, ProjectStatus } from "@prisma/client";
+import { Prisma, ProjectContractType } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
@@ -8,7 +8,7 @@ import {
   replaceProjectBillingRateItems
 } from "@/lib/project-billing-rate-card";
 import { prisma } from "@/lib/prisma";
-import { resolveProjectStatusOnSetupSave } from "@/lib/project-status-policy";
+import { resolveProjectOperationalStatus, resolveScheduledProjectStatus, scheduledProjectCloseout } from "@/lib/project-status-policy";
 
 const PROJECT_SETUP_REPORT_TYPE = "PROJECT_SETUP_PROFILE";
 
@@ -199,9 +199,8 @@ export async function POST(request: NextRequest) {
         photoUrl: typeof body?.photoUrl === "string" ? body.photoUrl.trim() : null,
         startDate: parsedStartDate,
         endDate: parsedEndDate,
-        status: resolveProjectStatusOnSetupSave({
-          dateDerivedStatus: deriveProjectStatusFromDates(parsedStartDate, parsedEndDate)
-        }),
+        closedAt: scheduledProjectCloseout(parsedEndDate),
+        status: resolveScheduledProjectStatus(parsedStartDate, null),
         contractType,
         contractRatePerM: meterRate,
         contractDayRate: dayRate,
@@ -239,7 +238,7 @@ export async function POST(request: NextRequest) {
     return inserted;
   });
 
-  return NextResponse.json({ data: created }, { status: 201 });
+  return NextResponse.json({ data: { ...created, status: resolveProjectOperationalStatus(created) } }, { status: 201 });
 }
 
 function projectAuditSnapshot(project: {
@@ -335,28 +334,6 @@ function parseNonNegativeNumber(value: unknown) {
   return parsed;
 }
 
-function deriveProjectStatusFromDates(startDate: Date, endDate: Date | null): ProjectStatus {
-  if (Number.isNaN(startDate.getTime())) {
-    return ProjectStatus.PLANNED;
-  }
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-
-  if (start > today) {
-    return ProjectStatus.PLANNED;
-  }
-
-  if (endDate && !Number.isNaN(endDate.getTime())) {
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-    if (end < today) {
-      return ProjectStatus.COMPLETED;
-    }
-  }
-
-  return ProjectStatus.ACTIVE;
-}
-
 function parseProjectSetupProfileFromReport(payloadJson: string | null): ParsedProjectSetupProfile {
   if (!payloadJson) {
     return {
@@ -389,6 +366,7 @@ function mapProjectRecord(project: ProjectRecordWithSetup) {
   const setupProfile = parseProjectSetupProfileFromReport(setupReport?.payloadJson || null);
   return {
     ...project,
+    status: resolveProjectOperationalStatus(project),
     setupProfile,
     budgetAmount: activeBudget?.amount || null,
     billingRateItems: project.billingRateItems

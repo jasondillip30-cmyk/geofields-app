@@ -254,6 +254,7 @@ model Project {
   photoUrl           String?
   startDate          DateTime
   endDate            DateTime?
+  closedAt           DateTime?
   status             ProjectStatus        @default(PLANNED)
   contractType       ProjectContractType  @default(PER_METER)
   contractRatePerM   Float                @default(0)

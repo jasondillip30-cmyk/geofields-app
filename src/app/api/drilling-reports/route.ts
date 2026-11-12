@@ -21,6 +21,8 @@ import {
 } from "@/lib/drill-report-delay-reasons";
 import { evaluateDrillReportHoleContinuity } from "@/lib/drill-report-continuity";
 import { prisma } from "@/lib/prisma";
+import { assertActiveProjectForDrilling, ProjectClosedForDrillingError } from "@/lib/project-drilling-guard";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 const reportInclude = {
   client: { select: { id: true, name: true } },
@@ -175,6 +177,8 @@ export async function POST(request: NextRequest) {
         id: true,
         clientId: true,
         status: true,
+        endDate: true,
+        closedAt: true,
         contractRatePerM: true,
         assignedRigId: true,
         backupRigId: true
@@ -200,7 +204,7 @@ export async function POST(request: NextRequest) {
   if (!project) {
     return NextResponse.json({ message: "Project not found." }, { status: 404 });
   }
-  if (project.status !== "ACTIVE") {
+  if (resolveProjectOperationalStatus(project) !== "ACTIVE") {
     return NextResponse.json({ message: "Only ACTIVE projects can receive daily drilling reports." }, { status: 400 });
   }
   const allowedRigIds = [project.assignedRigId, project.backupRigId].filter(
@@ -278,6 +282,7 @@ export async function POST(request: NextRequest) {
   let created: Awaited<ReturnType<typeof prisma.drillReport.findUniqueOrThrow>>;
   try {
     created = await prisma.$transaction(async (tx) => {
+      await assertActiveProjectForDrilling(tx, projectId);
       const insertedBase = await tx.drillReport.create({
         data: {
           date: reportDate,
@@ -345,7 +350,7 @@ export async function POST(request: NextRequest) {
       return inserted;
     });
   } catch (error) {
-    if (error instanceof DrillReportConsumablesValidationError) {
+    if (error instanceof DrillReportConsumablesValidationError || error instanceof ProjectClosedForDrillingError) {
       return NextResponse.json({ message: error.message }, { status: 400 });
     }
     throw error;

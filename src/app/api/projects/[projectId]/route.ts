@@ -1,4 +1,4 @@
-import { Prisma, ProjectContractType, ProjectStatus } from "@prisma/client";
+import { Prisma, ProjectContractType } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
@@ -8,7 +8,7 @@ import {
   replaceProjectBillingRateItems
 } from "@/lib/project-billing-rate-card";
 import { prisma } from "@/lib/prisma";
-import { resolveProjectStatusOnSetupSave } from "@/lib/project-status-policy";
+import { resolveProjectOperationalStatus, scheduledProjectCloseout } from "@/lib/project-status-policy";
 
 const PROJECT_SETUP_REPORT_TYPE = "PROJECT_SETUP_PROFILE";
 
@@ -90,10 +90,11 @@ export async function PUT(
   const parsedStartDate = new Date(startDate);
   const parsedEndDate =
     typeof body?.endDate === "string" && body.endDate ? new Date(body.endDate) : null;
+  const closedAt = existing.closedAt ?? scheduledProjectCloseout(existing.endDate) ?? scheduledProjectCloseout(parsedEndDate);
 
   const updated = await prisma.$transaction(async (tx) => {
     const next = await tx.project.update({
-      where: { id: projectId },
+      where: { id: projectId, updatedAt: existing.updatedAt },
       data: {
         name,
         clientId,
@@ -102,10 +103,7 @@ export async function PUT(
         photoUrl: typeof body?.photoUrl === "string" ? body.photoUrl.trim() : null,
         startDate: parsedStartDate,
         endDate: parsedEndDate,
-        status: resolveProjectStatusOnSetupSave({
-          existingStatus: existing.status,
-          dateDerivedStatus: deriveProjectStatusFromDates(parsedStartDate, parsedEndDate)
-        }),
+        closedAt,
         contractType,
         contractRatePerM: meterRate,
         contractDayRate: dayRate,
@@ -144,9 +142,15 @@ export async function PUT(
     });
 
     return next;
+  }).catch((error: unknown) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") return null;
+    throw error;
   });
 
-  return NextResponse.json({ data: updated });
+  if (!updated) {
+    return NextResponse.json({ message: "The project changed. Refresh before saving again." }, { status: 409 });
+  }
+  return NextResponse.json({ data: { ...updated, status: resolveProjectOperationalStatus(updated) } });
 }
 
 export async function DELETE(
@@ -368,28 +372,6 @@ function parseNonNegativeNumber(value: unknown) {
     return 0;
   }
   return parsed;
-}
-
-function deriveProjectStatusFromDates(startDate: Date, endDate: Date | null): ProjectStatus {
-  if (Number.isNaN(startDate.getTime())) {
-    return ProjectStatus.PLANNED;
-  }
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const start = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate());
-
-  if (start > today) {
-    return ProjectStatus.PLANNED;
-  }
-
-  if (endDate && !Number.isNaN(endDate.getTime())) {
-    const end = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate());
-    if (end < today) {
-      return ProjectStatus.COMPLETED;
-    }
-  }
-
-  return ProjectStatus.ACTIVE;
 }
 
 async function upsertProjectSetupArtifacts(

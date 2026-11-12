@@ -11,6 +11,7 @@ import {
   maintenanceRigEligibilityMessage
 } from "@/lib/maintenance-workflow";
 import { prisma } from "@/lib/prisma";
+import { unclosedProjectWhere } from "@/lib/project-status-policy";
 
 const maintenanceInclude = {
   rig: { select: { id: true, rigCode: true, status: true } },
@@ -144,7 +145,8 @@ export async function POST(request: NextRequest) {
       prisma.project.findFirst({
         where: {
           assignedRigId: rigId,
-          status: "ACTIVE"
+          status: "ACTIVE",
+          ...unclosedProjectWhere()
         },
         select: {
           id: true,

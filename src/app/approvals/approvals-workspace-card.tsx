@@ -384,7 +384,10 @@ export function ApprovalsWorkspaceCard({
           loading ? (
             <p className="text-sm text-ink-600">Loading submitted drilling reports...</p>
           ) : sortedDrillingRows.length === 0 ? (
-            <p className="text-sm text-ink-600">No submitted drilling reports pending approval for current filters.</p>
+            <p className="text-sm text-ink-600">
+              New drilling reports are auto-approved. Reports explicitly submitted for review appear here.
+              No reports are waiting for review in this view.
+            </p>
           ) : (
             <div
               id={APPROVAL_SECTION_IDS.drilling}
@@ -394,6 +397,9 @@ export function ApprovalsWorkspaceCard({
                   : ""
               }`}
             >
+              <p className="border-b border-slate-200 px-3 py-2 text-xs text-ink-600">
+                New drilling reports are auto-approved. This queue shows reports explicitly submitted for review.
+              </p>
               {!canManageDrillingApprovals ? (
                 <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
                   View only: drilling approval actions are available to ADMIN and MANAGER roles.

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireAnyApiPermission, requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 export async function GET(request: NextRequest) {
   const auth = await requireAnyApiPermission(request, ["clients:view", "inventory:view"]);
@@ -18,19 +19,28 @@ export async function GET(request: NextRequest) {
   const hasDateFilter = Boolean(fromDate || toDate);
   const hasScopeFilter = Boolean(clientId || rigId || hasDateFilter);
 
-  const clients = await prisma.client.findMany({
+  const clientRows = await prisma.client.findMany({
     orderBy: { createdAt: "desc" },
     include: {
       projects: {
         select: {
           id: true,
           status: true,
+          endDate: true,
+          closedAt: true,
           assignedRigId: true,
           backupRigId: true
         }
       }
     }
   });
+  const clients = clientRows.map((client) => ({
+    ...client,
+    projects: client.projects.map(({ endDate, closedAt, ...project }) => ({
+      ...project,
+      status: resolveProjectOperationalStatus({ ...project, endDate, closedAt })
+    }))
+  }));
 
   if (projectId) {
     const scopedProject = await prisma.project.findUnique({

@@ -5,6 +5,7 @@ import { requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { isBreakdownOpenStatus, normalizeBreakdownStatus } from "@/lib/breakdown-lifecycle";
 import { prisma } from "@/lib/prisma";
+import { unclosedProjectWhere } from "@/lib/project-status-policy";
 
 interface RouteParams {
   params: Promise<{
@@ -163,13 +164,13 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
 
     let projectStatusApplied: ProjectStatus | null = null;
     if (!hasOtherOpenProjectBreakdown && next.project.status === ProjectStatus.ON_HOLD) {
-      projectStatusApplied = ProjectStatus.ACTIVE;
-      await tx.project.update({
-        where: { id: next.projectId },
+      const updatedProject = await tx.project.updateMany({
+        where: { id: next.projectId, status: ProjectStatus.ON_HOLD, ...unclosedProjectWhere() },
         data: {
           status: ProjectStatus.ACTIVE
         }
       });
+      if (updatedProject.count) projectStatusApplied = ProjectStatus.ACTIVE;
     }
 
     let rigStatusApplied: RigStatus | null = null;
@@ -177,7 +178,8 @@ export async function PATCH(request: NextRequest, context: RouteParams) {
       const activeAssignments = await tx.project.count({
         where: {
           assignedRigId: next.rigId,
-          status: ProjectStatus.ACTIVE
+          status: ProjectStatus.ACTIVE,
+          ...unclosedProjectWhere()
         }
       });
       rigStatusApplied = activeAssignments > 0 ? RigStatus.ACTIVE : RigStatus.IDLE;

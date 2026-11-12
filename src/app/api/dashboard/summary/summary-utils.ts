@@ -1,7 +1,8 @@
-import type { RigStatus } from "@prisma/client";
+import type { ProjectStatus, RigStatus } from "@prisma/client";
 
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 interface RigProfitAccumulator {
   id: string;
@@ -256,7 +257,9 @@ export function buildProjectAssignments({
     clientId: string;
     name: string;
     location: string;
-    status: string;
+    status: ProjectStatus;
+    endDate: Date | null;
+    closedAt: Date | null;
     contractType: "PER_METER" | "DAY_RATE" | "LUMP_SUM";
     contractRatePerM: number;
     contractDayRate: number;
@@ -300,7 +303,7 @@ export function buildProjectAssignments({
       id: project.id,
       name: project.name,
       location: project.location,
-      status: project.status,
+      status: resolveProjectOperationalStatus(project),
       assignedRigCode: project.assignedRig?.rigCode || "Unassigned",
       contractRatePerM: project.contractRatePerM,
       contractRateLabel: formatProjectContractRateDisplay({
