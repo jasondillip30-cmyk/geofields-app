@@ -140,17 +140,17 @@ export function ReceiptIntakeReviewStep({
 
       <div className="space-y-1.5 rounded-lg border border-slate-200/60 bg-white px-2.5 py-1.5">
         <p className="text-sm font-semibold text-slate-900">
-          {showMismatchInventoryHandling ? "Step 3: Link item to inventory" : "Step 2: Review scanned receipt items"}
+          {showMismatchInventoryHandling ? "Step 3: Link item to inventory" : "Step 2: Review receipt items"}
         </p>
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold text-ink-900">Scanned Receipt Line Items</p>
+          <p className="text-sm font-semibold text-ink-900">Receipt Line Items</p>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={addScannedLineItem}
               className="text-[11px] font-medium text-slate-500 underline underline-offset-2 hover:text-slate-700"
             >
-              Add scanned line item
+              Add line item
             </button>
             {requisitionComparison?.canInspectScannedDetails && (
               <button

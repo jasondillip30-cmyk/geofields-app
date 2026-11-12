@@ -1002,7 +1002,10 @@ export function ReceiptIntakePanel({
         (line.mode === "MATCH" && !line.selectedItemId.trim())
     );
   }, [review]);
-  const showAdvancedLineItemEditor = followUpStage === "REVIEW" && showMismatchInventoryHandling;
+  const showAdvancedLineItemEditor = followUpStage === "REVIEW" && (
+    showMismatchInventoryHandling ||
+    (review?.requisitionType === "INVENTORY_STOCK_UP" && Boolean(review.scanFallbackMode))
+  );
   const guidedStep = useMemo<1 | 2 | 3 | 4>(() => {
     if (finalizeSuccess) {
       return 4;
