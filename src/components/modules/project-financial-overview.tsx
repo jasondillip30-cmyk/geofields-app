@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+import { AccessGate } from "@/components/layout/access-gate";
+import { ProjectOperatingCostsPanel } from "@/components/modules/project-operating-costs-panel";
 import { ProjectProfitabilityOverview } from "@/components/modules/project-profitability-overview";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
@@ -35,12 +37,26 @@ interface ProjectFinancialSummary {
   }>;
 }
 
-export function ProjectFinancialOverview({
+export function ProjectFinancialOverview(props: { projectId: string; contractRate: number }) {
+  const [revision, setRevision] = useState(0);
+  return (
+    <>
+      <ProjectFinancialSummaryCard {...props} revision={revision} />
+      <AccessGate permission="finance:edit">
+        <ProjectOperatingCostsPanel projectId={props.projectId} onPosted={() => setRevision((value) => value + 1)} />
+      </AccessGate>
+    </>
+  );
+}
+
+function ProjectFinancialSummaryCard({
   projectId,
-  contractRate
+  contractRate,
+  revision
 }: {
   projectId: string;
   contractRate: number;
+  revision: number;
 }) {
   const [summary, setSummary] = useState<ProjectFinancialSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +87,7 @@ export function ProjectFinancialOverview({
     return () => {
       active = false;
     };
-  }, [projectId]);
+  }, [projectId, revision]);
 
   if (error) {
     return (
@@ -107,7 +123,7 @@ export function ProjectFinancialOverview({
       />
 
       <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-        Salary costs are not yet tracked in this overview and are not included in Expenses or Profit.
+        Expenses and Profit include confirmed operating costs only. Unrecorded crew pay and site costs are not included.
       </p>
 
       <div className="grid gap-4 lg:grid-cols-2">

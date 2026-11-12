@@ -6,6 +6,7 @@ import type { AuthSession } from "@/lib/auth/session-types";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { withFinancialExpenseApproval } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { PROJECT_OPERATING_COST_SOURCE } from "@/lib/project-operating-cost-policy";
 import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 
 type LinkageType = "RIG" | "PROJECT" | "MAINTENANCE";
@@ -64,6 +65,7 @@ export async function GET(request: NextRequest) {
       prisma.expense.findMany({
         where: {
           ...approvedExpenseWhereBase,
+          entrySource: { not: PROJECT_OPERATING_COST_SOURCE },
           rigId: null
         },
         include: {
@@ -353,6 +355,7 @@ async function updateExpenseLinkage({
     select: {
       id: true,
       approvalStatus: true,
+      entrySource: true,
       rigId: true,
       projectId: true,
       clientId: true,
@@ -363,6 +366,9 @@ async function updateExpenseLinkage({
 
   if (!expense) {
     return NextResponse.json({ message: "Expense record not found." }, { status: 404 });
+  }
+  if (expense.entrySource === PROJECT_OPERATING_COST_SOURCE) {
+    return NextResponse.json({ message: "Correct this posting in Project Operating Costs." }, { status: 409 });
   }
   if (expense.approvalStatus !== "APPROVED") {
     return NextResponse.json({ message: "Only approved expenses can be corrected in this workspace." }, { status: 400 });

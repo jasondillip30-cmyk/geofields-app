@@ -282,6 +282,7 @@ model Project {
   budgetPlans        BudgetPlan[]
   changeOrders       ProjectChangeOrder[]
   laborEntries       ProjectLaborEntry[]
+  operatingCostPlans ProjectOperatingCostPlan[]
   invoices           ProjectInvoice[]
   billingRateItems   ProjectBillingRateItem[]
 }
@@ -527,6 +528,77 @@ model Expense {
   enteredBy          User?               @relation("expenseEnteredBy", fields: [enteredByUserId], references: [id])
   approvedBy         User?               @relation("expenseApprover", fields: [approvedById], references: [id])
   inventoryMovements InventoryMovement[]
+  operatingCostDrafts ProjectOperatingCostDraft[]
+  operatingCostCorrections ProjectOperatingCostCorrection[]
+}
+
+enum ProjectOperatingCostKind {
+  CREW_PAY
+  FOOD
+  OTHER
+}
+
+enum ProjectOperatingCostCadence {
+  ONCE
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ProjectOperatingCostDraftStatus {
+  DRAFT
+  POSTED
+  SKIPPED
+}
+
+model ProjectOperatingCostPlan {
+  id          String                      @id @default(cuid())
+  projectId   String
+  kind        ProjectOperatingCostKind
+  label       String
+  employeeId  String?
+  crewJob     String?
+  amountCents Int
+  cadence     ProjectOperatingCostCadence
+  startsOn    DateTime                    @db.Date
+  endsOn      DateTime?                   @db.Date
+  nextDue     DateTime?                   @db.Date
+  createdAt   DateTime                    @default(now())
+  project     Project                     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  drafts      ProjectOperatingCostDraft[]
+
+  @@index([projectId, nextDue])
+}
+
+model ProjectOperatingCostDraft {
+  id          String                          @id @default(cuid())
+  planId      String
+  projectId   String
+  employeeId  String?
+  costDate    DateTime                        @db.Date
+  amountCents Int
+  status      ProjectOperatingCostDraftStatus  @default(DRAFT)
+  expenseId   String?
+  createdAt   DateTime                        @default(now())
+  plan        ProjectOperatingCostPlan        @relation(fields: [planId], references: [id], onDelete: Restrict)
+  expense     Expense?                        @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+
+  @@unique([planId, costDate])
+  @@unique([projectId, employeeId, costDate])
+  @@index([projectId, status, costDate])
+  @@index([expenseId])
+}
+
+model ProjectOperatingCostCorrection {
+  id        String   @id @default(cuid())
+  expenseId String   @unique
+  projectId String
+  reason    String
+  actorId   String
+  createdAt DateTime @default(now())
+  expense   Expense  @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, createdAt])
 }
 
 model AuditLog {

@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { isSupportedExpenseCategory } from "@/lib/expense-categories";
+import { PROJECT_OPERATING_COST_SOURCE } from "@/lib/project-operating-cost-policy";
 import { prisma } from "@/lib/prisma";
 
 const expenseInclude = {
@@ -79,6 +80,9 @@ export async function PUT(
     return NextResponse.json({ message: "Expense not found." }, { status: 404 });
   }
 
+  if (existing.entrySource === PROJECT_OPERATING_COST_SOURCE) {
+    return NextResponse.json({ message: "Correct this posting in Project Operating Costs." }, { status: 409 });
+  }
   if (existing.approvalStatus === "APPROVED") {
     return NextResponse.json(
       { message: "Approved expenses are locked. Reopen the record before editing." },
@@ -159,6 +163,9 @@ export async function DELETE(
     return NextResponse.json({ message: "Expense not found." }, { status: 404 });
   }
 
+  if (existing.entrySource === PROJECT_OPERATING_COST_SOURCE) {
+    return NextResponse.json({ message: "Correct this posting in Project Operating Costs." }, { status: 409 });
+  }
   if (existing.approvalStatus === "APPROVED") {
     return NextResponse.json(
       { message: "Approved expenses are locked and cannot be deleted." },
