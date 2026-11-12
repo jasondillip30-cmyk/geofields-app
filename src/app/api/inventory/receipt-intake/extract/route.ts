@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireAnyApiPermission } from "@/lib/auth/api-guard";
 import { debugLog } from "@/lib/observability";
 import { prisma } from "@/lib/prisma";
+import { savePrivateReceipt } from "@/lib/private-receipt-storage";
 import {
   apiError,
   buildSafeFailureResponse,
@@ -20,7 +21,6 @@ import {
   readDebugFlagsFromExtraction,
   readScanDiagnosticsFromExtraction,
   resolveReceiptIntakeMessage,
-  saveReceiptFile,
   suggestSupplier,
   truncateLogValue
 } from "@/app/api/inventory/receipt-intake/extract/extract-route-helpers";
@@ -64,8 +64,18 @@ export async function POST(request: NextRequest) {
     });
     logRouteStage(isPdfUpload ? "pdf_branch_entered" : "image_branch_entered");
 
-    savedFile = await saveReceiptFile(receiptFileEntry);
     const fileBuffer = Buffer.from(await receiptFileEntry.arrayBuffer());
+    try {
+      savedFile = await savePrivateReceipt({
+        owner: auth.session.userId,
+        fileName: receiptFileEntry.name,
+        mimeType: receiptFileEntry.type,
+        buffer: fileBuffer
+      });
+    } catch (error) {
+      logExtractError(routeLabel, "receipt_storage", error);
+      return apiError(503, "Receipt storage is unavailable. Please try again later.");
+    }
     logRouteStage("file_loaded", {
       bytes: receiptFileEntry.size
     });

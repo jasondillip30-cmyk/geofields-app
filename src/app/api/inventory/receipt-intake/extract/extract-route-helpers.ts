@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { randomUUID } from "node:crypto";
-
 import { NextResponse } from "next/server";
 
 import { debugLog } from "@/lib/observability";
@@ -612,21 +608,6 @@ function formatErrorForDebug(error: unknown) {
   return {
     name: "UnknownError",
     message: String(error)
-  };
-}
-
-export async function saveReceiptFile(receipt: File) {
-  const uploadsDir = path.join(process.cwd(), "public", "uploads", "inventory-receipts");
-  await mkdir(uploadsDir, { recursive: true });
-  const extension = receipt.name.includes(".") ? receipt.name.split(".").pop() : "bin";
-  const safeFileName = `${Date.now()}-${randomUUID()}.${extension}`;
-  const absoluteFilePath = path.join(uploadsDir, safeFileName);
-  const arrayBuffer = await receipt.arrayBuffer();
-  await writeFile(absoluteFilePath, Buffer.from(arrayBuffer));
-
-  return {
-    receiptUrl: `/uploads/inventory-receipts/${safeFileName}`,
-    receiptFileName: receipt.name
   };
 }
 

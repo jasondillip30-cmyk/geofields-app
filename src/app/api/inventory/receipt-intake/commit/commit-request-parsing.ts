@@ -1,4 +1,5 @@
 import { parseDateOrNull } from "@/lib/inventory-server";
+import { privateReceiptUrlPrefix } from "@/lib/private-receipt-storage";
 import type { IntakeCommitPayload } from "./commit-types";
 
 function parseIdOrNull(value: unknown) {
@@ -27,7 +28,7 @@ export function parseReceiptSnapshot(body: IntakeCommitPayload | null) {
   const receipt = body?.receipt;
   const parsedReceiptUrl = parseOptionalString(receipt?.url);
   const parsedVerificationUrl = parseOptionalString(receipt?.verificationUrl);
-  const canonicalReceiptUrl = isHttpUrl(parsedVerificationUrl)
+  const canonicalReceiptUrl = !parsedReceiptUrl.startsWith(privateReceiptUrlPrefix) && isHttpUrl(parsedVerificationUrl)
     ? parsedVerificationUrl
     : parsedReceiptUrl;
 

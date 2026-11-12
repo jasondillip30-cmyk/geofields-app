@@ -36,6 +36,7 @@ pnpm-debug.log*
 
 # uploads
 /public/uploads
+/tmp/private-receipts
 
 # TypeScript incremental cache
 tsconfig.tsbuildinfo
