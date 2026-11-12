@@ -10,6 +10,7 @@ import { formatCurrency } from "@/lib/utils";
 import { prisma } from "@/lib/prisma";
 import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
 import { resolveProjectOperationalStatus, scheduledProjectCloseout } from "@/lib/project-status-policy";
+import { ProjectRecordDrilling } from "./project-record-drilling";
 
 type ContractType = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 
@@ -73,7 +74,12 @@ export default async function ProjectWorkspacePage({
               {project.client.name} • {project.location}
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+            {status === "ACTIVE" && (project.assignedRig || project.backupRig) && (
+              <AccessGate permission="drilling:submit">
+                <ProjectRecordDrilling projectId={project.id} reportsHref={drillingReportsHref} />
+              </AccessGate>
+            )}
             <Link
               href={spendingHref}
               className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-slate-50"

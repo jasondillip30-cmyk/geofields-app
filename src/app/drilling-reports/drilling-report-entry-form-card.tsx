@@ -124,7 +124,7 @@ export function DrillingReportEntryFormCard({
         </Link>
       }
     >
-      <form onSubmit={saveReport} className="px-1 py-1">
+      <form onSubmit={saveReport} className="px-1 py-1 [&_input:not([type=checkbox])]:min-h-11 [&_input]:text-base [&_select]:min-h-11 [&_select]:text-base [&_textarea]:text-base sm:[&_input]:text-sm sm:[&_select]:text-sm sm:[&_textarea]:text-sm">
         <div className="mb-4 gf-guided-strip">
           <p className="gf-guided-strip-title">Keep it simple</p>
           <div className="gf-guided-step-list">
@@ -288,6 +288,7 @@ export function DrillingReportEntryFormCard({
               <InputField
                 label="Meters drilled today"
                 type="number"
+                decimal
                 value={form.metersDrilledToday}
                 onChange={(value) => setForm((current) => ({ ...current, metersDrilledToday: value }))}
               />
@@ -299,6 +300,7 @@ export function DrillingReportEntryFormCard({
               <InputField
                 label="Work hours"
                 type="number"
+                decimal
                 value={form.workHours}
                 onChange={(value) => setForm((current) => ({ ...current, workHours: value }))}
               />
@@ -306,6 +308,7 @@ export function DrillingReportEntryFormCard({
               <InputField
                 label="Delay hours"
                 type="number"
+                decimal
                 value={form.delayHours}
                 onChange={(value) => setForm((current) => ({ ...current, delayHours: value }))}
               />
@@ -338,6 +341,7 @@ export function DrillingReportEntryFormCard({
               <InputField
                 label="Standby hours"
                 type="number"
+                decimal
                 value={form.standbyHours}
                 onChange={(value) => setForm((current) => ({ ...current, standbyHours: value }))}
               />
@@ -627,7 +631,7 @@ export function DrillingReportEntryFormCard({
         </div>
 
         {formError && (
-          <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {formError}
           </div>
         )}
@@ -636,7 +640,7 @@ export function DrillingReportEntryFormCard({
           <button
             type="submit"
             disabled={formSaving}
-            className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+            className="min-h-11 w-full rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
           >
             {formSaving ? "Submitting..." : "Submit for approval"}
           </button>

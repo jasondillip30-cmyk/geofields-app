@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
@@ -899,8 +900,9 @@ export default function SpendingPage() {
         {!isSingleProjectScope ? (
           <Card title="Select one project to continue">
             <p className="text-sm text-ink-700">
-              Project Operations is project-first. Choose one project in the top bar to continue.
+              Open a project to view operations or record drilling.
             </p>
+            <Link href="/projects" className="gf-btn-primary mt-3 min-h-11">Open Projects</Link>
           </Card>
         ) : (
           <section className="gf-section space-y-4">

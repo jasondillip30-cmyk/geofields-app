@@ -64,6 +64,7 @@ export function CompanyDashboard() {
   const { filters, setFilters, resetFilters } = useAnalyticsFilters();
   const debugLoggingEnabled = process.env.NEXT_PUBLIC_GEOFIELDS_DEBUG_DASHBOARD === "1";
   const [summary, setSummary] = useState<DashboardSummary>(emptySummary);
+  const [summaryFilterKey, setSummaryFilterKey] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "success" | "error">("loading");
   const [hasLoadedSummary, setHasLoadedSummary] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -79,6 +80,7 @@ export function CompanyDashboard() {
   const smartRecommendationsEnabled = isDashboardSmartRecommendationsEnabled();
   const forecastingEnabled = isForecastingEnabled();
   const inFlightFilterKeyRef = useRef<string | null>(null);
+  const lastRequestedFilterKeyRef = useRef<string | null>(null);
   const requestSequenceRef = useRef(0);
   const hasLoadedSummaryRef = useRef(false);
 
@@ -96,6 +98,10 @@ export function CompanyDashboard() {
     }
 
     inFlightFilterKeyRef.current = filterKey;
+    if (lastRequestedFilterKeyRef.current !== filterKey) {
+      lastRequestedFilterKeyRef.current = filterKey;
+      setLoadState("loading");
+    }
     requestSequenceRef.current += 1;
     const requestId = requestSequenceRef.current;
     setLoadState((current) => (hasLoadedSummaryRef.current ? current : "loading"));
@@ -188,6 +194,7 @@ export function CompanyDashboard() {
         return;
       }
       setSummary(normalized);
+      setSummaryFilterKey(filterKey);
       setHasLoadedSummary(true);
       hasLoadedSummaryRef.current = true;
       setErrorMessage(null);
@@ -525,10 +532,13 @@ export function CompanyDashboard() {
     }
     return filterLabels.rigs.get(filters.rigId) || filters.rigId;
   }, [filterLabels.rigs, filters.rigId]);
-  const loading = loadState === "loading";
+  const displayedScopeIsCurrent = summaryFilterKey === `${filters.clientId}|${filters.rigId}|${filters.from}|${filters.to}`;
+  const loading = loadState === "loading" || (loadState === "success" && !displayedScopeIsCurrent);
+  const hideStaleSummary = loadState === "error" && summaryFilterKey !== null && !displayedScopeIsCurrent;
   const isFilteredEmpty = !loading && hasScopeFilters && !hasAnyOperationalData;
   const visibleErrorMessage =
     process.env.NODE_ENV === "production" ? "Please try again in a moment." : errorMessage;
+  const isTodayScope = filters.from === todayIso() && filters.to === filters.from;
   const applyDatePreset = useCallback(
     (days: number) => {
       const end = new Date();
@@ -556,6 +566,12 @@ export function CompanyDashboard() {
 
   return (
     <div className="gf-page-stack">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-ink-900">{isTodayScope ? "Today in drilling" : "Drilling overview"}</p>
+        <button type="button" aria-pressed={isTodayScope} onClick={() => applyDatePreset(1)} className="gf-btn-secondary min-h-11">
+          Today
+        </button>
+      </div>
       <FilterScopeBanner
         filters={filters}
         clientLabel={selectedClientLabel}
@@ -569,7 +585,7 @@ export function CompanyDashboard() {
         </Card>
       )}
 
-      {!loading && !hasAnyOperationalData && (
+      {!loading && !hideStaleSummary && !hasAnyOperationalData && (
         <Card title={isFilteredEmpty ? "No data for selected filters" : "No data recorded yet"}>
           <AnalyticsEmptyState
             variant={isFilteredEmpty ? "filtered-empty" : "no-data"}
@@ -582,7 +598,7 @@ export function CompanyDashboard() {
         </Card>
       )}
 
-      {loading ? (
+      {hideStaleSummary ? null : loading ? (
         <section className="gf-section">
           <SectionHeader
             title="Drilling Profitability KPIs"
@@ -595,9 +611,15 @@ export function CompanyDashboard() {
           <section className="gf-section">
             <SectionHeader
               title="Drilling Profitability KPIs"
-              description="Core drilling revenue, cost, and margin outcomes for the selected scope."
+              description="Approved drilling and recognized expenses for the selected dates. Pending reports are not included in revenue."
             />
-            <div className="gf-kpi-grid-primary">
+            <div className="grid grid-cols-2 gap-2.5 xl:grid-cols-5">
+              <MetricCard
+                label="Approved Meters Drilled"
+                value={getScopedKpiValue(formatNumber(summary.snapshot?.totalMeters ?? 0), isFilteredEmpty)}
+                href={buildHref("/drilling-reports")}
+                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
+              />
               <MetricCard
                 label={hasScopeFilters ? "Revenue (Scope)" : "Revenue"}
                 value={getScopedKpiValue(formatCurrency(summary.snapshot?.totalRevenue ?? 0), isFilteredEmpty)}
@@ -606,10 +628,10 @@ export function CompanyDashboard() {
                 change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
-                label={hasScopeFilters ? "Costs (Scope)" : "Costs"}
+                label={hasScopeFilters ? "Expenses (Scope)" : "Expenses"}
                 value={getScopedKpiValue(formatCurrency(summary.snapshot?.totalExpenses ?? 0), isFilteredEmpty)}
                 tone="warn"
-                href={buildHref("/expenses")}
+                href={buildHref("/spending")}
                 change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
@@ -675,23 +697,17 @@ export function CompanyDashboard() {
                 change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
-                label="Total Meters Drilled"
-                value={getScopedKpiValue(formatNumber(summary.snapshot?.totalMeters ?? 0), isFilteredEmpty)}
-                href={buildHref("/drilling-reports")}
-                change={getScopedKpiHelper(undefined, isFilteredEmpty)}
-              />
-              <MetricCard
                 label="Pending Approvals"
                 value={getScopedKpiValue(String(summary.snapshot?.pendingApprovals ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.pendingApprovals ?? 0) > 0 ? "warn" : "good"}
-                href={buildHref("/approvals")}
+                href={buildHref("/approvals", { workspace: "workshop" })}
                 change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
               <MetricCard
                 label="Approved Today"
                 value={getScopedKpiValue(String(summary.snapshot?.approvedToday ?? 0), isFilteredEmpty)}
                 tone={(summary.snapshot?.approvedToday ?? 0) > 0 ? "good" : "neutral"}
-                href={buildHref("/approvals")}
+                href={buildHref("/approvals", { workspace: "workshop" })}
                 change={getScopedKpiHelper(undefined, isFilteredEmpty)}
               />
             </div>

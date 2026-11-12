@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -67,6 +68,15 @@ export function SpendingDrillingEntryModal({
   const [pendingConsumableQuantity, setPendingConsumableQuantity] = useState("1");
   const [stagedConsumables, setStagedConsumables] = useState<StagedConsumableLine[]>([]);
   const initializedProjectRef = useRef<string>("");
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!open || !dialog) return;
+    dialog.showModal();
+    return () => dialog.close();
+  }, [open]);
 
   const reportableProjects = useMemo(
     () =>
@@ -411,25 +421,24 @@ export function SpendingDrillingEntryModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[90]">
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[1px]"
-        aria-label="Close drilling report form"
-      />
-      <div className="absolute left-1/2 top-4 h-[calc(100vh-2rem)] w-[min(1100px,96vw)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-[0_24px_64px_rgba(15,23,42,0.28)] sm:p-5">
-        <div className="mb-3 flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+    <dialog
+      ref={dialogRef}
+      aria-labelledby={titleId}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      className="fixed inset-0 m-auto h-dvh max-h-none w-full max-w-none overflow-y-auto overscroll-contain bg-white p-0 text-ink-900 backdrop:bg-slate-900/45 sm:h-[calc(100dvh-2rem)] sm:w-[min(1100px,96vw)] sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-2xl"
+    >
+      <div className="px-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-5">
+        <div className="sticky top-0 z-10 mb-3 flex items-center justify-between gap-3 border-b border-slate-100 bg-white py-2 sm:py-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Project Operations / Drilling reports
             </p>
-            <p className="text-lg font-semibold text-ink-900">New drilling report</p>
+            <h2 id={titleId} className="text-lg font-semibold text-ink-900">New drilling report</h2>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition-colors hover:bg-slate-50"
+            className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition-colors hover:bg-slate-50"
             aria-label="Close"
           >
             <X size={14} />
@@ -486,6 +495,6 @@ export function SpendingDrillingEntryModal({
           />
         )}
       </div>
-    </div>
+    </dialog>
   );
 }

@@ -32,19 +32,23 @@ export function InputField({
   type = "text",
   value,
   onChange,
-  required = false
+  required = false,
+  decimal = false
 }: {
   label: string;
   type?: string;
   value: string;
   onChange: (value: string) => void;
   required?: boolean;
+  decimal?: boolean;
 }) {
   return (
     <label className="text-sm text-ink-700">
       <span className="mb-1 block">{label}</span>
       <input
         type={type}
+        inputMode={type === "number" ? decimal ? "decimal" : "numeric" : undefined}
+        step={type === "number" && decimal ? "any" : undefined}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         required={required}
