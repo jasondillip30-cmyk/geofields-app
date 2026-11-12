@@ -274,7 +274,7 @@ function resolvePrimaryOutputMimeType({
   return normalized || "image/jpeg";
 }
 
-function applyOutputEncoding(pipeline: sharp.Sharp, mimeType: string) {
+function applyOutputEncoding(pipeline: ReturnType<typeof sharp>, mimeType: string) {
   if (mimeType === "image/webp") {
     return pipeline.webp({ quality: 95 });
   }
@@ -537,7 +537,7 @@ export async function resolveReceiptUploadIngestion(receipt: File): Promise<Rece
         .grayscale()
         .normalize()
         .linear(1.14, -10)
-        .sharpen(1.0)
+        .sharpen({ sigma: 1.0 })
         .png({ compressionLevel: 7 });
       qrEnhancedBuffer = Buffer.from(await enhancedPipeline.toBuffer());
       qrEnhancedMimeType = "image/png";

@@ -40,7 +40,7 @@ export async function resolveRuntimeCapabilities() {
       .rotate()
       .grayscale()
       .normalize()
-      .sharpen(0.6)
+      .sharpen({ sigma: 0.6 })
       .png()
       .toBuffer();
 

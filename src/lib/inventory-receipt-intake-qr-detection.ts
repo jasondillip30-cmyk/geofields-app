@@ -130,7 +130,7 @@ export async function buildQrDetectionVariants({
   enhancementMode = "full",
   labelPrefix = ""
 }: {
-  image: sharp.Sharp;
+  image: ReturnType<typeof sharp>;
   width: number;
   height: number;
   qrAssistCrop?: ReceiptQrAssistCrop | null;
@@ -144,7 +144,7 @@ export async function buildQrDetectionVariants({
   });
   const allEnhancementVariants: Array<{
     label: string;
-    apply: (pipeline: sharp.Sharp) => sharp.Sharp;
+    apply: (pipeline: ReturnType<typeof sharp>) => ReturnType<typeof sharp>;
   }> = [
     {
       label: "original",
