@@ -2,9 +2,22 @@ import assert from "node:assert/strict";
 
 import {
   calculateReplenishmentQuantity,
+  canCreateShortageReplenishment,
   deriveInitialUsageRequestStatus,
   derivePostReceiptUsageStatus
 } from "../src/lib/inventory-shortage-workflow";
+
+assert.equal(canCreateShortageReplenishment({ replenishmentRequisitionId: null }), true);
+assert.equal(
+  canCreateShortageReplenishment({ replenishmentRequisitionId: "prior", replenishmentStatus: "REJECTED" }),
+  true
+);
+for (const status of ["SUBMITTED", "APPROVED", "PURCHASE_COMPLETED", null] as const) {
+  assert.equal(
+    canCreateShortageReplenishment({ replenishmentRequisitionId: "prior", replenishmentStatus: status }),
+    false
+  );
+}
 
 assert.equal(
   deriveInitialUsageRequestStatus({ quantityRequested: 8, quantityInStock: 3 }),

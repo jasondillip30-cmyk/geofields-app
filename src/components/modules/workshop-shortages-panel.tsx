@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 
 import { Card } from "@/components/ui/card";
 import { useRole } from "@/components/layout/role-provider";
+import { canCreateShortageReplenishment } from "@/lib/inventory-shortage-workflow";
+import type { RequisitionStatus } from "@/lib/requisition-workflow";
 import { formatNumber } from "@/lib/utils";
 
 interface WorkshopShortageRow {
@@ -12,6 +14,8 @@ interface WorkshopShortageRow {
   quantity: number;
   reason: string;
   replenishmentRequisitionId: string | null;
+  replenishmentStatus: RequisitionStatus | null;
+  replenishmentRequisitionCode: string | null;
   item: {
     name: string;
     sku: string;
@@ -22,8 +26,16 @@ interface WorkshopShortageRow {
   requestedBy: { fullName: string } | null;
 }
 
+const replenishmentLabels: Record<RequisitionStatus, string> = {
+  SUBMITTED: "Replenishment submitted",
+  APPROVED: "Replenishment approved · awaiting receipt",
+  REJECTED: "Replenishment rejected",
+  PURCHASE_COMPLETED: "Replenishment received"
+};
+
 export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number }) {
   const { role } = useRole();
+  const canPrepareReplenishment = role === "ADMIN" || role === "MANAGER" || role === "OFFICE";
   const [rows, setRows] = useState<WorkshopShortageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +90,8 @@ export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number 
         <div className="mt-3 space-y-2">
           {rows.map((row) => {
             const shortage = Math.max(0, row.quantity - row.item.quantityInStock);
+            const canPrepare = canPrepareReplenishment && canCreateShortageReplenishment(row);
+            const rejected = row.replenishmentStatus === "REJECTED";
             return (
               <div
                 key={row.id}
@@ -95,22 +109,30 @@ export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number 
                     {row.requestedBy?.fullName ? ` • ${row.requestedBy.fullName}` : ""}
                   </p>
                 </div>
-                {row.replenishmentRequisitionId ? (
-                  <span className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">
-                    Replenishment submitted
-                  </span>
-                ) : role === "ADMIN" || role === "MANAGER" || role === "OFFICE" ? (
-                  <Link
-                    href={`/expenses?workspace=workshop&shortageRequestId=${encodeURIComponent(row.id)}`}
-                    className="gf-btn-primary shrink-0 px-3 py-1.5 text-xs"
-                  >
-                    Prepare stock-up request
-                  </Link>
-                ) : (
-                  <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600">
-                    Waiting for Office
-                  </span>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {row.replenishmentRequisitionId ? (
+                    <span className={`rounded-md border px-2 py-1 text-xs font-semibold ${
+                      rejected ? "border-rose-200 bg-rose-50 text-rose-700" : "border-blue-200 bg-blue-50 text-blue-700"
+                    }`}>
+                      {row.replenishmentStatus
+                        ? replenishmentLabels[row.replenishmentStatus]
+                        : "Replenishment status unavailable"}
+                      {rejected && row.replenishmentRequisitionCode ? ` (${row.replenishmentRequisitionCode})` : ""}
+                    </span>
+                  ) : null}
+                  {canPrepare ? (
+                    <Link
+                      href={`/expenses?workspace=workshop&shortageRequestId=${encodeURIComponent(row.id)}`}
+                      className="gf-btn-primary shrink-0 px-3 py-1.5 text-xs"
+                    >
+                      {rejected ? "Prepare replacement request" : "Prepare stock-up request"}
+                    </Link>
+                  ) : !row.replenishmentRequisitionId ? (
+                    <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600">
+                      Waiting for Office
+                    </span>
+                  ) : null}
+                </div>
               </div>
             );
           })}

@@ -1,3 +1,15 @@
+import type { RequisitionStatus } from "@/lib/requisition-workflow";
+
+export function canCreateShortageReplenishment({
+  replenishmentRequisitionId,
+  replenishmentStatus
+}: {
+  replenishmentRequisitionId?: string | null;
+  replenishmentStatus?: RequisitionStatus | null;
+}) {
+  return !replenishmentRequisitionId || replenishmentStatus === "REJECTED";
+}
+
 export type InventoryShortageStatus =
   | "SUBMITTED"
   | "PENDING"

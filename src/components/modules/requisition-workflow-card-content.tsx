@@ -9,6 +9,7 @@ import {
   isRequisitionPostedComplete
 } from "@/lib/requisition-lifecycle";
 import { getRoleForcedRequisitionType } from "@/lib/auth/requisition-access";
+import { canCreateShortageReplenishment } from "@/lib/inventory-shortage-workflow";
 import { formatCurrency } from "@/lib/utils";
 import { useRole } from "@/components/layout/role-provider";
 import {
@@ -389,6 +390,7 @@ export function RequisitionWorkflowCard({
                 quantity: number;
                 reason: string;
                 replenishmentRequisitionId?: string | null;
+                replenishmentStatus?: RequisitionStatus | null;
                 locationId?: string | null;
                 item?: {
                   name?: string;
@@ -408,7 +410,7 @@ export function RequisitionWorkflowCard({
         if (!shortage || shortage.status !== "WAITING_FOR_STOCK") {
           throw new Error("This shortage is no longer waiting for workshop replenishment.");
         }
-        if (shortage.replenishmentRequisitionId) {
+        if (!canCreateShortageReplenishment(shortage)) {
           throw new Error("This shortage already has a linked replenishment requisition.");
         }
         const quantityInStock = Number(shortage.item?.quantityInStock || 0);
@@ -434,7 +436,9 @@ export function RequisitionWorkflowCard({
           estimatedUnitCost: String(Number(shortage.item?.unitCost || 0))
         }));
         setWizardStep(2);
-        setNotice("Workshop shortage loaded. Review the stock location, category, and quantity before submitting.");
+        setNotice(shortage.replenishmentStatus === "REJECTED"
+          ? "Replacement request loaded. Review the stock location, category, and quantity before submitting."
+          : "Workshop shortage loaded. Review the stock location, category, and quantity before submitting.");
       } catch (shortageError) {
         if (!cancelled) {
           setError(

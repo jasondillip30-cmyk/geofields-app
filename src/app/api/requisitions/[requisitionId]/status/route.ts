@@ -65,6 +65,12 @@ export async function POST(
       { status: 403 }
     );
   }
+  if (action === "reopen" && parsed.payload.status === "REJECTED" && parsed.payload.sourceUsageRequestId) {
+    return NextResponse.json(
+      { message: "Submit a replacement from Workshop Shortages. The rejected requisition stays in history." },
+      { status: 409 }
+    );
+  }
 
   const rejectionReason = typeof body?.reason === "string" ? body.reason.trim() : "";
   if (action === "reject" && rejectionReason.length < 3) {

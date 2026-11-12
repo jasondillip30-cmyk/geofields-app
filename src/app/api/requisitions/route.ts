@@ -8,6 +8,7 @@ import {
 } from "@/lib/auth/requisition-access";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { roundCurrency } from "@/lib/inventory-server";
+import { canCreateShortageReplenishment } from "@/lib/inventory-shortage-workflow";
 import { prisma } from "@/lib/prisma";
 import {
   buildRequisitionCode,
@@ -402,7 +403,25 @@ export async function POST(request: NextRequest) {
       { status: 403 }
     );
   }
-  if (sourceUsageRequest?.replenishmentRequisitionId) {
+  const previousReplenishmentId = sourceUsageRequest?.replenishmentRequisitionId ?? null;
+  const previousReplenishment = previousReplenishmentId
+    ? await prisma.summaryReport.findFirst({
+        where: { id: previousReplenishmentId, reportType: PURCHASE_REQUISITION_REPORT_TYPE },
+        select: { payloadJson: true }
+      })
+    : null;
+  const previousPayload = previousReplenishment
+    ? parsePurchaseRequisitionPayload(previousReplenishment.payloadJson)?.payload
+    : null;
+  const previousStatus =
+    previousPayload?.type === "INVENTORY_STOCK_UP" &&
+    previousPayload.sourceUsageRequestId === sourceUsageRequestId
+      ? previousPayload.status
+      : null;
+  if (!canCreateShortageReplenishment({
+    replenishmentRequisitionId: previousReplenishmentId,
+    replenishmentStatus: previousStatus
+  })) {
     return NextResponse.json(
       { message: "This shortage already has a linked replenishment requisition." },
       { status: 409 }
@@ -803,7 +822,7 @@ export async function POST(request: NextRequest) {
         where: {
           id: sourceUsageRequestId,
           status: "WAITING_FOR_STOCK",
-          replenishmentRequisitionId: null
+          replenishmentRequisitionId: previousReplenishmentId
         },
         data: { replenishmentRequisitionId: createdRow.id }
       });
@@ -826,13 +845,26 @@ export async function POST(request: NextRequest) {
         estimatedTotalCost: payload.totals.estimatedTotalCost,
         projectId: payload.context.projectId,
         rigId: payload.context.rigId,
-        breakdownReportId: payload.context.breakdownReportId || null
+        breakdownReportId: payload.context.breakdownReportId || null,
+        ...(previousReplenishmentId ? { replacesRequisitionId: previousReplenishmentId } : {})
       },
       actor: auditActorFromSession(auth.session)
     });
 
     return createdRow;
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.message === "ShortageRequisitionAlreadyLinked") {
+      return null;
+    }
+    throw error;
   });
+
+  if (!created) {
+    return NextResponse.json(
+      { message: "The shortage changed while you were submitting. Refresh and check its latest status." },
+      { status: 409 }
+    );
+  }
 
   return NextResponse.json(
     {

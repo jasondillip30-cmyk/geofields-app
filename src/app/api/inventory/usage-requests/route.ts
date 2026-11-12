@@ -18,6 +18,11 @@ import {
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
 import { deriveInitialUsageRequestStatus } from "@/lib/inventory-shortage-workflow";
+import {
+  parsePurchaseRequisitionPayload,
+  PURCHASE_REQUISITION_REPORT_TYPE,
+  type PurchaseRequisitionPayload
+} from "@/lib/requisition-workflow";
 
 const requestInclude = {
   item: {
@@ -123,12 +128,30 @@ export async function GET(request: NextRequest) {
     whereClauses.length === 1 ? whereClauses[0] : { AND: whereClauses };
 
   let rows: UsageRequestWithRelations[] = [];
+  const replenishments = new Map<string, PurchaseRequisitionPayload>();
   try {
     rows = await prisma.inventoryUsageRequest.findMany({
       where,
       include: requestInclude,
       orderBy: [{ createdAt: "desc" }]
     });
+    const linkedIds = rows.flatMap((row) =>
+      row.status === "WAITING_FOR_STOCK" && row.replenishmentRequisitionId
+        ? [row.replenishmentRequisitionId]
+        : []
+    );
+    if (linkedIds.length > 0) {
+      const reports = await prisma.summaryReport.findMany({
+        where: { id: { in: linkedIds }, reportType: PURCHASE_REQUISITION_REPORT_TYPE },
+        select: { id: true, payloadJson: true }
+      });
+      for (const report of reports) {
+        const parsed = parsePurchaseRequisitionPayload(report.payloadJson);
+        if (parsed?.payload.type === "INVENTORY_STOCK_UP") {
+          replenishments.set(report.id, parsed.payload);
+        }
+      }
+    }
   } catch (error) {
     return handleUsageRequestApiError(error, {
       operation: "list",
@@ -146,7 +169,17 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  return NextResponse.json({ data: rows.map(serializeUsageRequestForClient) });
+  return NextResponse.json({
+    data: rows.map((row) => {
+      const replenishment = replenishments.get(row.replenishmentRequisitionId || "");
+      const linked = replenishment?.sourceUsageRequestId === row.id ? replenishment : null;
+      return {
+        ...serializeUsageRequestForClient(row),
+        replenishmentStatus: linked?.status ?? null,
+        replenishmentRequisitionCode: linked?.requisitionCode ?? null
+      };
+    })
+  });
 }
 
 export async function POST(request: NextRequest) {
