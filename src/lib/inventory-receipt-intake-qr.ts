@@ -156,12 +156,17 @@ export function parseQrPayload(
     };
   }
 
-  const extractedUrlCandidate = extractVerificationUrlCandidate(normalizedRaw);
-  const contentType = detectQrContentType(extractedUrlCandidate || normalizedRaw);
+  // Parse JSON before loose text or URL detection, without normalizing its string values.
+  const json = parseQrJson(rawDecodedValue.trim()) ?? parseQrJson(normalizedRaw);
+  const extractedUrlCandidate = json ? json.verificationUrl : extractVerificationUrlCandidate(normalizedRaw);
+  const contentType = json ? "STRUCTURED_TEXT" : detectQrContentType(extractedUrlCandidate || normalizedRaw);
   let parsed: Partial<ReceiptHeaderExtraction> = {};
   let verificationUrl = "";
 
-  if (contentType === "URL") {
+  if (json) {
+    parsed = mergeParsedFields(parsed, json.fields);
+    verificationUrl = json.verificationUrl;
+  } else if (contentType === "URL") {
     const asUrl = toUrl(extractedUrlCandidate || normalizedRaw);
     if (asUrl) {
       verificationUrl = asUrl.toString();
@@ -170,20 +175,11 @@ export function parseQrPayload(
       verificationUrl = extractVerificationUrlCandidate(normalizedRaw);
     }
   } else if (contentType === "STRUCTURED_TEXT") {
-    const asJson = parseQrJson(normalizedRaw);
-    if (asJson) {
-      parsed = mergeParsedFields(parsed, asJson);
-    }
     parsed = mergeParsedFields(parsed, parseQrKeyValueText(normalizedRaw));
     parsed = mergeParsedFields(parsed, parseGenericKeyValueText(normalizedRaw));
     const embeddedUrl = extractVerificationUrlCandidate(normalizedRaw);
     if (embeddedUrl) {
       verificationUrl = embeddedUrl;
-    }
-  } else {
-    const asJson = parseQrJson(normalizedRaw);
-    if (asJson) {
-      parsed = mergeParsedFields(parsed, asJson);
     }
   }
 
@@ -193,7 +189,8 @@ export function parseQrPayload(
   if (verificationUrl) {
     const parsedFromUrl = toUrl(verificationUrl);
     if (parsedFromUrl) {
-      parsed = mergeParsedFields(parsed, parseQrFromUrl(parsedFromUrl));
+      const urlFields = parseQrFromUrl(parsedFromUrl);
+      parsed = json ? mergeParsedFields(urlFields, parsed) : mergeParsedFields(parsed, urlFields);
     }
   }
 
@@ -422,10 +419,10 @@ export function parseQrFromUrl(url: URL): Partial<ReceiptHeaderExtraction> {
   };
 }
 
-function parseQrJson(raw: string): Partial<ReceiptHeaderExtraction> | null {
+function parseQrJson(raw: string): { fields: Partial<ReceiptHeaderExtraction>; verificationUrl: string } | null {
   try {
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
     const obj = parsed as Record<string, unknown>;
@@ -435,18 +432,21 @@ function parseQrJson(raw: string): Partial<ReceiptHeaderExtraction> | null {
     };
 
     return {
-      supplierName: toStringValue(obj.supplier || obj.merchant || obj.storeName),
-      tin: toStringValue(obj.tin),
-      vrn: toStringValue(obj.vrn || obj.vatNo),
-      serialNumber: toStringValue(obj.serialNo || obj.serial),
-      receiptNumber: toStringValue(obj.receiptNo || obj.receiptNumber || obj.receipt),
-      verificationCode: toStringValue(obj.verificationCode || obj.verifyCode || obj.code),
-      receiptDate: normalizeQrDate(toStringValue(obj.date || obj.receiptDate)),
-      receiptTime: toStringValue(obj.time || obj.receiptTime),
-      taxOffice: toStringValue(obj.taxOffice || obj.office),
-      subtotal: numberOf(obj.subtotal || obj.subTotal),
-      tax: numberOf(obj.tax || obj.vat),
-      total: numberOf(obj.total || obj.amount)
+      verificationUrl: toUrl(toStringValue(obj.verificationUrl || obj.verifyUrl))?.toString() || "",
+      fields: {
+        supplierName: toStringValue(obj.supplier || obj.merchant || obj.storeName),
+        tin: toStringValue(obj.tin),
+        vrn: toStringValue(obj.vrn || obj.vatNo),
+        serialNumber: toStringValue(obj.serialNo || obj.serial),
+        receiptNumber: toStringValue(obj.receiptNo || obj.receiptNumber || obj.receipt),
+        verificationCode: toStringValue(obj.verificationCode || obj.verifyCode || obj.code),
+        receiptDate: normalizeQrDate(toStringValue(obj.date || obj.receiptDate)),
+        receiptTime: toStringValue(obj.time || obj.receiptTime),
+        taxOffice: toStringValue(obj.taxOffice || obj.office),
+        subtotal: numberOf(obj.subtotal || obj.subTotal),
+        tax: numberOf(obj.tax || obj.vat),
+        total: numberOf(obj.total || obj.amount)
+      }
     };
   } catch {
     return null;
