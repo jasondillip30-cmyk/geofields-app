@@ -11,7 +11,8 @@ import { ReceiptIntakePanelContent } from "@/components/inventory/receipt-intake
 import { applyReviewLinePatch, createManualSeededReview, fetchFocusedRecordPayload, handleReceiptCaptureModeSwitch, handleQrPointerDownSelection, handleQrPointerMoveSelection, handleQrPointerUpSelection, handleReceiptFileSelection, resetFocusedRecordOverlayState, resetScanSessionStateValues } from "@/components/inventory/receipt-intake-panel-actions";
 import { RECEIPT_INTAKE_DEBUG_ENABLED, SCAN_FALLBACK_MESSAGE, type DuplicatePromptState, type ExtractState, type FocusedRecordPayload, type IntakeAllocationStatus, type NoticeTone, type QrCropSelection, type ReceiptClassification, type ReceiptCaptureMode, type ReceiptFollowUpStage, type ReceiptIntakePanelProps, type ReceiptWorkflowChoice, type ReviewLineState, type ScanDiagnosticsState, type ReviewState } from "@/components/inventory/receipt-intake-panel-types";
 import { formatCurrency } from "@/lib/utils";
-import type { ReceiptCompletionDetails } from "@/components/inventory/receipt-intake-panel-types";
+import type { CameraScanConfirmPayload, ReceiptCompletionDetails } from "@/components/inventory/receipt-intake-panel-types";
+import { extractCameraReceipt } from "@/components/inventory/receipt-intake-camera-extraction";
 export type { ExpenseOnlyCategory, FieldConfidence, QrDecodeStatus, QrLookupStatus, QrParseStatus, ReadabilityConfidence, ReceiptClassification, ReceiptFollowUpStage, ReceiptIntakePanelProps, ReceiptSnapshotLine, ReceiptWorkflowChoice, RequisitionComparisonResult, ReviewLineState, ReviewState, SaveReadiness, ScanDiagnosticsState, ScanFailureStage, IntakeAllocationStatus, DuplicatePromptState, QrCropSelection, ExtractState, ReceiptPurpose } from "@/components/inventory/receipt-intake-panel-types";
 const EXTRACT_REQUEST_TIMEOUT_MS = 65_000;
 const EXTRACT_REQUEST_TIMEOUT_MESSAGE =
@@ -436,13 +437,15 @@ export function ReceiptIntakePanel({
     payload,
     receiptFileName,
     selectedWorkflowChoice,
-    selectedWorkflowConfig
+    selectedWorkflowConfig,
+    allowAutoSave = true
   }: {
     response: Response;
     payload: unknown;
     receiptFileName: string;
     selectedWorkflowChoice: ReceiptWorkflowChoice;
     selectedWorkflowConfig: ReturnType<typeof resolveWorkflowSelectionConfig>;
+    allowAutoSave?: boolean;
   }) {
     if (response.ok && isReceiptExtractSuccessPayload(payload)) {
       const nextReview = buildReviewStateFromPayload({
@@ -501,10 +504,11 @@ export function ReceiptIntakePanel({
                 : "Some fields still need review.")
           );
       const autoSaveReadiness = evaluateAutoSaveEligibility(effectiveReview);
-      if (canManage && autoSaveEnabled && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
+      const autoSave = allowAutoSave && canManage && autoSaveEnabled;
+      if (autoSave && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
         setNoticeTone("SUCCESS");
         setNotice("Captured from QR/TRA. Finalizing automatically...");
-      } else if (canManage && autoSaveEnabled && !autoSaveReadiness.ready) {
+      } else if (autoSave && !autoSaveReadiness.ready) {
         setNoticeTone("WARNING");
         setNotice(
           `Review recommended before save. ${autoSaveReadiness.reasons[0] || "Some optional fields need confirmation."}`
@@ -522,7 +526,7 @@ export function ReceiptIntakePanel({
       }
       setExtractState("SUCCESS");
       setFollowUpStage("SCAN");
-      if (canManage && autoSaveEnabled && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
+      if (autoSave && autoSaveReadiness.ready && !mismatchDetectedFromScan) {
         await commitReview(effectiveReview, { auto: true });
       }
       return true;
@@ -552,11 +556,14 @@ export function ReceiptIntakePanel({
     setFollowUpStage("SCAN");
     return true;
   }
-  async function handleExtract(options?: { userInitiated?: boolean }) {
+  async function handleExtract(options?: { userInitiated?: boolean }, camera?: {
+    capture: CameraScanConfirmPayload;
+    signal: AbortSignal;
+  }) {
     if (!options?.userInitiated) {
       return;
     }
-    if (!receiptFile) {
+    if (!receiptFile && !camera) {
       setError("Please choose a receipt image or PDF first.");
       setExtractState("FAILED");
       return;
@@ -584,38 +591,42 @@ export function ReceiptIntakePanel({
     setInventoryActionEditorByLine({});
     setShowMismatchInventoryHandling(false);
     const controller = new AbortController();
+    const cancelCamera = () => controller.abort();
+    camera?.signal.addEventListener("abort", cancelCamera, { once: true });
+    const file = camera ? camera.capture.capturedFrameFile : receiptFile;
+    const fileName = file?.name || "Camera QR scan";
     const timeoutId = setTimeout(() => controller.abort(), EXTRACT_REQUEST_TIMEOUT_MS);
     try {
-      const formData = new FormData();
-      formData.set("receipt", receiptFile);
-      if (debugMode) {
-        formData.set("debug", "1");
-      }
-      if (manualQrAssistEnabled && qrAssistSelection) {
-        formData.set("qrCrop", JSON.stringify(qrAssistSelection));
-      }
-      const response = await fetch("/api/inventory/receipt-intake/extract", {
-        method: "POST",
-        body: formData,
-        signal: controller.signal
-      });
+      const result = camera
+        ? await extractCameraReceipt(camera.capture, controller.signal)
+        : await (async () => {
+            const formData = new FormData();
+            formData.set("receipt", file!);
+            if (debugMode) formData.set("debug", "1");
+            if (manualQrAssistEnabled && qrAssistSelection) formData.set("qrCrop", JSON.stringify(qrAssistSelection));
+            const response = await fetch("/api/inventory/receipt-intake/extract", {
+              method: "POST", body: formData, signal: controller.signal
+            });
+            return { response, payload: await readJsonPayload(response) };
+          })();
+      if (camera?.signal.aborted) return;
       setExtractState("PROCESSING");
-      const payload = await readJsonPayload(response);
       await processExtractionPayload({
-        response,
-        payload,
-        receiptFileName: receiptFile.name,
+        ...result,
+        receiptFileName: fileName,
         selectedWorkflowChoice: receiptWorkflowChoice,
-        selectedWorkflowConfig
+        selectedWorkflowConfig,
+        allowAutoSave: !camera
       });
     } catch (scanError) {
+      if (camera?.signal.aborted) return;
       const timeoutMessage =
         scanError instanceof DOMException && scanError.name === "AbortError"
           ? EXTRACT_REQUEST_TIMEOUT_MESSAGE
           : null;
       const fallbackReview = buildManualAssistReview({
         payload: null,
-        receiptFileName: receiptFile.name,
+        receiptFileName: fileName,
         defaultClientId,
         defaultRigId,
         warning:
@@ -638,6 +649,7 @@ export function ReceiptIntakePanel({
       setExtractState("FAILED");
       setFollowUpStage("SCAN");
     } finally {
+      camera?.signal.removeEventListener("abort", cancelCamera);
       clearTimeout(timeoutId);
       setExtractState((current) =>
         current === "UPLOADING" || current === "PROCESSING" ? "FAILED" : current
@@ -1081,6 +1093,7 @@ export function ReceiptIntakePanel({
         extractState,
         handleReceiptFileChange,
         handleExtract,
+        handleCameraExtract: (capture, signal) => handleExtract({ userInitiated: true }, { capture, signal }),
         canManage,
         autoSaveEnabled,
         setAutoSaveEnabled,

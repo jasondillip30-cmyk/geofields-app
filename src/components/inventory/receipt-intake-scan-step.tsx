@@ -1,11 +1,14 @@
 "use client";
 
-import { type Dispatch, type PointerEvent as ReactPointerEvent, type RefObject, type SetStateAction } from "react";
+import { useCallback, useRef, useState, type Dispatch, type PointerEvent as ReactPointerEvent, type RefObject, type SetStateAction } from "react";
 import Link from "next/link";
 
 import { InputField } from "@/components/inventory/receipt-intake-panel-fields";
+import { ReceiptIntakeCameraScanner } from "@/components/inventory/receipt-intake-camera-scanner";
 import { formatPercent } from "@/components/inventory/receipt-intake-scan-utils";
 import type {
+  CameraScanConfirmPayload,
+  CameraSessionState,
   ExtractState,
   IntakeAllocationStatus,
   QrCropSelection,
@@ -29,6 +32,7 @@ export function ReceiptIntakeScanStep({
   extractState,
   handleReceiptFileChange,
   handleExtract,
+  handleCameraExtract,
   canManage,
   autoSaveEnabled,
   setAutoSaveEnabled,
@@ -72,6 +76,7 @@ export function ReceiptIntakeScanStep({
   extractState: ExtractState;
   handleReceiptFileChange: (file: File | null) => void;
   handleExtract: (opts?: { userInitiated?: boolean }) => Promise<void>;
+  handleCameraExtract: (capture: CameraScanConfirmPayload, signal: AbortSignal) => Promise<void>;
   canManage: boolean;
   autoSaveEnabled: boolean;
   setAutoSaveEnabled: (value: boolean) => void;
@@ -188,9 +193,12 @@ export function ReceiptIntakeScanStep({
               {extractState === "UPLOADING" ? "Capturing..." : extractState === "PROCESSING" ? "Reading..." : "Scan Receipt"}
             </button>
           </div>
-          <p className="text-xs text-slate-600">
-            For the most reliable QR extraction on mobile, upload from your gallery/files chooser.
-          </p>
+          <ReceiptCameraControl
+            disabled={extracting || !receiptWorkflowChoice}
+            onExtract={handleCameraExtract}
+            onManual={() => handleReceiptCaptureModeChange("MANUAL")}
+          />
+          <p className="text-xs text-slate-600">You can also upload a receipt from your gallery or files.</p>
           {canManage ? (
             <label className="inline-flex items-center gap-2 text-xs text-slate-700">
               <input type="checkbox" checked={autoSaveEnabled} onChange={(event) => setAutoSaveEnabled(event.target.checked)} />
@@ -416,5 +424,52 @@ export function ReceiptIntakeScanStep({
         </div>
       )}
     </div>
+  );
+}
+
+function ReceiptCameraControl({ disabled, onExtract, onManual }: {
+  disabled: boolean;
+  onExtract: (capture: CameraScanConfirmPayload, signal: AbortSignal) => Promise<void>;
+  onManual: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [session, setSession] = useState<CameraSessionState>("idle");
+  const [error, setError] = useState<string | null>(null);
+  const [payload, setPayload] = useState("");
+  const pending = useRef<AbortController | null>(null);
+  const cancel = useCallback(() => pending.current?.abort(), []);
+
+  return (
+    <>
+      <button type="button" className="gf-btn-secondary" disabled={disabled} onClick={() => setOpen(true)}>
+        Use camera
+      </button>
+      {open && (
+        <ReceiptIntakeCameraScanner
+          open={open}
+          sessionState={session}
+          sessionError={error}
+          detectedPayload={payload}
+          onSessionStateChange={setSession}
+          onSessionErrorChange={setError}
+          onDetectedPayloadChange={setPayload}
+          onConfirmPayload={async (capture) => {
+            cancel();
+            const controller = new AbortController();
+            pending.current = controller;
+            try {
+              await onExtract(capture, controller.signal);
+              return !controller.signal.aborted;
+            } finally {
+              if (pending.current === controller) pending.current = null;
+            }
+          }}
+          onCancelPendingConfirm={cancel}
+          onClose={() => setOpen(false)}
+          onEnterManually={onManual}
+          onUseUploadFallback={() => undefined}
+        />
+      )}
+    </>
   );
 }

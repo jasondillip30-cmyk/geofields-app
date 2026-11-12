@@ -40,6 +40,7 @@ interface ReceiptIntakeGuidedStagesProps {
   extractState: ExtractState;
   handleReceiptFileChange: (file: File | null) => void;
   handleExtract: (options?: { userInitiated?: boolean }) => Promise<void>;
+  handleCameraExtract: React.ComponentProps<typeof ReceiptIntakeScanStep>["handleCameraExtract"];
   canManage: boolean;
   autoSaveEnabled: boolean;
   setAutoSaveEnabled: Dispatch<SetStateAction<boolean>>;
@@ -113,6 +114,7 @@ export function ReceiptIntakeGuidedStages({
   extractState,
   handleReceiptFileChange,
   handleExtract,
+  handleCameraExtract,
   canManage,
   autoSaveEnabled,
   setAutoSaveEnabled,
@@ -212,6 +214,7 @@ export function ReceiptIntakeGuidedStages({
           extractState={extractState}
           handleReceiptFileChange={handleReceiptFileChange}
           handleExtract={handleExtract}
+          handleCameraExtract={handleCameraExtract}
           canManage={canManage}
           autoSaveEnabled={autoSaveEnabled}
           setAutoSaveEnabled={setAutoSaveEnabled}
