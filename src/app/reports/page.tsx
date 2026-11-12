@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
-import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { useAnalyticsFilters, type AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
@@ -179,7 +179,25 @@ const emptySummary: SummaryReportPayload = {
 };
 
 export default function ReportsPage() {
-  const { filters } = useAnalyticsFilters();
+  const { filters, scopeBootstrapped } = useAnalyticsFilters();
+  const params = new URLSearchParams();
+  if (filters.from) params.set("from", filters.from);
+  if (filters.to) params.set("to", filters.to);
+  if (filters.projectId !== "all") params.set("projectId", filters.projectId);
+  if (filters.clientId !== "all") params.set("clientId", filters.clientId);
+  if (filters.rigId !== "all") params.set("rigId", filters.rigId);
+  const query = params.toString();
+
+  return (
+    <AccessGate denyBehavior="redirect" permission="reports:view">
+      {scopeBootstrapped ? <ScopedReports key={query} filters={filters} query={query} /> : (
+        <p className="text-sm text-ink-600">Loading report scope...</p>
+      )}
+    </AccessGate>
+  );
+}
+
+function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: string }) {
   const [summary, setSummary] = useState<SummaryReportPayload>(emptySummary);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -195,13 +213,6 @@ export default function ReportsPage() {
       setError(null);
 
       try {
-        const params = new URLSearchParams();
-        if (filters.from) params.set("from", filters.from);
-        if (filters.to) params.set("to", filters.to);
-        if (filters.clientId !== "all") params.set("clientId", filters.clientId);
-        if (filters.rigId !== "all") params.set("rigId", filters.rigId);
-
-        const query = params.toString();
         const response = await fetch(`/api/summary-report${query ? `?${query}` : ""}`, {
           cache: "no-store"
         });
@@ -224,7 +235,7 @@ export default function ReportsPage() {
         }
       }
     },
-    [filters.clientId, filters.from, filters.rigId, filters.to]
+    [query]
   );
 
   useEffect(() => {
@@ -251,7 +262,7 @@ export default function ReportsPage() {
     if (summary.executive.inventoryOutOfStockCount > 0 || summary.executive.inventoryLowStockCount > 0) {
       liveAlerts.push({
         type: "Inventory Pressure",
-        message: `${summary.executive.inventoryOutOfStockCount} out-of-stock and ${summary.executive.inventoryLowStockCount} low-stock item(s) in scope.`
+        message: `${summary.executive.inventoryOutOfStockCount} out-of-stock and ${summary.executive.inventoryLowStockCount} low-stock item(s) in inventory. Stock counts are not filtered by project or date.`
       });
     }
 
@@ -291,35 +302,41 @@ export default function ReportsPage() {
       entry.marginPercent === null ? "-" : `${entry.marginPercent.toFixed(1)}%`
     ]);
 
+  const projectScoped = filters.projectId !== "all";
+  const projectName = summary.reports.projectProfitability.find((entry) => entry.id === filters.projectId)?.name;
+  const financeScope = projectScoped ? "Project" : filters.clientId !== "all" || filters.rigId !== "all" ? "Filtered" : "Company";
+  const showTotals = !loading && !error;
+
   return (
-    <AccessGate denyBehavior="redirect" permission="reports:view">
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} />
+        <FilterScopeBanner filters={filters} projectLabel={projectName} />
 
         {error ? <div className="gf-feedback-error">{error}</div> : null}
 
         <section className="gf-section">
           <SectionHeader
-            title="Core Financial Summary"
-            description="Live recognized reporting across revenue, cost, and profitability."
+            title={`${financeScope} Financial Summary`}
+            description={projectScoped
+              ? `Recognized revenue, expenses, and profit for ${projectName || "the selected project"} only.`
+              : "Recognized revenue, expenses, and profit for the current report filters."}
             action={
-              <button type="button" onClick={() => void loadSummary(true)} className="gf-btn-subtle inline-flex items-center gap-1">
+              <button type="button" disabled={loading || refreshing} onClick={() => void loadSummary(true)} className="gf-btn-subtle inline-flex items-center gap-1">
                 <RotateCw size={12} className={refreshing ? "animate-spin" : ""} />
                 Refresh
               </button>
             }
           />
           <div className="gf-kpi-grid-primary">
-            <MetricCard label="Total Revenue" value={formatCurrency(summary.totals.totalRevenue)} tone="good" />
-            <MetricCard label="Total Expenses" value={formatCurrency(summary.totals.totalExpenses)} tone="warn" />
+            <MetricCard label={`${financeScope} Revenue`} value={showTotals ? formatCurrency(summary.totals.totalRevenue) : "-"} tone="good" />
+            <MetricCard label={`${financeScope} Expenses`} value={showTotals ? formatCurrency(summary.totals.totalExpenses) : "-"} tone="warn" />
             <MetricCard
-              label="Gross Profit"
-              value={formatCurrency(summary.totals.grossProfit)}
+              label={`${financeScope} Gross Profit`}
+              value={showTotals ? formatCurrency(summary.totals.grossProfit) : "-"}
               tone={summary.totals.grossProfit >= 0 ? "good" : "danger"}
             />
             <MetricCard
               label="Profit Margin"
-              value={summary.totals.profitMarginPercent === null ? "-" : `${summary.totals.profitMarginPercent.toFixed(1)}%`}
+              value={!showTotals || summary.totals.profitMarginPercent === null ? "-" : `${summary.totals.profitMarginPercent.toFixed(1)}%`}
               tone={
                 summary.totals.profitMarginPercent === null ? "neutral" : summary.totals.profitMarginPercent >= 0 ? "good" : "danger"
               }
@@ -385,9 +402,9 @@ export default function ReportsPage() {
                 ["Idle rigs", String(summary.executive.idleRigs)],
                 ["Rigs in maintenance", String(summary.executive.maintenanceRigs)],
                 ["Poor/critical rigs", String(summary.executive.poorConditionRigs)],
-                ["Company revenue", formatCurrency(summary.totals.totalRevenue)],
-                ["Company expenses", formatCurrency(summary.totals.totalExpenses)],
-                ["Company gross profit", formatCurrency(summary.totals.grossProfit)],
+                [`${financeScope} revenue`, showTotals ? formatCurrency(summary.totals.totalRevenue) : "-"],
+                [`${financeScope} expenses`, showTotals ? formatCurrency(summary.totals.totalExpenses) : "-"],
+                [`${financeScope} gross profit`, showTotals ? formatCurrency(summary.totals.grossProfit) : "-"],
                 ["Top performing rig", summary.executive.bestPerformingRig],
                 ["Top performing client", summary.executive.bestPerformingClient],
                 ["Top performing project", summary.executive.bestPerformingProject]
@@ -515,6 +532,5 @@ export default function ReportsPage() {
           ) : null}
         </Card>
       </div>
-    </AccessGate>
   );
 }

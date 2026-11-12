@@ -145,7 +145,7 @@ export function ProjectFinancialOverview({
             <Link href={`${spendingHref}&view=drilling-reports`} className="gf-btn-secondary">
               Open drilling reports
             </Link>
-            <Link href="/reports" className="gf-btn-secondary">
+            <Link href={`/reports?workspace=project&projectId=${encodeURIComponent(projectId)}`} className="gf-btn-secondary">
               Open Reports
             </Link>
           </div>
