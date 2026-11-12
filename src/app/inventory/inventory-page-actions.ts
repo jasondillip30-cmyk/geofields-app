@@ -35,6 +35,20 @@ export async function createInventoryItem(form: ItemFormState) {
 
 export async function createInventoryMovement(form: MovementFormState) {
   const endpoint = "/api/inventory/movements";
+  if (form.movementType === "ADJUSTMENT") {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        itemId: form.itemId,
+        movementType: form.movementType,
+        quantity: Number(form.quantity),
+        notes: form.notes
+      })
+    });
+    if (!response.ok) throw new Error(await readApiError(response, "Failed to adjust stock."));
+    return;
+  }
   let response: Response;
 
   if (form.receiptFile) {

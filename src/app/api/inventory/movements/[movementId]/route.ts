@@ -3,8 +3,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { deriveInventoryUsageReasonType } from "@/lib/inventory-usage-context";
 import { prisma } from "@/lib/prisma";
+import { postStockCorrection } from "@/lib/inventory-stock-corrections";
 
 const movementInclude = {
+  reversal: { select: { id: true } },
   item: {
     select: {
       id: true,
@@ -48,6 +50,17 @@ const movementInclude = {
   locationFrom: { select: { id: true, name: true } },
   locationTo: { select: { id: true, name: true } }
 } as const;
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ movementId: string }> }
+) {
+  const auth = await requireApiPermission(request, "inventory:manage");
+  if (!auth.ok) return auth.response;
+  const { movementId } = await params;
+  const body = await request.json().catch(() => null);
+  return postStockCorrection({ reversalOfId: movementId }, body?.reason, auth.session);
+}
 
 export async function GET(
   request: NextRequest,

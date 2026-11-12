@@ -1014,6 +1014,13 @@ function InventoryPageContent() {
             visibleMovements={visibleMovements}
             focusedRowId={focusedRowId}
             openMovementDetail={openMovementDetail}
+            onAdjustStock={canManage && !isSingleProjectScope ? () => {
+              setErrorMessage(null);
+              setMovementForm((current) => ({
+                ...current, movementType: "ADJUSTMENT", itemId: "", quantity: "", notes: ""
+              }));
+              setManualMovementModalOpen(true);
+            } : undefined}
           />
         )}
 
@@ -1062,6 +1069,7 @@ function InventoryPageContent() {
           onCloseManualMovementModal={() => setManualMovementModalOpen(false)}
           submitMovementForm={submitMovementForm}
           savingMovement={savingMovement}
+          movementError={errorMessage}
           movementForm={movementForm}
           setMovementForm={(patch) => setMovementForm((current) => ({ ...current, ...patch }))}
           items={items}

@@ -299,6 +299,13 @@ export function deriveMovementRecognitionStatus(movement: InventoryMovementLike)
 } {
   const linkedExpense = movement.expense;
   if (!linkedExpense) {
+    if (movement.movementType === "ADJUSTMENT") {
+      return {
+        label: "Stock Movement Only",
+        detail: "This stock correction does not change recognized expenses.",
+        tone: "neutral"
+      };
+    }
     if (movement.movementType === "IN") {
       return {
         label: "Stock Movement Only",

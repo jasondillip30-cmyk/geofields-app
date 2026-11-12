@@ -34,12 +34,14 @@ export function InputField({
   value,
   onChange,
   type = "text",
+  step,
   required = false
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
+  step?: string;
   required?: boolean;
 }) {
   return (
@@ -47,6 +49,7 @@ export function InputField({
       <span className="mb-1 block uppercase tracking-wide text-slate-500">{label}</span>
       <input
         type={type}
+        step={step}
         value={value}
         onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
         required={required}

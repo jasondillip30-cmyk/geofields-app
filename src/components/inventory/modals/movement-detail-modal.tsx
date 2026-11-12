@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import Link from "next/link";
 
 import { SystemFlowBar } from "@/components/inventory/system-flow-bar";
 import { movementItemLabel, toIsoDate } from "@/components/inventory/inventory-page-utils";
@@ -16,6 +17,7 @@ export function MovementDetailModal({
   movement,
   isProjectLocked,
   canApproveMovement,
+  canCorrectStock,
   onRefresh
 }: {
   open: boolean;
@@ -23,6 +25,7 @@ export function MovementDetailModal({
   movement: InventoryMovementRow | null;
   isProjectLocked: boolean;
   canApproveMovement: boolean;
+  canCorrectStock: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [isMounted, setIsMounted] = useState(open);
@@ -64,8 +67,9 @@ export function MovementDetailModal({
     return null;
   }
 
-  const stepSummary = isProjectLocked
-    ? [{ id: 1 as const, title: "Movement details", subtitle: "Project-linked stock flow (read-only)." }]
+  const isReadOnly = isProjectLocked || (movement?.movementType === "ADJUSTMENT" && !movement.expense);
+  const stepSummary = isReadOnly
+    ? [{ id: 1 as const, title: "Movement details", subtitle: isProjectLocked ? "Project-linked stock flow (read-only)." : "Stock correction history. No linked expense." }]
     : [
         { id: 1 as const, title: "Understand", subtitle: "Confirm item movement details." },
         { id: 2 as const, title: "Validate", subtitle: "Check operational context before approval." },
@@ -85,7 +89,7 @@ export function MovementDetailModal({
       : `${formatMovementType(movement.movementType)} movement`
     : "Loading movement";
   const movementTypeLabel =
-    movement?.movementType === "IN"
+    movement?.reversalOfId ? "Stock reversal" : movement?.movementType === "IN"
       ? "Restocked to project (IN)"
       : movement?.movementType === "OUT"
         ? "Used on project (OUT)"
@@ -175,10 +179,10 @@ export function MovementDetailModal({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                {isProjectLocked ? "Movement detail" : "Movement approval"}
+                {isReadOnly ? "Movement detail" : "Movement approval"}
               </p>
               <p className="text-xl font-semibold text-ink-900">{modalTitle}</p>
-              {isProjectLocked ? (
+              {isReadOnly ? (
                 <p className="mt-0.5 text-xs font-medium text-slate-600">
                   Read-only movement history for the locked project.
                 </p>
@@ -222,16 +226,22 @@ export function MovementDetailModal({
         ) : (
           <>
             <div className="flex-1 overflow-y-auto bg-slate-50/40 p-4 sm:p-5">
+              <MovementCorrection
+                key={movement.id}
+                movement={movement}
+                canReverse={canCorrectStock && !isProjectLocked}
+                onRefresh={onRefresh}
+              />
               <section className="rounded-lg border border-slate-200 bg-white px-3 py-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  {isProjectLocked ? stepSummary[0]?.title : stepSummary[workflowStep - 1]?.title}
+                  {isReadOnly ? stepSummary[0]?.title : stepSummary[workflowStep - 1]?.title}
                 </p>
                 <p className="text-xs text-slate-600">
-                  {isProjectLocked ? stepSummary[0]?.subtitle : stepSummary[workflowStep - 1]?.subtitle}
+                  {isReadOnly ? stepSummary[0]?.subtitle : stepSummary[workflowStep - 1]?.subtitle}
                 </p>
               </section>
 
-              {isProjectLocked ? (
+              {isReadOnly ? (
                 <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3 transition-all duration-200 ease-out">
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                     <SummaryBadge label="Item" value={movementItemLabel(movement)} />
@@ -334,10 +344,10 @@ export function MovementDetailModal({
             </div>
 
             <div className="flex items-center justify-between border-t border-slate-200 bg-white px-5 py-3">
-              {isProjectLocked ? (
+              {isReadOnly ? (
                 <>
                   <p className="text-xs text-slate-600">
-                    Project mode shows read-only movement history.
+                    Posted movement details cannot be edited.
                   </p>
                   <button
                     type="button"
@@ -389,5 +399,78 @@ export function MovementDetailModal({
         )}
       </section>
     </div>
+  );
+}
+
+function MovementCorrection({
+  movement,
+  canReverse,
+  onRefresh
+}: {
+  movement: InventoryMovementRow;
+  canReverse: boolean;
+  onRefresh: () => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [reversalId, setReversalId] = useState("");
+  const recordedReversal = movement.reversal?.id || reversalId;
+  const linkToMovement = (id: string) => `/inventory/stock-movements?workspace=workshop&movementId=${encodeURIComponent(id)}`;
+
+  async function reverse(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving || !reason.trim()) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/inventory/movements/${encodeURIComponent(movement.id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason })
+      });
+      if (!response.ok) throw new Error(await readApiError(response, "Could not reverse stock."));
+      const payload = (await response.json()) as { data: { id: string } };
+      setReversalId(payload.data.id);
+      setExpanded(false);
+      await onRefresh();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not reverse stock.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!movement.reversalOfId && !recordedReversal && movement.movementType !== "ADJUSTMENT" &&
+      (!canReverse || movement.movementType === "TRANSFER")) return null;
+
+  return (
+    <section className="mb-3 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-sm">
+      <p className="font-semibold text-ink-900">Stock correction</p>
+      {movement.movementType === "ADJUSTMENT" && movement.notes && <p>Reason: {movement.notes}</p>}
+      {movement.reversalOfId && (
+        <Link className="text-brand-700 underline" href={linkToMovement(movement.reversalOfId)}>View original movement</Link>
+      )}
+      {recordedReversal ? (
+        <p role="status">Stock reversal recorded. <Link className="text-brand-700 underline" href={linkToMovement(recordedReversal)}>View reversal</Link></p>
+      ) : canReverse && !movement.reversalOfId && movement.movementType !== "TRANSFER" ? (
+        expanded ? (
+          <form className="space-y-2" onSubmit={reverse}>
+            <p className="text-xs text-slate-600">This creates a separate offsetting stock entry. It does not change the original movement, expense, or approval.</p>
+            <label className="block">
+              <span className="text-xs font-medium">Reversal reason (required)</span>
+              <textarea className="mt-1 block w-full rounded-lg border border-slate-300 p-2" required maxLength={1000} rows={2}
+                value={reason} onChange={(event) => setReason(event.target.value)} />
+            </label>
+            <div className="flex gap-2">
+              <button type="submit" disabled={saving || !reason.trim()} className="gf-btn-primary">Confirm stock reversal</button>
+              <button type="button" disabled={saving} onClick={() => setExpanded(false)} className="gf-btn-secondary">Cancel</button>
+            </div>
+          </form>
+        ) : <button type="button" onClick={() => setExpanded(true)} className="gf-btn-secondary">Reverse stock movement</button>
+      ) : null}
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+    </section>
   );
 }

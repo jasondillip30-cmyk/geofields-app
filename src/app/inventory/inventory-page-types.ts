@@ -58,6 +58,8 @@ export interface InventoryLocation {
 
 export interface InventoryMovementRow {
   id: string;
+  reversalOfId?: string | null;
+  reversal?: { id: string } | null;
   itemId: string;
   movementType: "IN" | "OUT" | "ADJUSTMENT" | "TRANSFER";
   quantity: number;

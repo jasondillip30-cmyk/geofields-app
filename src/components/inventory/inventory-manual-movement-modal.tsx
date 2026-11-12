@@ -18,6 +18,7 @@ export function InventoryManualMovementModal({
   onClose,
   onSubmit,
   saving,
+  error,
   form,
   onFormChange,
   items,
@@ -32,6 +33,7 @@ export function InventoryManualMovementModal({
   onClose: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
   saving: boolean;
+  error?: string | null;
   form: MovementFormState;
   onFormChange: (patch: Partial<MovementFormState>) => void;
   items: InventoryItemRow[];
@@ -112,6 +114,7 @@ export function InventoryManualMovementModal({
     return projects.filter((project) => project.clientId === form.clientId);
   }, [form.clientId, projects]);
   const availableItems = items.length > 0 ? items : fallbackItems;
+  const isAdjustment = form.movementType === "ADJUSTMENT";
 
   if (!isMounted) {
     return null;
@@ -143,15 +146,15 @@ export function InventoryManualMovementModal({
               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                 Manual Adjustment
               </p>
-              <p className="text-xl font-semibold text-ink-900">New Manual Adjustment</p>
+              <p className="text-xl font-semibold text-ink-900">{isAdjustment ? "Adjust stock" : "New Manual Movement"}</p>
               <p className="mt-0.5 text-xs font-medium text-slate-600">
-                Use this only when movement cannot be captured by receipt intake or approved usage workflows.
+                {isAdjustment ? "Record a stock count correction without changing an expense or the original movement." : "Use receipt intake and approved usage for normal stock movements."}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-1">
-              <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
+              {!isAdjustment && <Link href="/purchasing/receipt-follow-up" className="gf-btn-secondary px-3 py-1.5 text-xs">
                 Open Purchase Follow-up
-              </Link>
+              </Link>}
               <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
                 Cancel
               </button>
@@ -184,19 +187,21 @@ export function InventoryManualMovementModal({
                   }))
                 ]}
               />
-              <FilterSelect
+              {!isAdjustment && <FilterSelect
                 label="Movement Type"
                 value={form.movementType}
                 onChange={(value) => onFormChange({ movementType: value as MovementFormState["movementType"] })}
                 options={inventoryMovementTypeOptions.map((entry) => ({ value: entry.value, label: entry.label }))}
-              />
+              />}
               <InputField
-                label="Quantity"
+                label={isAdjustment ? "Quantity change (+ add / - remove)" : "Quantity"}
                 type="number"
+                step={isAdjustment ? "0.01" : undefined}
                 value={form.quantity}
                 onChange={(value) => onFormChange({ quantity: value })}
                 required
               />
+              {!isAdjustment && <>
               <InputField
                 label="Unit Cost"
                 type="number"
@@ -216,9 +221,11 @@ export function InventoryManualMovementModal({
                 onChange={(value) => onFormChange({ date: value })}
                 required
               />
+              </>}
             </div>
           </section>
 
+          {!isAdjustment && <>
           <section className="gf-section-shell p-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Operational Context</p>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -326,18 +333,22 @@ export function InventoryManualMovementModal({
             </div>
           </section>
 
+          </>}
           <section className="gf-section-shell p-3">
             <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Notes & Controls</p>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               <label className="text-xs text-ink-700 md:col-span-2 xl:col-span-2">
-                <span className="mb-1 block uppercase tracking-wide text-slate-500">Notes</span>
+                <span className="mb-1 block uppercase tracking-wide text-slate-500">{isAdjustment ? "Correction reason (required)" : "Notes"}</span>
                 <textarea
+                  required={isAdjustment}
+                  maxLength={isAdjustment ? 1000 : undefined}
                   value={form.notes}
                   onChange={(event) => onFormChange({ notes: event.target.value })}
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
                   rows={3}
                 />
               </label>
+              {!isAdjustment && <>
               <label className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700">
                 <input
                   type="checkbox"
@@ -354,10 +365,12 @@ export function InventoryManualMovementModal({
                 />
                 Allow negative stock for this adjustment
               </label>
+              </>}
             </div>
           </section>
 
           <div className="sticky bottom-0 z-10 -mx-4 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-1px_0_rgba(15,23,42,0.06)] backdrop-blur sm:-mx-5 sm:px-5">
+            {error && <p role="alert" className="mb-2 text-sm text-red-700">{error}</p>}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <button type="button" onClick={onClose} className="gf-btn-secondary px-3 py-1.5 text-xs">
                 Cancel
@@ -365,10 +378,10 @@ export function InventoryManualMovementModal({
               <button
                 type="submit"
                 data-testid="manual-movement-submit"
-                disabled={saving || !form.itemId || !form.quantity}
+                disabled={saving || !form.itemId || !form.quantity || (isAdjustment && (!form.notes.trim() || Number(form.quantity) === 0))}
                 className="gf-btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {saving ? "Recording..." : "Record Manual Movement"}
+                {saving ? "Recording..." : isAdjustment ? "Record adjustment" : "Record Manual Movement"}
               </button>
             </div>
           </div>

@@ -23,6 +23,7 @@ interface MovementLedgerSummary {
 
 interface MovementWorkspaceRow {
   id: string;
+  reversalOfId?: string | null;
   itemId: string;
   movementType: "IN" | "OUT" | "ADJUSTMENT" | "TRANSFER";
   quantity: number;
@@ -70,7 +71,8 @@ export function InventoryMovementsWorkspace({
   filteredMovements,
   visibleMovements,
   focusedRowId,
-  openMovementDetail
+  openMovementDetail,
+  onAdjustStock
 }: {
   isProjectLocked: boolean;
   projectName?: string | null;
@@ -85,6 +87,7 @@ export function InventoryMovementsWorkspace({
   visibleMovements: MovementWorkspaceRow[];
   focusedRowId: string | null;
   openMovementDetail: (movementId: string) => void;
+  onAdjustStock?: () => void;
 }) {
   const lockedInOutSummary = isProjectLocked
     ? filteredMovements.reduce(
@@ -113,6 +116,9 @@ export function InventoryMovementsWorkspace({
       <Card
         className="min-w-0"
         title="Movement History"
+        action={onAdjustStock && (
+          <button type="button" onClick={onAdjustStock} className="gf-btn-primary">Adjust stock</button>
+        )}
         subtitle={
           isProjectLocked
             ? `Project-linked movement history for ${projectName || "the locked project"}.`
@@ -279,7 +285,7 @@ export function InventoryMovementsWorkspace({
                 return [
                   toIsoDate(movement.date),
                   movementItemLabel(movement),
-                  formatMovementType(movement.movementType),
+                  movement.reversalOfId ? "Stock reversal" : formatMovementType(movement.movementType),
                   formatNumber(movement.quantity),
                   formatCurrency(movement.totalCost || 0),
                   <span

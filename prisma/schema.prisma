@@ -661,6 +661,9 @@ model InventoryItem {
 
 model InventoryMovement {
   id                    String                @id @default(cuid())
+  reversalOfId          String?               @unique
+  reversalOf            InventoryMovement?    @relation("StockMovementReversal", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversal              InventoryMovement?    @relation("StockMovementReversal")
   itemId                String
   movementType          InventoryMovementType
   contextType           InventoryUsageContextType?

@@ -18,6 +18,7 @@ import {
   roundCurrency
 } from "@/lib/inventory-server";
 import { prisma } from "@/lib/prisma";
+import { postStockCorrection } from "@/lib/inventory-stock-corrections";
 
 export const runtime = "nodejs";
 
@@ -173,6 +174,12 @@ export async function POST(request: NextRequest) {
     return parsed.response;
   }
   const input = parsed.value;
+  if (input.movementType === "ADJUSTMENT") {
+    if (input.createExpense || input.expenseId || input.allowNegativeStock) {
+      return NextResponse.json({ message: "Stock adjustments cannot post expenses or allow negative stock." }, { status: 400 });
+    }
+    return postStockCorrection({ itemId: input.itemId, quantity: input.quantity }, input.notes, auth.session);
+  }
 
   const [item, project, rig, drillReport, maintenanceRequest, breakdownReport, expense, supplier, locationFrom, locationTo] =
     await Promise.all([

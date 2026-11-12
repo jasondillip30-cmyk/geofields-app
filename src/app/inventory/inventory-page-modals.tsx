@@ -46,6 +46,7 @@ export function InventoryPageModals({
   onCloseManualMovementModal,
   submitMovementForm,
   savingMovement,
+  movementError,
   movementForm,
   setMovementForm,
   items,
@@ -98,6 +99,7 @@ export function InventoryPageModals({
   onCloseManualMovementModal: () => void;
   submitMovementForm: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   savingMovement: boolean;
+  movementError?: string | null;
   movementForm: MovementFormState;
   setMovementForm: (patch: Partial<MovementFormState>) => void;
   items: InventoryItemRow[];
@@ -172,6 +174,7 @@ export function InventoryPageModals({
         onClose={onCloseManualMovementModal}
         onSubmit={submitMovementForm}
         saving={savingMovement}
+        error={movementError}
         form={movementForm}
         onFormChange={setMovementForm}
         items={items}
@@ -189,6 +192,7 @@ export function InventoryPageModals({
         movement={selectedMovementDetails}
         isProjectLocked={isSingleProjectScope}
         canApproveMovement={canApproveMovement}
+        canCorrectStock={canManage}
         onRefresh={refreshMovementDetails}
       />
 
