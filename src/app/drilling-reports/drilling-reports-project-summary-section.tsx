@@ -68,7 +68,7 @@ export function DrillingReportsProjectSummarySection(
             <section className="grid gap-3 md:grid-cols-4">
               <MetricCard label="Total Meters Drilled" value={formatNumber(stats.totalMeters)} />
               <MetricCard label="Total Reports" value={String(stats.reportsLogged)} />
-              <MetricCard label="Total Billable" value={formatCurrency(stats.billableActivity)} tone="good" />
+              <MetricCard label="Approved Billable" value={formatCurrency(stats.billableActivity)} tone="good" />
               <MetricCard label="Average Work Hours" value={formatNumber(stats.averageWorkHours)} />
             </section>
 

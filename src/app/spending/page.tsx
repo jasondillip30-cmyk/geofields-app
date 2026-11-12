@@ -767,7 +767,7 @@ export default function SpendingPage() {
   }, [canCreateDrillingReport, isSingleProjectScope]);
 
   const handleDrillingEntrySaved = useCallback(() => {
-    setDrillingEntryNotice("Report saved.");
+    setDrillingEntryNotice("Report submitted for approval.");
     void loadBaseDrillingSummary(true);
     if (selectedPeriodRange) {
       void loadFocusedDrillingSummary(selectedPeriodRange, true);

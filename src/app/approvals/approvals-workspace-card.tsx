@@ -385,8 +385,7 @@ export function ApprovalsWorkspaceCard({
             <p className="text-sm text-ink-600">Loading submitted drilling reports...</p>
           ) : sortedDrillingRows.length === 0 ? (
             <p className="text-sm text-ink-600">
-              New drilling reports are auto-approved. Reports explicitly submitted for review appear here.
-              No reports are waiting for review in this view.
+              No drilling reports are waiting for review in this view.
             </p>
           ) : (
             <div
@@ -398,7 +397,7 @@ export function ApprovalsWorkspaceCard({
               }`}
             >
               <p className="border-b border-slate-200 px-3 py-2 text-xs text-ink-600">
-                New drilling reports are auto-approved. This queue shows reports explicitly submitted for review.
+                Approving a report recognizes its revenue and posts any listed consumables to stock and project costs.
               </p>
               {!canManageDrillingApprovals ? (
                 <div className="border-b border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -419,6 +418,7 @@ export function ApprovalsWorkspaceCard({
                     "Submitted By",
                     "Pending Age",
                     "Status",
+                    "Consumables",
                     "Comment",
                     "Actions"
                   ]}
@@ -439,6 +439,7 @@ export function ApprovalsWorkspaceCard({
                       row.submittedBy?.fullName || "-",
                       pendingMeta ? <StatusBadge key={`${row.id}-pending`} label={pendingMeta.label} tone={pendingMeta.badgeTone} /> : "-",
                       <StatusBadge key={`${row.id}-status`} label="Submitted" tone="blue" />,
+                      row.pendingConsumables?.map((line) => `${formatNumber(line.quantity)} × ${line.itemName}`).join(", ") || "-",
                       <input
                         key={`${row.id}-comment`}
                         type="text"

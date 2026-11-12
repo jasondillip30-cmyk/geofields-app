@@ -395,6 +395,7 @@ export default function DrillingReportsPage() {
 
   const canEditReport = useCallback(
     (report: DrillReportRecord) => {
+      if (report.approvalStatus === "APPROVED") return false;
       const elevatedEditor = canUseElevatedDrillingEdit(user?.role);
       if (elevatedEditor) {
         return true;
@@ -795,7 +796,7 @@ export default function DrillingReportsPage() {
       try {
         await loadReportsData();
         emitDrillingAnalyticsRefresh();
-        setNotice(formMode === "create" ? "Report saved." : "Report updated.");
+        setNotice("Report submitted for approval.");
 
         setIsFormOpen(false);
         setEditingReportId(null);
@@ -917,6 +918,21 @@ export default function DrillingReportsPage() {
             }
             canEditReport={canEditReport}
             onEditReport={openEditReportModal}
+            canReopenReport={canUseElevatedDrillingEdit(user?.role)}
+            onReopenReport={async (reportId) => {
+              const response = await fetch(`/api/drilling-reports/${encodeURIComponent(reportId)}/status`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "reopen" })
+              });
+              if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.message || "Could not reopen the report.");
+              }
+              await loadReportsData();
+              emitDrillingAnalyticsRefresh();
+              setNotice("Report reopened. Edit and resubmit it for approval.");
+            }}
           />
         </section>
 

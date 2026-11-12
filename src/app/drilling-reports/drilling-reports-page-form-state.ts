@@ -6,27 +6,10 @@ import type {
 } from "./drilling-reports-page-types";
 
 export function buildStagedConsumablesFromReport(report: DrillReportRecord): StagedConsumableLine[] {
-  const stagedByItemId = new Map<string, StagedConsumableLine>();
-  for (const movement of report.inventoryMovements || []) {
-    const itemId = movement.item?.id || "";
-    if (!itemId) {
-      continue;
-    }
-    const existingLine = stagedByItemId.get(itemId);
-    const movementQuantity = Math.max(0, Number(movement.quantity || 0));
-    if (existingLine) {
-      const nextQuantity = Number(existingLine.quantity) + movementQuantity;
-      existingLine.quantity = String(nextQuantity);
-    } else {
-      stagedByItemId.set(itemId, {
-        itemId,
-        itemName: movement.item?.name || "Item",
-        sku: movement.item?.sku || "",
-        quantity: String(movementQuantity)
-      });
-    }
-  }
-  return Array.from(stagedByItemId.values());
+  return (report.pendingConsumables || []).map((line) => ({
+    ...line,
+    quantity: String(line.quantity)
+  }));
 }
 
 export function buildEditFormFromReport(report: DrillReportRecord): DrillReportFormState {

@@ -1,6 +1,7 @@
 "use client";
 
 import { Card } from "@/components/ui/card";
+import { useState } from "react";
 import { DataTable } from "@/components/ui/table";
 import type {
   DrillOperationalKpiSummary,
@@ -33,6 +34,8 @@ interface DrillingReportsBrowserSectionProps {
   buildInventoryMovementHref: (movementId: string) => string;
   canEditReport: (report: DrillReportRecord) => boolean;
   onEditReport: (report: DrillReportRecord) => void;
+  canReopenReport: boolean;
+  onReopenReport: (reportId: string) => Promise<void>;
 }
 
 export function DrillingReportsBrowserSection({
@@ -51,8 +54,13 @@ export function DrillingReportsBrowserSection({
   selectedReportOperationalKpis,
   buildInventoryMovementHref,
   canEditReport,
-  onEditReport
+  onEditReport,
+  canReopenReport,
+  onReopenReport
 }: DrillingReportsBrowserSectionProps) {
+  const [confirmReopenId, setConfirmReopenId] = useState<string | null>(null);
+  const [reopening, setReopening] = useState(false);
+  const [reopenError, setReopenError] = useState("");
   return (
     <>
       <div
@@ -89,7 +97,7 @@ export function DrillingReportsBrowserSection({
             <div className="overflow-hidden rounded-xl border border-slate-200">
               <div className="max-h-[560px] overflow-auto">
                 <DataTable
-                  columns={["Date", "Hole Number", "Rig", "Meters", "Work Hrs", "Delay Hrs", "Rig Moves", "Crew"]}
+                  columns={["Date", "Hole Number", "Rig", "Meters", "Work Hrs", "Delay Hrs", "Rig Moves", "Crew", "Status"]}
                   rows={reports.map((report) => [
                     toIsoDate(report.date),
                     report.holeNumber,
@@ -106,7 +114,8 @@ export function DrillingReportsBrowserSection({
                     <span key={`${report.id}-moves`} className="inline-block w-full text-right">
                       {report.rigMoves}
                     </span>,
-                    formatCrewSummary(report)
+                    formatCrewSummary(report),
+                    formatApprovalStatus(report.approvalStatus)
                   ])}
                   rowIds={reports.map((report) => `ai-focus-${report.id}`)}
                   rowClassNames={reports.map((report) =>
@@ -174,7 +183,12 @@ export function DrillingReportsBrowserSection({
                   value={String(Math.max(0, Math.round(Number(selectedReport.assistantCount || 0))))}
                 />
                 <DetailRow label="Crew" value={formatCrewSummary(selectedReport)} />
-                <DetailRow label="Revenue" value={formatCurrency(selectedReport.billableAmount)} />
+                <DetailRow label="Approval status" value={formatApprovalStatus(selectedReport.approvalStatus)} />
+                {selectedReport.rejectionReason && <DetailRow label="Rejection reason" value={selectedReport.rejectionReason} />}
+                <DetailRow
+                  label={selectedReport.approvalStatus === "APPROVED" ? "Revenue" : "Estimated revenue"}
+                  value={formatCurrency(selectedReport.billableAmount)}
+                />
                 <DetailRow label="Comments" value={selectedReport.comments || "-"} />
                 <DetailRow label="Recorded by" value={selectedReport.submittedBy?.fullName || "-"} />
                 <DetailRow
@@ -287,6 +301,34 @@ export function DrillingReportsBrowserSection({
                     Edit Report
                   </button>
                 )}
+                {canReopenReport && selectedReport.approvalStatus === "APPROVED" && (
+                  confirmReopenId === selectedReport.id ? (
+                    <div className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
+                      <p>Reopening removes this report from approved revenue until it is reviewed again.</p>
+                      {reopenError && <p role="alert" className="text-red-700">{reopenError}</p>}
+                      <div className="flex gap-2">
+                        <button type="button" className="gf-btn-primary" disabled={reopening} onClick={async () => {
+                          setReopening(true);
+                          setReopenError("");
+                          try {
+                            await onReopenReport(selectedReport.id);
+                            setConfirmReopenId(null);
+                          } catch (error) {
+                            setReopenError(error instanceof Error ? error.message : "Could not reopen the report.");
+                          } finally {
+                            setReopening(false);
+                          }
+                        }}>Confirm reopen</button>
+                        <button type="button" className="gf-btn-secondary" disabled={reopening} onClick={() => setConfirmReopenId(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" className="gf-btn-secondary" onClick={() => {
+                      setReopenError("");
+                      setConfirmReopenId(selectedReport.id);
+                    }}>Reopen for correction</button>
+                  )
+                )}
               </div>
             </div>
           )}
@@ -294,4 +336,9 @@ export function DrillingReportsBrowserSection({
       </div>
     </>
   );
+}
+
+function formatApprovalStatus(status: DrillReportRecord["approvalStatus"]) {
+  if (status === "SUBMITTED") return "Pending approval";
+  return status[0] + status.slice(1).toLowerCase();
 }

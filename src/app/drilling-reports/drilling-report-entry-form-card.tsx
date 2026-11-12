@@ -130,7 +130,7 @@ export function DrillingReportEntryFormCard({
           <div className="gf-guided-step-list">
             <p className="gf-guided-step">Use meters drilled today as the main depth input.</p>
             <p className="gf-guided-step">Fill daily operational fields and configured extras only.</p>
-            <p className="gf-guided-step">Save report to record activity and linked consumable usage.</p>
+            <p className="gf-guided-step">Submit for review. Revenue and listed consumables post after approval.</p>
           </div>
         </div>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
@@ -633,7 +633,7 @@ export function DrillingReportEntryFormCard({
             disabled={formSaving}
             className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {formSaving ? "Saving..." : "Save report"}
+            {formSaving ? "Submitting..." : "Submit for approval"}
           </button>
         </div>
       </form>

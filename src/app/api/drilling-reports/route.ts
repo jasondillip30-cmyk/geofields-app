@@ -12,7 +12,7 @@ import {
 import {
   DrillReportConsumablesValidationError,
   parseDrillReportConsumablesUsedInput,
-  replaceDrillReportConsumablesUsage
+  stageDrillReportConsumables
 } from "@/lib/drill-report-consumables";
 import {
   normalizeDelayReasonNote,
@@ -283,6 +283,7 @@ export async function POST(request: NextRequest) {
   try {
     created = await prisma.$transaction(async (tx) => {
       await assertActiveProjectForDrilling(tx, projectId);
+      const pendingConsumables = await stageDrillReportConsumables(tx, projectId, consumablesUsedResult.lines);
       const insertedBase = await tx.drillReport.create({
         data: {
           date: reportDate,
@@ -290,10 +291,9 @@ export async function POST(request: NextRequest) {
         projectId,
         rigId,
         submittedById: auth.session.userId,
-        approvalStatus: "APPROVED",
+        approvalStatus: "SUBMITTED",
         submittedAt: new Date(),
-        approvedById: auth.session.userId,
-        approvedAt: new Date(),
+        pendingConsumables,
         rejectionReason: null,
         holeNumber,
         areaLocation,
@@ -317,20 +317,6 @@ export async function POST(request: NextRequest) {
       if (hasBillableLinesField) {
         await replaceDrillReportBillableLines(tx, insertedBase.id, validatedBillableLinesResult.lines);
       }
-      if (hasConsumablesUsedField) {
-        await replaceDrillReportConsumablesUsage({
-          tx,
-          drillReportId: insertedBase.id,
-          projectId,
-          rigId,
-          clientId: project.clientId,
-          reportDate,
-          actorUserId: auth.session.userId,
-          lines: consumablesUsedResult.lines,
-          resetExisting: false
-        });
-      }
-
       const inserted = await tx.drillReport.findUniqueOrThrow({
         where: { id: insertedBase.id },
         include: reportInclude
@@ -418,12 +404,16 @@ function calculateStats(
   reports: Array<{
     totalMetersDrilled: number;
     billableAmount: number;
+    approvalStatus: EntryApprovalStatus;
     workHours: number;
   }>
 ) {
   const reportsLogged = reports.length;
   const totalMeters = reports.reduce((sum, report) => sum + report.totalMetersDrilled, 0);
-  const billableActivity = reports.reduce((sum, report) => sum + report.billableAmount, 0);
+  const billableActivity = reports.reduce(
+    (sum, report) => sum + (report.approvalStatus === "APPROVED" ? report.billableAmount : 0),
+    0
+  );
   const totalHours = reports.reduce((sum, report) => sum + report.workHours, 0);
 
   return {

@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 import { roundCurrency } from "@/lib/inventory-server";
 import { buildProjectConsumablesPool } from "@/lib/project-consumables-pool";
@@ -59,7 +59,42 @@ export function parseDrillReportConsumablesUsedInput(value: unknown): {
   };
 }
 
-export async function replaceDrillReportConsumablesUsage({
+export async function validateDrillReportConsumables(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  lines: DrillReportConsumableInput[]
+) {
+  if (!lines.length) return new Map<string, Awaited<ReturnType<typeof buildProjectConsumablesPool>>[number]>();
+  const rows = await buildProjectConsumablesPool({ db: tx, projectId, includeZeroAvailable: true });
+  const poolByItemId = new Map(rows.map((row) => [row.itemId, row]));
+  for (const line of lines) {
+    const pool = poolByItemId.get(line.itemId);
+    if (!pool || pool.availableNow <= 0) {
+      throw new DrillReportConsumablesValidationError("This item is not approved and available for this project.");
+    }
+    if (line.quantity > pool.availableNow) {
+      throw new DrillReportConsumablesValidationError(
+        `Cannot use more than available for ${pool.itemName}. Requested ${formatNumber(line.quantity)}, available ${formatNumber(pool.availableNow)}.`
+      );
+    }
+  }
+  return poolByItemId;
+}
+
+export async function stageDrillReportConsumables(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  lines: DrillReportConsumableInput[]
+) {
+  const poolByItemId = await validateDrillReportConsumables(tx, projectId, lines);
+  return lines.map((line) => ({
+    ...line,
+    itemName: poolByItemId.get(line.itemId)?.itemName || "Item",
+    sku: poolByItemId.get(line.itemId)?.sku || ""
+  }));
+}
+
+export async function postDrillReportConsumablesUsage({
   tx,
   drillReportId,
   projectId,
@@ -67,8 +102,8 @@ export async function replaceDrillReportConsumablesUsage({
   clientId,
   reportDate,
   actorUserId,
-  lines,
-  resetExisting
+  approverUserId,
+  lines
 }: {
   tx: Prisma.TransactionClient;
   drillReportId: string;
@@ -77,40 +112,18 @@ export async function replaceDrillReportConsumablesUsage({
   clientId: string | null;
   reportDate: Date;
   actorUserId: string;
+  approverUserId: string;
   lines: DrillReportConsumableInput[];
-  resetExisting: boolean;
 }) {
-  if (resetExisting) {
-    await restoreExistingDrillingConsumableUsage(tx, drillReportId);
-  }
-
   if (lines.length === 0) {
     return;
   }
 
-  const poolRows = await buildProjectConsumablesPool({
-    db: tx,
-    projectId,
-    includeZeroAvailable: true,
-    excludeDrillReportId: drillReportId
-  });
-  const poolByItemId = new Map(poolRows.map((row) => [row.itemId, row]));
-
-  for (const line of lines) {
-    const pool = poolByItemId.get(line.itemId);
-    if (!pool || pool.availableNow <= 0) {
-      throw new DrillReportConsumablesValidationError(
-        "This item is not approved and available for this project."
-      );
-    }
-    if (line.quantity > pool.availableNow) {
-      throw new DrillReportConsumablesValidationError(
-        `Cannot use more than available for ${pool.itemName}. Requested ${formatNumber(
-          line.quantity
-        )}, available ${formatNumber(pool.availableNow)}.`
-      );
-    }
-  }
+  // Serialize approvals that draw from the same stock before rechecking availability.
+  await tx.$queryRaw`SELECT id FROM "InventoryItem"
+    WHERE id IN (${Prisma.join(lines.map((line) => line.itemId))})
+    ORDER BY id FOR UPDATE`;
+  const poolByItemId = await validateDrillReportConsumables(tx, projectId, lines);
 
   for (const line of lines) {
     const pool = poolByItemId.get(line.itemId);
@@ -133,9 +146,9 @@ export async function replaceDrillReportConsumablesUsage({
         notes: `Consumables used on drilling report ${drillReportId}.`,
         enteredByUserId: actorUserId,
         submittedAt: reportDate,
-        approvedById: actorUserId,
+        approvedById: approverUserId,
         approvalStatus: "APPROVED",
-        approvedAt: reportDate,
+        approvedAt: new Date(),
         clientId,
         projectId,
         rigId,
@@ -173,7 +186,7 @@ export async function replaceDrillReportConsumablesUsage({
         unitCost,
         totalCost,
         date: reportDate,
-        performedByUserId: actorUserId,
+        performedByUserId: approverUserId,
         clientId,
         projectId,
         rigId,
@@ -185,84 +198,14 @@ export async function replaceDrillReportConsumablesUsage({
   }
 }
 
-async function restoreExistingDrillingConsumableUsage(
-  tx: Prisma.TransactionClient,
-  drillReportId: string
-) {
-  const existingMovements = await tx.inventoryMovement.findMany({
+export function hasPostedDrillReportConsumables(tx: Prisma.TransactionClient, drillReportId: string) {
+  return tx.inventoryMovement.findFirst({
     where: {
       drillReportId,
       movementType: "OUT",
-      contextType: "DRILLING_REPORT"
+      notes: `Consumables used on drilling report ${drillReportId}.`
     },
-    select: {
-      id: true,
-      itemId: true,
-      quantity: true,
-      expenseId: true
-    }
-  });
-
-  if (existingMovements.length === 0) {
-    return;
-  }
-
-  for (const movement of existingMovements) {
-    await tx.inventoryItem.update({
-      where: { id: movement.itemId },
-      data: {
-        quantityInStock: {
-          increment: movement.quantity
-        }
-      }
-    });
-  }
-
-  const movementIds = existingMovements.map((movement) => movement.id);
-  await tx.inventoryMovement.deleteMany({
-    where: {
-      id: {
-        in: movementIds
-      }
-    }
-  });
-
-  const expenseIds = Array.from(
-    new Set(
-      existingMovements
-        .map((movement) => movement.expenseId)
-        .filter((expenseId): expenseId is string => Boolean(expenseId))
-    )
-  );
-  if (expenseIds.length === 0) {
-    return;
-  }
-
-  const stillReferenced = await tx.inventoryMovement.findMany({
-    where: {
-      expenseId: {
-        in: expenseIds
-      }
-    },
-    select: { expenseId: true }
-  });
-  const stillReferencedIds = new Set(
-    stillReferenced
-      .map((entry) => entry.expenseId)
-      .filter((expenseId): expenseId is string => Boolean(expenseId))
-  );
-  const deletableExpenseIds = expenseIds.filter((expenseId) => !stillReferencedIds.has(expenseId));
-  if (deletableExpenseIds.length === 0) {
-    return;
-  }
-
-  await tx.expense.deleteMany({
-    where: {
-      id: {
-        in: deletableExpenseIds
-      },
-      entrySource: "INVENTORY_USAGE"
-    }
+    select: { id: true }
   });
 }
 

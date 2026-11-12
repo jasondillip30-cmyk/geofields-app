@@ -168,7 +168,7 @@ export function DrillingReportsWorkspaceShellCard(
             <div className="gf-guided-step-list">
               <p className="gf-guided-step">1. Choose hole progression.</p>
               <p className="gf-guided-step">2. Enter meters and operational hours.</p>
-              <p className="gf-guided-step">3. Save report to commit daily activity.</p>
+              <p className="gf-guided-step">3. Submit the report for approval.</p>
             </div>
           </div>
         ) : null}

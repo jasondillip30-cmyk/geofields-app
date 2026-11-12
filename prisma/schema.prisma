@@ -438,6 +438,7 @@ model DrillReport {
   approvalStatus     EntryApprovalStatus @default(SUBMITTED)
   approvedAt         DateTime?
   rejectionReason    String?
+  pendingConsumables Json?
   holeNumber         String
   areaLocation       String
   fromMeter          Float

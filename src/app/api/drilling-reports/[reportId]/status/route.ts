@@ -1,9 +1,16 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { canManageDrillingApprovalActions, canUseElevatedDrillingEdit } from "@/lib/auth/approval-policy";
 import { auditActorFromSession, recordAuditLog } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
+import {
+  DrillReportConsumablesValidationError,
+  hasPostedDrillReportConsumables,
+  parseDrillReportConsumablesUsedInput,
+  postDrillReportConsumablesUsage
+} from "@/lib/drill-report-consumables";
 
 const reportInclude = {
   client: { select: { id: true, name: true } },
@@ -73,10 +80,34 @@ export async function POST(
 
   const updated = await prisma.$transaction(async (tx) => {
     const next = await tx.drillReport.update({
-      where: { id: reportId },
+      where: { id: reportId, updatedAt: existing.updatedAt, approvalStatus: existing.approvalStatus },
       data: transition.data,
       include: reportInclude
     });
+
+    if (action === "reopen" || action === "reject" || action === "approve") {
+      const posted = await hasPostedDrillReportConsumables(tx, reportId);
+      if (posted && (action !== "approve" || existing.pendingConsumables !== null)) {
+        throw new DrillReportConsumablesValidationError(
+          "This report has posted consumables. Review the linked inventory records before changing its approval."
+        );
+      }
+      if (action === "approve" && existing.pendingConsumables !== null) {
+        const { lines, error } = parseDrillReportConsumablesUsedInput(existing.pendingConsumables);
+        if (error) throw new DrillReportConsumablesValidationError(error);
+        await postDrillReportConsumablesUsage({
+          tx,
+          drillReportId: reportId,
+          projectId: next.projectId,
+          rigId: next.rigId,
+          clientId: next.clientId,
+          reportDate: next.date,
+          actorUserId: next.submittedById ?? auth.session.userId,
+          approverUserId: auth.session.userId,
+          lines
+        });
+      }
+    }
 
     await recordAuditLog({
       db: tx,
@@ -91,8 +122,17 @@ export async function POST(
     });
 
     return next;
+  }).catch((error: unknown) => {
+    if (error instanceof DrillReportConsumablesValidationError) return { message: error.message };
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return { message: "The report changed. Refresh before deciding it again." };
+    }
+    throw error;
   });
 
+  if ("message" in updated) {
+    return NextResponse.json({ message: updated.message }, { status: 409 });
+  }
   return NextResponse.json({ data: updated });
 }
 

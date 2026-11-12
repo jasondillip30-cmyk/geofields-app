@@ -71,6 +71,7 @@ export interface DrillReportRecord {
   submittedBy: { id: string; fullName: string } | null;
   approvedBy: { id: string; fullName: string } | null;
   billableLines: Array<{ itemCode: string; unit: string; quantity: number }>;
+  pendingConsumables?: Array<{ itemId: string; itemName: string; sku: string; quantity: number }> | null;
   inventoryMovements: Array<{
     id: string;
     date: string;

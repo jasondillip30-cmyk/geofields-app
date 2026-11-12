@@ -14,6 +14,7 @@ export interface DrillingApprovalRow {
   totalMetersDrilled: number;
   workHours: number;
   approvalStatus: "SUBMITTED";
+  pendingConsumables?: Array<{ itemId: string; itemName: string; quantity: number }> | null;
   project: { id: string; name: string };
   client: { id: string; name: string };
   rig: { id: string; rigCode: string };

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
@@ -12,7 +13,8 @@ import {
 import {
   DrillReportConsumablesValidationError,
   parseDrillReportConsumablesUsedInput,
-  replaceDrillReportConsumablesUsage
+  hasPostedDrillReportConsumables,
+  stageDrillReportConsumables
 } from "@/lib/drill-report-consumables";
 import {
   normalizeDelayReasonNote,
@@ -151,6 +153,15 @@ export async function PATCH(
       { status: 403 }
     );
   }
+  if (existing.approvalStatus === "APPROVED") {
+    return NextResponse.json({ message: "A Manager or Admin must reopen an approved report before it can be edited." }, { status: 409 });
+  }
+  const pendingConsumables = hasConsumablesUsedField
+    ? consumablesUsedResult
+    : parseDrillReportConsumablesUsedInput(existing.pendingConsumables ?? undefined);
+  if (pendingConsumables.error) {
+    return NextResponse.json({ message: pendingConsumables.error }, { status: 400 });
+  }
 
   const [project, rig, activeRateItems] = await Promise.all([
     prisma.project.findUnique({
@@ -274,17 +285,22 @@ export async function PATCH(
   try {
     updated = await prisma.$transaction(async (tx) => {
       await assertActiveProjectForDrilling(tx, projectId);
+      if (await hasPostedDrillReportConsumables(tx, reportId)) {
+        throw new DrillReportConsumablesValidationError("This report already has posted consumables. Correct those inventory records before resubmitting.");
+      }
+      const staged = await stageDrillReportConsumables(tx, projectId, pendingConsumables.lines);
       const nextBase = await tx.drillReport.update({
-        where: { id: reportId },
+        where: { id: reportId, updatedAt: existing.updatedAt, approvalStatus: existing.approvalStatus },
         data: {
           date: reportDate,
         clientId: project.clientId,
         projectId,
         rigId,
-        approvalStatus: "APPROVED",
-        submittedAt: existing.submittedAt || new Date(),
-        approvedById: auth.session.userId,
-        approvedAt: new Date(),
+        approvalStatus: "SUBMITTED",
+        submittedAt: new Date(),
+        approvedById: null,
+        approvedAt: null,
+        pendingConsumables: staged,
         rejectionReason: null,
         holeNumber,
         areaLocation,
@@ -308,20 +324,6 @@ export async function PATCH(
       if (hasBillableLinesField) {
         await replaceDrillReportBillableLines(tx, nextBase.id, validatedBillableLinesResult.lines);
       }
-      if (hasConsumablesUsedField) {
-        await replaceDrillReportConsumablesUsage({
-          tx,
-          drillReportId: nextBase.id,
-          projectId,
-          rigId,
-          clientId: project.clientId,
-          reportDate,
-          actorUserId: auth.session.userId,
-          lines: consumablesUsedResult.lines,
-          resetExisting: true
-        });
-      }
-
       const next = await tx.drillReport.findUniqueOrThrow({
         where: { id: nextBase.id },
         include: reportInclude
@@ -342,6 +344,9 @@ export async function PATCH(
       return next;
     });
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      return NextResponse.json({ message: "The report changed. Refresh before submitting it again." }, { status: 409 });
+    }
     if (error instanceof DrillReportConsumablesValidationError || error instanceof ProjectClosedForDrillingError) {
       return NextResponse.json({ message: error.message }, { status: 400 });
     }
