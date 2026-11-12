@@ -21,8 +21,8 @@ function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { refreshSession } = useRole();
-  const [email, setEmail] = useState("admin@geofields.co.tz");
-  const [password, setPassword] = useState("Admin123!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -98,7 +98,7 @@ function LoginShell({
       <section className="w-full max-w-md rounded-2xl border border-white/80 bg-white/90 p-6 shadow-card">
         <h1 className="font-display text-2xl text-ink-900">GeoFields Sign In</h1>
         <p className="mt-1 text-sm text-ink-600">
-          Use your employee account credentials to access the operations dashboard.
+          Sign in with your GeoFields employee account. If you need access, contact your GeoFields administrator.
         </p>
 
         <form onSubmit={onSubmit} className="mt-5 space-y-4">
@@ -106,6 +106,7 @@ function LoginShell({
             Email
             <input
               type="email"
+              autoComplete="username"
               value={email}
               onChange={(event) => onEmailChange(event.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
@@ -116,6 +117,7 @@ function LoginShell({
             Password
             <input
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(event) => onPasswordChange(event.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
@@ -132,13 +134,6 @@ function LoginShell({
           </button>
         </form>
 
-        <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-ink-600">
-          <p>Seed login examples:</p>
-          <p>admin@geofields.co.tz / Admin123!</p>
-          <p>office@geofields.co.tz / Office123!</p>
-          <p>mechanic@geofields.co.tz / Mechanic123!</p>
-          <p>field@geofields.co.tz / Field123!</p>
-        </div>
       </section>
     </main>
   );
