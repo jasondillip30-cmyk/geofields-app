@@ -74,7 +74,22 @@ async function main() {
     assert.equal((await POST(await request(endpoint, actor, { action: "generate" }), context)).status, 403);
   }
   const crew = { action: "create", kind: "CREW_PAY", cadence: "MONTHLY", startsOn: "2025-01-01", endsOn: "2025-01-31", crewJob: "Driller" };
+  const crewInput = { ...crew, employeeId: driller.id, amount: "1200.00" };
+  assert.match((await action({ ...crewInput, amount: "1.001" }, 400)).message, /positive amount/);
+  assert.match((await action({ ...crewInput, startsOn: "2025-01" }, 400)).message, /valid first pay month/);
+  assert.match((await action({ ...crewInput, endsOn: "2025-02-30" }, 400)).message, /valid stop date/);
+  assert.match((await action({ ...crewInput, endsOn: "2024-12-31" }, 400)).message, /stop date cannot be before/);
+  const february = { ...crewInput, startsOn: "2025-02-01", endsOn: "2025-02-28" };
+  await prisma.project.update({ where: { id: project.id }, data: { endDate: new Date("2025-01-31") } });
+  assert.match((await action(february, 400)).message, /end date is January 31, 2025/);
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { endDate: new Date("2025-02-28"), closedAt: new Date("2025-01-19"), status: "COMPLETED" }
+  });
+  assert.match((await action(february, 400)).message, /closed on January 19, 2025.*first pay month/);
+  assert.equal(await prisma.projectOperatingCostPlan.count(), 0);
   await action({ ...crew, employeeId: driller.id, amount: "1200.00" });
+  await prisma.project.update({ where: { id: project.id }, data: { endDate: null, closedAt: null, status: project.status } });
   await action({ ...crew, employeeId: driller.id, amount: "1200.00" }, 409);
   await action({ ...crew, employeeId: helper.id, amount: "800.00", crewJob: "Assistant" });
   await action({ action: "create", kind: "FOOD", cadence: "DAILY", startsOn: "2025-01-02", endsOn: "2025-01-04", amount: "50", label: "Crew meals" });

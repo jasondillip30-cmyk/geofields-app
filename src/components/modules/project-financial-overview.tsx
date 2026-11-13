@@ -62,6 +62,13 @@ function ProjectFinancialSummaryCard({
 }) {
   const [summary, setSummary] = useState<ProjectFinancialSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const summaryReady = Boolean(summary || error);
+
+  useEffect(() => {
+    if (summaryReady && window.location.hash === "#operating-costs") {
+      document.getElementById("operating-costs")?.scrollIntoView({ block: "start" });
+    }
+  }, [summaryReady]);
 
   useEffect(() => {
     let active = true;

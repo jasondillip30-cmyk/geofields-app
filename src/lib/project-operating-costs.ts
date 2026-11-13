@@ -10,6 +10,10 @@ import {
 const kinds = ["CREW_PAY", "FOOD", "OTHER"] as const;
 const cadences = ["ONCE", "DAILY", "WEEKLY", "MONTHLY"] as const;
 const categories: Record<ProjectOperatingCostKind, string> = { CREW_PAY: "Labor", FOOD: "Camp Food", OTHER: "Other" };
+const costDateFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "long",
+  timeZone: "UTC"
+});
 
 export class OperatingCostError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }
@@ -60,9 +64,20 @@ export async function changeProjectOperatingCosts(projectId: string, actor: Auth
         const startsOn = parseOperatingCostDate(body.startsOn);
         const endsOn = body.endsOn ? parseOperatingCostDate(body.endsOn) : null;
         const amountCents = parseOperatingCostCents(body.amount);
-        if (!kind || !cadence || !startsOn || !amountCents || (body.endsOn && !endsOn) ||
-          (endsOn && endsOn < startsOn) || (end && startsOn > end)) {
-          throw new OperatingCostError("Enter a valid amount, schedule and cost date within the project end date.");
+        if (!kind || !cadence) throw new OperatingCostError("Choose a valid cost type and repeat schedule.");
+        if (!amountCents) throw new OperatingCostError("Enter a positive amount with no more than two decimal places.");
+        if (!startsOn) {
+          throw new OperatingCostError(kind === "CREW_PAY" ? "Choose a valid first pay month." : "Choose a valid cost date.");
+        }
+        if (body.endsOn && !endsOn) throw new OperatingCostError("Choose a valid stop date or leave it blank.");
+        if (endsOn && endsOn < startsOn) {
+          throw new OperatingCostError("The stop date cannot be before the first cost date.");
+        }
+        if (end && startsOn > end) {
+          const cutoff = costDateFormatter.format(end);
+          const field = kind === "CREW_PAY" ? "first pay month" : "cost date";
+          const reason = project.closedAt ? `This project closed on ${cutoff}.` : `This project's end date is ${cutoff}.`;
+          throw new OperatingCostError(`${reason} Choose a ${field} on or before that date.`);
         }
         let label = readLabel(body.label);
         let employeeId: string | null = null;

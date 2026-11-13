@@ -40,6 +40,13 @@ export function ProjectOperatingCostsPanel({ projectId, onPosted }: { projectId:
   const endpoint = "/api/projects/" + encodeURIComponent(projectId) + "/operating-costs";
 
   useEffect(() => {
+    // A direct link can load before the permission gate mounts this panel.
+    if (window.location.hash === "#operating-costs") {
+      document.getElementById("operating-costs")?.scrollIntoView({ block: "start" });
+    }
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     void (async () => {
       try {

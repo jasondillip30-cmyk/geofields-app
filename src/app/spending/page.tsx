@@ -64,6 +64,7 @@ export default function SpendingPage() {
   const scopeProjectId = filters.projectId !== "all" ? filters.projectId : "";
   const isSingleProjectScope = scopeProjectId.length > 0;
   const canViewFinance = Boolean(role && canAccess(role, "finance:view"));
+  const canEditFinance = Boolean(role && canAccess(role, "finance:edit"));
   const canViewDrilling = Boolean(role && canAccess(role, "drilling:view"));
   const canSubmitDrillingReport = Boolean(role && canAccess(role, "drilling:submit"));
   const [drillingProject, setDrillingProject] = useState<{ id: string; status: string } | null>(null);
@@ -953,6 +954,14 @@ export default function SpendingPage() {
                 >
                   Drilling reports
                 </button>
+                {canEditFinance && (
+                  <Link
+                    href={`/projects/${encodeURIComponent(scopeProjectId)}#operating-costs`}
+                    className="gf-btn-secondary min-h-11 sm:ml-auto"
+                  >
+                    Operating Costs
+                  </Link>
+                )}
               </div>
             </Card>
 
