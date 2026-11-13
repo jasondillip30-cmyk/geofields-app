@@ -198,6 +198,7 @@ model User {
   roleRef             Role?               @relation(fields: [roleId], references: [id])
   submittedReports    DrillReport[]       @relation("reportSubmitter")
   maintenanceLogs     MaintenanceUpdate[] @relation("maintenanceActor")
+  workshopUpdates     WorkshopDailyUpdate[]
   approvals           Approval[]
   enteredExpenses     Expense[]           @relation("expenseEnteredBy")
   approvedExpenses    Expense[]           @relation("expenseApprover")
@@ -379,6 +380,7 @@ model Rig {
   revenues                 Revenue[]
   expenses                 Expense[]
   maintenance              MaintenanceRequest[]
+  workshopUpdates          WorkshopDailyUpdate[]
   inspections              Inspection[]
   breakdownReports         BreakdownReport[]
   inventoryMovements       InventoryMovement[]
@@ -661,12 +663,30 @@ model MaintenanceRequest {
   breakdownReport      BreakdownReport?    @relation(fields: [breakdownReportId], references: [id])
   mechanic             Mechanic            @relation(fields: [mechanicId], references: [id])
   updates              MaintenanceUpdate[]
+  workshopUpdates      WorkshopDailyUpdate[]
   approvals            Approval[]
   inventoryMovements   InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
   inventoryUsageRequestBatches InventoryUsageRequestBatch[]
 
   @@index([breakdownReportId, requestDate])
+}
+
+model WorkshopDailyUpdate {
+  id                   String   @id @default(cuid())
+  workDate             DateTime @db.Date
+  workDone             String
+  blockers             String?
+  nextSteps            String?
+  authorId             String
+  rigId                String?
+  maintenanceRequestId String?
+  createdAt            DateTime @default(now())
+  author               User @relation(fields: [authorId], references: [id], onDelete: Restrict)
+  rig                  Rig? @relation(fields: [rigId], references: [id], onDelete: SetNull)
+  maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
+
+  @@index([workDate, createdAt, id])
 }
 
 model InventorySupplier {

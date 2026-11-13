@@ -18,6 +18,8 @@ export type Permission =
   | "maintenance:view"
   | "maintenance:submit"
   | "maintenance:approve"
+  | "workshop-updates:view"
+  | "workshop-updates:post"
   | "mechanics:view"
   | "rigs:view"
   | "rigs:manage"
@@ -46,6 +48,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "maintenance:view",
     "maintenance:submit",
     "maintenance:approve",
+    "workshop-updates:view",
     "mechanics:view",
     "rigs:view",
     "rigs:manage",
@@ -70,6 +73,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "requisitions:view",
     "maintenance:view",
     "maintenance:approve",
+    "workshop-updates:view",
     "mechanics:view",
     "rigs:view",
     "rigs:manage",
@@ -97,9 +101,12 @@ const permissionMap: Record<UserRole, Permission[]> = {
     "rigs:view",
     "inventory:view",
     "inventory:approve",
+    "workshop-updates:view",
     "employees:view",
   ],
   MECHANIC: [
+    "workshop-updates:view",
+    "workshop-updates:post",
     "maintenance:view",
     "maintenance:submit",
     "rigs:view",

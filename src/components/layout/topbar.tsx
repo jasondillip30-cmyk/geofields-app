@@ -151,6 +151,10 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     }
   },
   {
+    test: (pathname) => pathname.startsWith("/workshop-updates"),
+    meta: { title: "Workshop Updates" }
+  },
+  {
     test: (pathname) => pathname.startsWith("/breakdowns"),
     meta: {
       title: "Breakdowns"

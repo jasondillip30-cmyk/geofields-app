@@ -25,7 +25,7 @@ export const MODE_VISIBLE_NAV_LABELS: Record<WorkspaceMode, string[]> = {
     "Inventory",
     "Project Operations"
   ],
-  workshop: ["Inventory", "Maintenance", "Rigs", "Approvals", "Purchase Requests", "Activity Log"]
+  workshop: ["Inventory", "Maintenance", "Workshop Updates", "Rigs", "Approvals", "Purchase Requests", "Activity Log"]
 };
 
 export const MODE_VISIBLE_SETUP_LABELS: Record<WorkspaceMode, string[]> = {
@@ -76,7 +76,7 @@ const WORKSPACE_ROUTE_RULES: Array<{
     rule: { allowedModes: ["project"], recommendedMode: "project" }
   },
   {
-    test: (pathname) => pathname.startsWith("/maintenance"),
+    test: (pathname) => pathname.startsWith("/maintenance") || pathname.startsWith("/workshop-updates"),
     rule: { allowedModes: ["workshop"], recommendedMode: "workshop" }
   },
   {
