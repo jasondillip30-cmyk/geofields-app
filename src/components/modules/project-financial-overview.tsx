@@ -43,7 +43,9 @@ export function ProjectFinancialOverview(props: { projectId: string; contractRat
     <>
       <ProjectFinancialSummaryCard {...props} revision={revision} />
       <AccessGate permission="finance:edit">
-        <ProjectOperatingCostsPanel projectId={props.projectId} onPosted={() => setRevision((value) => value + 1)} />
+        <div id="operating-costs" className="scroll-mt-48">
+          <ProjectOperatingCostsPanel projectId={props.projectId} onPosted={() => setRevision((value) => value + 1)} />
+        </div>
       </AccessGate>
     </>
   );

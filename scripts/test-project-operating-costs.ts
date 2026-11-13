@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 
 import { GET as spendingSummary } from "../src/app/api/spending/summary/route";
+import { GET as spendingCategory } from "../src/app/api/spending/expenses/route";
 import { GET, POST } from "../src/app/api/projects/[projectId]/operating-costs/route";
 import { POST as expenseStatus } from "../src/app/api/expenses/[expenseId]/status/route";
 import { signSessionToken } from "../src/lib/auth/session";
@@ -32,6 +33,7 @@ async function main() {
     return prisma.user.create({ data: { email, fullName: email.split("@")[0], passwordHash: "synthetic-not-a-login", role, isActive } });
   }
   const manager = await user("QA Manager@example.invalid", "MANAGER");
+  const admin = await user("QA Admin@example.invalid", "ADMIN");
   const office = await user("QA Office@example.invalid", "OFFICE");
   const inactive = await user("Inactive Admin@example.invalid", "ADMIN", false);
   const driller = await user("Private Driller@example.invalid", "FIELD");
@@ -103,9 +105,30 @@ async function main() {
   assert.equal(await prisma.inventoryMovement.count(), 0);
   const summary = await assertTotals(2075);
   assert.deepEqual(Object.fromEntries(summary.expenseByCategory.map((row: { category: string; total: number }) => [row.category, row.total])), { Labor: 2000, "Camp Food": 75 });
+
+  const laborPath = "/api/spending/expenses?category=lAbOr&projectId=" + project.id;
+  async function assertLabor(actor = office, expected = 2000, from = "2025-01-01") {
+    const response = await spendingCategory(await request(laborPath + "&from=" + from + "&to=2025-01-31", actor));
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    const payload = await response.json();
+    assert.deepEqual(payload, {
+      filters: { projectId: project.id, clientId: "all", rigId: "all", from, to: "2025-01-31", category: "lAbOr" },
+      summary: { totalCost: expected, totalQuantity: 0 },
+      detailMode: "project-total",
+      rows: []
+    });
+  }
+  await assertLabor();
+  await assertLabor(manager);
+  await assertLabor(admin);
+  await assertLabor(office, 0, "2025-01-02");
+  assert.equal((await spendingCategory(await request(laborPath, driller))).status, 403);
+  assert.equal((await spendingCategory(await request("/api/spending/expenses?category=Labor", office))).status, 400);
   assert.equal((await expenseStatus(await request("/api/expenses/" + expenseId + "/status", manager, { action: "reopen" }), { params: Promise.resolve({ expenseId }) })).status, 409);
   await action({ action: "reverse", id: expenseId, reason: "Private correction" });
   await assertTotals(75);
+  await assertLabor(office, 0);
   assert.equal((await prisma.projectOperatingCostCorrection.findUnique({ where: { expenseId } }))?.reason, "Private correction");
   assert.doesNotMatch(JSON.stringify(await prisma.auditLog.findMany()), /Private Driller|Private Helper|private correction/i);
   await action(confirmCrew);

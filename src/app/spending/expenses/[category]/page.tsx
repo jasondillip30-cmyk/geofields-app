@@ -21,6 +21,7 @@ interface SpendingCategoryLedgerRow {
 }
 
 interface SpendingCategoryLedgerPayload {
+  detailMode?: "project-total";
   summary: {
     totalCost: number;
     totalQuantity: number;
@@ -83,6 +84,7 @@ export default function SpendingCategoryDetailPage() {
       }
       const payload = (await response.json()) as SpendingCategoryLedgerPayload;
       setLedger({
+        detailMode: payload.detailMode,
         summary: payload.summary || emptyLedger.summary,
         rows: Array.isArray(payload.rows) ? payload.rows : []
       });
@@ -160,17 +162,30 @@ export default function SpendingCategoryDetailPage() {
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700">
                   Total cost: {formatCurrency(ledger.summary.totalCost)}
                 </span>
-                <span className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-sm font-medium text-brand-800">
-                  Quantity used: {formatNumber(ledger.summary.totalQuantity)}
-                </span>
+                {ledger.detailMode !== "project-total" && (
+                  <span className="rounded-full border border-brand-200 bg-brand-50 px-3 py-1 text-sm font-medium text-brand-800">
+                    Quantity used: {formatNumber(ledger.summary.totalQuantity)}
+                  </span>
+                )}
               </div>
             </Card>
 
-            <Card title="Expense details">
+            <Card title={ledger.detailMode === "project-total" ? "Combined labor cost" : "Expense details"}>
               {errorMessage ? (
                 <p className="text-sm text-red-700">{errorMessage}</p>
               ) : loading ? (
                 <p className="text-sm text-slate-600">Loading expense details...</p>
+              ) : ledger.detailMode === "project-total" ? (
+                <>
+                  <p className="text-sm text-slate-600">
+                    This is the combined labor expense for the selected project and dates. Individual pay details are private.
+                  </p>
+                  <AccessGate permission="finance:edit">
+                    <Link href={`/projects/${encodeURIComponent(scopeProjectId)}#operating-costs`} className="gf-btn-subtle mt-3 inline-flex">
+                      Open private Operating Costs
+                    </Link>
+                  </AccessGate>
+                </>
               ) : tableRows.length === 0 ? (
                 <p className="text-sm text-slate-600">No expense rows for this category in current scope.</p>
               ) : (

@@ -9,8 +9,8 @@ import { prisma } from "@/lib/prisma";
 import { calculateProjectRevenueFromBillableLines } from "@/lib/project-revenue-calculator";
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 import {
-  resolveSpendingExpenseCategory,
-  resolveSpendingMovementCategory
+  buildSpendingMovementCategories,
+  resolveSpendingExpenseCategory
 } from "@/lib/spending-expense-category";
 
 interface RevenueTrendPoint {
@@ -182,18 +182,12 @@ export async function GET(request: NextRequest) {
     string,
     (typeof spendContext.movements)[number]
   >();
-  const movementCategoryByExpenseId = new Map<string, string>();
+  const movementCategoryByExpenseId = buildSpendingMovementCategories(spendContext.movements);
   for (const movement of spendContext.movements) {
     if (!movement.expenseId || movementByExpenseId.has(movement.expenseId)) {
       continue;
     }
     movementByExpenseId.set(movement.expenseId, movement);
-    if (movement.item?.category) {
-      movementCategoryByExpenseId.set(
-        movement.expenseId,
-        resolveSpendingMovementCategory({ itemCategory: movement.item.category })
-      );
-    }
   }
   const projectExpenses = spendContext.projectExpensePolicy.rows.flatMap<ProjectExpenseRecord>((row) => {
     const expense = recognizedExpenseById.get(row.expenseId);

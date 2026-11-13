@@ -7,6 +7,23 @@ export interface SpendingCategoryExpenseLike {
   entrySource: string | null;
 }
 
+export const LABOR_EXPENSE_CATEGORY = "Labor";
+
+export function buildSpendingMovementCategories(
+  movements: ReadonlyArray<{ expenseId: string | null; item?: { category: string | null } | null }>
+) {
+  const categories = new Map<string, string>();
+  const seen = new Set<string>();
+  for (const movement of movements) {
+    if (!movement.expenseId || seen.has(movement.expenseId)) continue;
+    seen.add(movement.expenseId);
+    if (movement.item?.category) {
+      categories.set(movement.expenseId, resolveSpendingMovementCategory({ itemCategory: movement.item.category }));
+    }
+  }
+  return categories;
+}
+
 export function resolveSpendingMovementCategory({
   itemCategory,
   fallbackCategory

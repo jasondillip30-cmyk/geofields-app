@@ -2,7 +2,13 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
 import { prisma } from "@/lib/prisma";
-import { resolveSpendingMovementCategory } from "@/lib/spending-expense-category";
+import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
+import {
+  buildSpendingMovementCategories,
+  LABOR_EXPENSE_CATEGORY,
+  resolveSpendingExpenseCategory,
+  resolveSpendingMovementCategory
+} from "@/lib/spending-expense-category";
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiPermission(request, "finance:view");
@@ -24,6 +30,36 @@ export async function GET(request: NextRequest) {
   const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(fromParam);
   const toDate = parseDateOrNull(toParam, true);
+  const filters = {
+    projectId: projectId || "all",
+    clientId: clientId || "all",
+    rigId: rigId || "all",
+    from: fromParam,
+    to: toParam,
+    category: categoryParam
+  };
+
+  if (categoryParam.toLowerCase() === LABOR_EXPENSE_CATEGORY.toLowerCase()) {
+    if (!projectId) {
+      return NextResponse.json({ error: "Select a project to view its labor total." }, { status: 400 });
+    }
+    const spend = await buildRecognizedSpendContext({ projectId, fromDate, toDate });
+    const recognizedIds = new Set(spend.projectExpensePolicy.rows.map((row) => row.expenseId));
+    const movementCategoryByExpenseId = buildSpendingMovementCategories(spend.movements);
+    const totalCost = spend.recognizedExpenses.reduce((total, expense) => {
+      if (!recognizedIds.has(expense.id)) return total;
+      const category = resolveSpendingExpenseCategory({ expense, movementCategoryByExpenseId });
+      return category.toLowerCase() === LABOR_EXPENSE_CATEGORY.toLowerCase() ? total + safeNumber(expense.amount) : total;
+    }, 0);
+
+    // Keep individual pay, posting dates, and record IDs out of this response for every role.
+    return NextResponse.json({
+      filters,
+      summary: { totalCost: roundCurrency(totalCost), totalQuantity: 0 },
+      detailMode: "project-total",
+      rows: []
+    }, { headers: { "Cache-Control": "private, no-store" } });
+  }
 
   const rows = await prisma.inventoryMovement.findMany({
     where: {
@@ -96,14 +132,7 @@ export async function GET(request: NextRequest) {
   );
 
   return NextResponse.json({
-    filters: {
-      projectId: projectId || "all",
-      clientId: clientId || "all",
-      rigId: rigId || "all",
-      from: fromParam,
-      to: toParam,
-      category: categoryParam
-    },
+    filters,
     summary: {
       totalCost: roundCurrency(summary.totalCost),
       totalQuantity: roundNumber(summary.totalQuantity)
