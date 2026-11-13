@@ -472,6 +472,16 @@ model DrillReport {
   inventoryMovements InventoryMovement[] @relation("drillReportMovements")
 }
 
+model OfflineDrillingSubmission {
+  userId      String
+  key         String
+  payloadHash String
+  reportId    String
+  createdAt   DateTime @default(now())
+
+  @@id([userId, key])
+}
+
 model DrillReportBillableLine {
   id            String      @id @default(cuid())
   drillReportId String

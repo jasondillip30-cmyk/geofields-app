@@ -1,0 +1,11 @@
+{
+  "id": "/offline-drilling.html",
+  "name": "GeoFields Offline Drilling",
+  "short_name": "GeoFields Drill",
+  "start_url": "/offline-drilling.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1f5f7",
+  "theme_color": "#14363b",
+  "icons": [{ "src": "/offline-drilling-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

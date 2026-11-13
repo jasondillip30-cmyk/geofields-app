@@ -155,6 +155,7 @@ export function RoleProvider({
       method: "POST",
       credentials: "include"
     });
+    try { localStorage.removeItem("gf.offline-drilling.owner"); } catch { /* Storage can be disabled. */ }
     setUser(null);
     router.push("/login");
     router.refresh();

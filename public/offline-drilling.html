@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14363b">
+  <title>Offline Drilling | GeoFields</title>
+  <link rel="manifest" href="/offline-drilling.webmanifest">
+  <link rel="apple-touch-icon" href="/offline-drilling-icon.svg">
+  <link rel="stylesheet" href="/offline-drilling.css">
+  <script src="/offline-drilling.js" defer></script>
+</head>
+<body>
+  <header><div><strong>GeoFields</strong><span>Field reporting</span></div><a href="/">Back to GeoFields</a></header>
+  <main>
+    <section aria-labelledby="title">
+      <p class="eyebrow">FIELD KIT</p>
+      <h1 id="title">Offline drilling</h1>
+      <p>Set up on Wi-Fi before leaving. Reports saved here stay on this phone until GeoFields confirms receipt.</p>
+      <p id="readiness" role="status">Checking field setup...</p>
+      <div class="actions"><button id="prepare" type="button">Prepare or refresh field setup</button><a href="/login?next=%2Foffline-drilling.html">Sign in online</a><button id="lock" type="button" hidden>Lock offline reports</button></div>
+      <details><summary>Add this screen to your phone</summary><p>On iPhone, open this page in Safari and choose Share, Add to Home Screen, then Open as Web App if offered. On Android, use the browser's Install or Add to Home Screen option. Open the icon while online and prepare field setup there before leaving.</p></details>
+    </section>
+    <section id="capture" hidden aria-labelledby="capture-title">
+      <h2 id="capture-title">Record drilling</h2>
+      <form id="report">
+        <div class="fields">
+          <label>Project<select name="projectId" required></select></label>
+          <label>Rig<select name="rigId" required></select></label>
+          <label>Work date<input type="date" name="date" required></label>
+          <label>Hole number<input name="holeNumber" maxlength="100" required></label>
+          <label>From depth (m)<input type="number" name="fromMeter" min="0" step="any" inputmode="decimal" required></label>
+          <label>To depth (m)<input type="number" name="toMeter" min="0" step="any" inputmode="decimal" required></label>
+          <label>Work hours<input type="number" name="workHours" min="0" step="any" inputmode="decimal" required></label>
+        </div>
+        <details id="more-fields"><summary>Crew, delays, billing and notes</summary>
+          <div class="fields">
+            <label>Area / location<input name="areaLocation" maxlength="150" placeholder="Project site"></label>
+            <label>Lead operator<input name="leadOperatorName" maxlength="120"></label>
+            <label>Assistants<input name="assistantCount" type="number" min="0" max="2147483647" step="1" inputmode="numeric"></label>
+            <label>Rig moves<input name="rigMoves" type="number" min="0" max="2147483647" step="1" inputmode="numeric"></label>
+            <label>Standby hours<input name="standbyHours" type="number" min="0" step="any" inputmode="decimal"></label>
+            <label>Delay hours<input name="delayHours" type="number" min="0" step="any" inputmode="decimal"></label>
+            <label>Delay reason<select name="delayReasonCategory"><option value="">Not applicable</option><option value="WEATHER">Weather</option><option value="RIG_BREAKDOWN">Rig breakdown</option><option value="RIG_MOVE_SETUP">Rig move / setup</option><option value="MATERIAL_SUPPLY_WAIT">Material supply wait</option><option value="POWER_WATER_ISSUE">Power / water issue</option><option value="SAFETY_PERMIT_HOLD">Safety / permit hold</option><option value="SITE_ACCESS">Site access</option><option value="OTHER">Other</option></select></label>
+            <label>Delay note<input name="delayReasonNote" maxlength="500"></label>
+            <label>Depth override reason<input name="holeContinuityOverrideReason" maxlength="500"></label>
+          </div>
+          <div id="billing" class="fields"></div>
+          <label>Comments<textarea name="comments" rows="3" maxlength="2000"></textarea></label>
+        </details>
+        <p>Inventory usage is not captured here. Record it through the normal inventory workflow when back online.</p>
+        <button type="submit">Save report on this phone</button>
+        <button id="cancel-edit" type="button" hidden>Cancel correction</button>
+        <p id="save-status" role="status"></p>
+      </form>
+    </section>
+    <section aria-labelledby="queue-title">
+      <h2 id="queue-title">Reports on this phone</h2>
+      <p id="message" role="status" aria-live="polite"></p>
+      <div id="queue"></div>
+      <button id="sync" type="button" disabled>Sync now</button>
+    </section>
+    <p class="footnote">Use your own device or browser profile. Clearing browser data can erase unsynced reports. Keep this screen open or reopen it when you have signal.</p>
+  </main>
+</body>
+</html>

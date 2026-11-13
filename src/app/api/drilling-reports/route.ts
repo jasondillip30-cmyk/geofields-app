@@ -23,6 +23,10 @@ import { evaluateDrillReportHoleContinuity } from "@/lib/drill-report-continuity
 import { prisma } from "@/lib/prisma";
 import { assertActiveProjectForDrilling, ProjectClosedForDrillingError } from "@/lib/project-drilling-guard";
 import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
+import { canSyncOfflineDrilling, offlineBillingSelect, offlineBillingVersion, offlineDigest } from "@/lib/offline-drilling-server";
+import { buildGuidedBillableLineInputs } from "@/lib/drilling-report-guided-inputs";
+
+class OfflineSubmissionAlreadySaved extends Error {}
 
 const reportInclude = {
   client: { select: { id: true, name: true } },
@@ -132,6 +136,28 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => null);
+  const offlineKey = request.headers.get("Idempotency-Key");
+  const offlineScope = offlineKey ? { userId: auth.session.userId, key: offlineKey } : null;
+  const offlineHash = offlineScope ? offlineDigest(body) : "";
+  async function replayOfflineSubmission() {
+    if (!offlineScope) return null;
+    const saved = await prisma.offlineDrillingSubmission.findUnique({ where: { userId_key: offlineScope } });
+    if (!saved) return null;
+    return saved.payloadHash === offlineHash
+      ? NextResponse.json({ reportId: saved.reportId, replayed: true })
+      : NextResponse.json({ message: "This offline submission was already used for a different report." }, { status: 409 });
+  }
+  if (offlineKey !== null) {
+    if (!offlineScope || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(offlineKey) ||
+        !body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ message: "Invalid offline submission." }, { status: 400 });
+    }
+    if (body.offlineOwnerId !== offlineScope.userId || !(await canSyncOfflineDrilling(offlineScope.userId))) {
+      return NextResponse.json({ message: "Sign in as the account that saved this report." }, { status: 403 });
+    }
+    const replay = await replayOfflineSubmission();
+    if (replay) return replay;
+  }
 
   const date = typeof body?.date === "string" ? body.date : "";
   const projectId = typeof body?.projectId === "string" ? body.projectId : "";
@@ -150,7 +176,7 @@ export async function POST(request: NextRequest) {
   const holeContinuityOverrideReason = normalizeOptionalText(body?.holeContinuityOverrideReason);
   const delayReasonCategory = parseDelayReasonCategory(body?.delayReasonCategory);
   const delayReasonNote = normalizeDelayReasonNote(body?.delayReasonNote);
-  const hasBillableLinesField = Boolean(
+  const hasBillableLinesField = Boolean(offlineScope ||
     body && typeof body === "object" && Object.prototype.hasOwnProperty.call(body, "billableLines")
   );
   const hasConsumablesUsedField = Boolean(
@@ -179,6 +205,7 @@ export async function POST(request: NextRequest) {
         status: true,
         endDate: true,
         closedAt: true,
+        contractType: true,
         contractRatePerM: true,
         assignedRigId: true,
         backupRigId: true
@@ -193,11 +220,7 @@ export async function POST(request: NextRequest) {
         projectId,
         isActive: true
       },
-      select: {
-        itemCode: true,
-        unit: true,
-        unitRate: true
-      }
+      select: offlineBillingSelect
     })
   ]);
 
@@ -238,12 +261,38 @@ export async function POST(request: NextRequest) {
 
   const fromMeter = toNumber(body?.fromMeter);
   const toMeter = toNumber(body?.toMeter);
+  let billingLines = billableLinesResult.lines;
+  if (offlineScope) {
+    const parsedDate = new Date(date + "T00:00:00.000Z");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsedDate.getTime()) ||
+      parsedDate.toISOString().slice(0, 10) !== date || ![body.fromMeter, body.toMeter, body.workHours, body.standbyHours, body.rigMoves, body.delayHours]
+        .every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0) ||
+      fromMeter > toMeter || !Number.isSafeInteger(body.rigMoves) || body.rigMoves > 2147483647) {
+      return NextResponse.json({ message: "Check the work date, depths, hours, and rig moves." }, { status: 400 });
+    }
+    if (body.offlineBillingVersion !== offlineBillingVersion(project, activeRateItems)) {
+      return NextResponse.json({ message: "The billing setup changed. Refresh field setup and review the report before trying again." }, { status: 422 });
+    }
+    const guided = buildGuidedBillableLineInputs({
+      billingItems: activeRateItems,
+      metersDrilledToday: toMeter - fromMeter,
+      derivedFromMeter: fromMeter, derivedToMeter: toMeter,
+      workHours: body.workHours, standbyHours: body.standbyHours, rigMoves: body.rigMoves,
+      manualQuantities: body.manualQuantities ?? {}
+    });
+    if (guided.error || guided.stagedUnallocatedMeters > 0) {
+      return NextResponse.json({ message: guided.error || "Some drilled meters fall outside the billing depth bands. Review the report online." }, { status: 422 });
+    }
+    billingLines = guided.lines;
+  }
   const continuity = await evaluateDrillReportHoleContinuity(prisma, {
     projectId,
     holeNumber,
     fromMeter
   });
   if (continuity.overrideRequired && !holeContinuityOverrideReason) {
+    const replay = await replayOfflineSubmission();
+    if (replay) return replay;
     return NextResponse.json(
       { message: continuity.message || "Add a short reason to continue with a different starting depth." },
       { status: 400 }
@@ -258,7 +307,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: delayReasonValidation.error }, { status: 400 });
   }
   const validatedBillableLinesResult = hasBillableLinesField
-    ? await validateDrillReportBillableLinesForProject(prisma, projectId, billableLinesResult.lines, {
+    ? await validateDrillReportBillableLinesForProject(prisma, projectId, billingLines, {
         holeNumber,
         fromMeter,
         toMeter
@@ -268,7 +317,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ message: validatedBillableLinesResult.error }, { status: 400 });
   }
 
-  const totalMetersFromInput = toNumber(body?.totalMetersDrilled);
+  const totalMetersFromInput = offlineScope ? 0 : toNumber(body?.totalMetersDrilled);
   const totalMetersDrilled = totalMetersFromInput > 0 ? totalMetersFromInput : Math.max(0, toMeter - fromMeter);
   const billableAmount = roundCurrency(
     calculateDrillReportBillableAmount({
@@ -317,6 +366,14 @@ export async function POST(request: NextRequest) {
       if (hasBillableLinesField) {
         await replaceDrillReportBillableLines(tx, insertedBase.id, validatedBillableLinesResult.lines);
       }
+      if (offlineScope) {
+        // The key and report commit together, including audit and billable lines.
+        const claim = await tx.offlineDrillingSubmission.createMany({
+          data: { ...offlineScope, payloadHash: offlineHash, reportId: insertedBase.id },
+          skipDuplicates: true
+        });
+        if (!claim.count) throw new OfflineSubmissionAlreadySaved();
+      }
       const inserted = await tx.drillReport.findUniqueOrThrow({
         where: { id: insertedBase.id },
         include: reportInclude
@@ -336,12 +393,19 @@ export async function POST(request: NextRequest) {
       return inserted;
     });
   } catch (error) {
+    if (error instanceof OfflineSubmissionAlreadySaved) {
+      const replay = await replayOfflineSubmission();
+      if (replay) return replay;
+    }
     if (error instanceof DrillReportConsumablesValidationError || error instanceof ProjectClosedForDrillingError) {
       return NextResponse.json({ message: error.message }, { status: 400 });
     }
     throw error;
   }
 
+  if (offlineScope) {
+    return NextResponse.json({ reportId: created.id, replayed: false }, { status: 201 });
+  }
   const reports = await prisma.drillReport.findMany({
     orderBy: [{ date: "desc" }, { createdAt: "desc" }],
     include: reportInclude

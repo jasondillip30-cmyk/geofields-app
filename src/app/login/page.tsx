@@ -50,6 +50,12 @@ function LoginContent() {
       }
 
       const payload = await response.json();
+      try {
+        const offlineOwner = localStorage.getItem("gf.offline-drilling.owner");
+        if (offlineOwner && offlineOwner !== payload?.user?.id) {
+          localStorage.removeItem("gf.offline-drilling.owner");
+        }
+      } catch { /* Storage can be disabled. */ }
       await refreshSession();
 
       const role = payload?.user?.role as UserRole | undefined;

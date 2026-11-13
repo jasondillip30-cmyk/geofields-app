@@ -954,6 +954,11 @@ export default function SpendingPage() {
                 >
                   Drilling reports
                 </button>
+                {canSubmitDrillingReport && (
+                  <a href="/offline-drilling.html" className="gf-btn-secondary min-h-11">
+                    Offline drilling
+                  </a>
+                )}
                 {canEditFinance && (
                   <Link
                     href={`/projects/${encodeURIComponent(scopeProjectId)}#operating-costs`}
