@@ -1,3 +1,4 @@
+import { RankedAmountBars } from "@/components/charts/ranked-amount-bars";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -78,11 +79,8 @@ export function ProjectProfitabilityOverview({
         {costBreakdown.length === 0 ? (
           <p className="text-sm text-ink-600">No project costs recorded yet.</p>
         ) : (
-          <DataTable
-            compact
-            columns={["Expense category", "Amount"]}
-            rows={costBreakdown.map((row) => [row.label, formatCurrency(row.amount)])}
-          />
+          <RankedAmountBars label="Expense amounts by category" positive="Costs"
+            rows={costBreakdown.map((row) => ({ ...row, id: row.label }))} />
         )}
       </Card>
     </section>

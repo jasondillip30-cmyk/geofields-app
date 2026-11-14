@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { useAnalyticsFilters, type AnalyticsFilters } from "@/components/layout/analytics-filters-provider";
 import { FilterScopeBanner } from "@/components/layout/filter-scope-banner";
+import { RankedAmountBars } from "@/components/charts/ranked-amount-bars";
 import { Card, MetricCard } from "@/components/ui/card";
 import { SectionHeader } from "@/components/ui/section-header";
 import { DataTable } from "@/components/ui/table";
@@ -344,148 +345,90 @@ function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: s
           </div>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-2">
-          <Card title="Daily Summary (Live)">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading daily summary...</p>
-            ) : (
-              <DataTable
-                columns={["Metric", "Value"]}
-                rows={[
-                  ["Projects worked today", String(summary.summaries.daily.projectsWorked)],
-                  ["Rigs used today", String(summary.summaries.daily.rigsUsed)],
-                  ["Meters drilled", formatNumber(summary.summaries.daily.metersDrilled)],
-                  ["Revenue (recognized)", formatCurrency(summary.summaries.daily.revenue)],
-                  ["Expenses (recognized)", formatCurrency(summary.summaries.daily.expenses)],
-                  ["Issues reported", String(summary.summaries.daily.issuesReported)]
-                ]}
-              />
-            )}
-          </Card>
+        {showTotals && (
+          <>
+            <section className="gf-section" aria-labelledby="report-comparisons">
+              <h2 id="report-comparisons" className="text-lg font-semibold text-ink-900">Costs and profitability</h2>
+              <div className="grid items-start gap-4 xl:grid-cols-3">
+                <ReportComparison title="Expenses by Category" available={summary.availability.expenseCategoryBreakdown}
+                  columns={["Category", "Amount"]}
+                  rows={summary.reports.expensesByCategory.map(({ id, name, amount }) => ({ id, label: name, amount }))}
+                  details={renderExpenseRows(summary.reports.expensesByCategory)} />
+                <ReportComparison title="Project Profitability" available={summary.availability.projectProfitability}
+                  columns={["Project", "Revenue", "Expenses", "Profit", "Margin"]}
+                  rows={summary.reports.projectProfitability.map(({ id, name, profit }) => ({ id, label: name, amount: profit }))}
+                  details={renderProfitabilityRows(summary.reports.projectProfitability)} profit />
+                <ReportComparison title="Rig Profitability" available={summary.availability.rigProfitability}
+                  columns={["Rig", "Revenue", "Expenses", "Profit", "Margin"]}
+                  rows={summary.reports.rigProfitability.map(({ id, name, profit }) => ({ id, label: name, amount: profit }))}
+                  details={renderProfitabilityRows(summary.reports.rigProfitability)} profit />
+              </div>
+            </section>
 
-          <Card title="Weekly / Monthly Summary (Live)">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading weekly/monthly summary...</p>
-            ) : (
-              <DataTable
-                columns={["Metric", "Weekly", "Monthly"]}
-                rows={[
-                  [
-                    "Meters drilled",
-                    formatNumber(summary.summaries.weekly.metersDrilled),
-                    formatNumber(summary.summaries.monthly.metersDrilled)
-                  ],
-                  ["Revenue (recognized)", formatCurrency(summary.summaries.weekly.revenue), formatCurrency(summary.summaries.monthly.revenue)],
-                  ["Expenses (recognized)", formatCurrency(summary.summaries.weekly.expenses), formatCurrency(summary.summaries.monthly.expenses)],
-                  ["Profit", formatCurrency(summary.summaries.weekly.profit), formatCurrency(summary.summaries.monthly.profit)],
-                  ["Most used rig", summary.summaries.weekly.mostUsedRig, "-"],
-                  ["Highest revenue rig", summary.summaries.weekly.highestRevenueRig, "-"],
-                  ["Highest expense rig", summary.summaries.weekly.highestExpenseRig, "-"],
-                  ["Best project", summary.summaries.weekly.bestProject, "-"]
-                ]}
-              />
-            )}
-          </Card>
-        </section>
+            <ReportDisclosure title="Revenue breakdowns" hint="By client, project, and rig">
+              <div className="grid items-start gap-4 xl:grid-cols-3">
+                {([
+                  ["Client", summary.reports.revenueByClient],
+                  ["Project", summary.reports.revenueByProject],
+                  ["Rig", summary.reports.revenueByRig]
+                ] as const).map(([label, entries]) => (
+                  <ReportComparison key={label} title={`Revenue by ${label}`} available={summary.availability.revenueBreakdowns}
+                    columns={[label, "Revenue"]}
+                    rows={entries.map(({ id, name, revenue }) => ({ id, label: name, amount: revenue }))}
+                    details={renderRevenueRows(entries)} />
+                ))}
+              </div>
+            </ReportDisclosure>
+            <ReportDisclosure title="Activity summaries" hint="Daily, weekly, monthly, and operational figures">
+              <div className="grid gap-4 xl:grid-cols-2">
+                <Card title="Daily Summary">
+                  {summary.availability.dailySummary ? (
+                    <DataTable columns={["Metric", "Value"]} rows={[
+                      ["Projects worked today", String(summary.summaries.daily.projectsWorked)],
+                      ["Rigs used today", String(summary.summaries.daily.rigsUsed)],
+                      ["Meters drilled", formatNumber(summary.summaries.daily.metersDrilled)],
+                      ["Revenue (recognized)", formatCurrency(summary.summaries.daily.revenue)],
+                      ["Expenses (recognized)", formatCurrency(summary.summaries.daily.expenses)],
+                      ["Issues reported", String(summary.summaries.daily.issuesReported)]
+                    ]} />
+                  ) : <p className="gf-empty-state">Daily summary is unavailable.</p>}
+                </Card>
+                <Card title="Weekly / Monthly Summary">
+                  {summary.availability.weeklyMonthlySummary ? (
+                    <DataTable columns={["Metric", "Weekly", "Monthly"]} rows={[
+                      ["Meters drilled", formatNumber(summary.summaries.weekly.metersDrilled), formatNumber(summary.summaries.monthly.metersDrilled)],
+                      ["Revenue (recognized)", formatCurrency(summary.summaries.weekly.revenue), formatCurrency(summary.summaries.monthly.revenue)],
+                      ["Expenses (recognized)", formatCurrency(summary.summaries.weekly.expenses), formatCurrency(summary.summaries.monthly.expenses)],
+                      ["Profit", formatCurrency(summary.summaries.weekly.profit), formatCurrency(summary.summaries.monthly.profit)],
+                      ["Most used rig", summary.summaries.weekly.mostUsedRig, "-"],
+                      ["Highest revenue rig", summary.summaries.weekly.highestRevenueRig, "-"],
+                      ["Highest expense rig", summary.summaries.weekly.highestExpenseRig, "-"],
+                      ["Best project", summary.summaries.weekly.bestProject, "-"]
+                    ]} />
+                  ) : <p className="gf-empty-state">Weekly and monthly summaries are unavailable.</p>}
+                </Card>
+                <Card title="Operational Summary">
+                  {summary.availability.executiveSummary ? (
+                    <DataTable columns={["KPI", "Value"]} rows={[
+                      ["Total clients", String(summary.executive.totalClients)],
+                      ["Total projects", String(summary.executive.totalProjects)],
+                      ["Total rigs", String(summary.executive.totalRigs)],
+                      ["Active rigs", String(summary.executive.activeRigs)],
+                      ["Idle rigs", String(summary.executive.idleRigs)],
+                      ["Rigs in maintenance", String(summary.executive.maintenanceRigs)],
+                      ["Poor/critical rigs", String(summary.executive.poorConditionRigs)],
+                      ["Top performing rig", summary.executive.bestPerformingRig],
+                      ["Top performing client", summary.executive.bestPerformingClient],
+                      ["Top performing project", summary.executive.bestPerformingProject]
+                    ]} />
+                  ) : <p className="gf-empty-state">Operational summary is unavailable.</p>}
+                </Card>
+              </div>
+            </ReportDisclosure>
+          </>
+        )}
 
-        <Card title="Executive Summary (Live)">
-          {loading ? (
-            <p className="text-sm text-ink-600">Loading executive summary...</p>
-          ) : (
-            <DataTable
-              columns={["KPI", "Value"]}
-              rows={[
-                ["Total clients", String(summary.executive.totalClients)],
-                ["Total projects", String(summary.executive.totalProjects)],
-                ["Total rigs", String(summary.executive.totalRigs)],
-                ["Active rigs", String(summary.executive.activeRigs)],
-                ["Idle rigs", String(summary.executive.idleRigs)],
-                ["Rigs in maintenance", String(summary.executive.maintenanceRigs)],
-                ["Poor/critical rigs", String(summary.executive.poorConditionRigs)],
-                [`${financeScope} revenue`, showTotals ? formatCurrency(summary.totals.totalRevenue) : "-"],
-                [`${financeScope} expenses`, showTotals ? formatCurrency(summary.totals.totalExpenses) : "-"],
-                [`${financeScope} gross profit`, showTotals ? formatCurrency(summary.totals.grossProfit) : "-"],
-                ["Top performing rig", summary.executive.bestPerformingRig],
-                ["Top performing client", summary.executive.bestPerformingClient],
-                ["Top performing project", summary.executive.bestPerformingProject]
-              ]}
-            />
-          )}
-        </Card>
-
-        <section className="grid gap-5 xl:grid-cols-2">
-          <Card title="Revenue by Client">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading revenue by client...</p>
-            ) : summary.reports.revenueByClient.length === 0 ? (
-              <p className="gf-empty-state">No recognized revenue-by-client data in current scope.</p>
-            ) : (
-              <DataTable columns={["Client", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByClient)} />
-            )}
-          </Card>
-
-          <Card title="Revenue by Project">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading revenue by project...</p>
-            ) : summary.reports.revenueByProject.length === 0 ? (
-              <p className="gf-empty-state">No recognized revenue-by-project data in current scope.</p>
-            ) : (
-              <DataTable columns={["Project", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByProject)} />
-            )}
-          </Card>
-        </section>
-
-        <section className="grid gap-5 xl:grid-cols-2">
-          <Card title="Revenue by Rig">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading revenue by rig...</p>
-            ) : summary.reports.revenueByRig.length === 0 ? (
-              <p className="gf-empty-state">No recognized revenue-by-rig data in current scope.</p>
-            ) : (
-              <DataTable columns={["Rig", "Revenue"]} rows={renderRevenueRows(summary.reports.revenueByRig)} />
-            )}
-          </Card>
-
-          <Card title="Expenses by Category">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading expense categories...</p>
-            ) : summary.reports.expensesByCategory.length === 0 ? (
-              <p className="gf-empty-state">No recognized cost-category data in current scope.</p>
-            ) : (
-              <DataTable columns={["Category", "Amount"]} rows={renderExpenseRows(summary.reports.expensesByCategory)} />
-            )}
-          </Card>
-        </section>
-
-        <section className="grid gap-5 xl:grid-cols-2">
-          <Card title="Project Profitability">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading project profitability...</p>
-            ) : summary.reports.projectProfitability.length === 0 ? (
-              <p className="gf-empty-state">No project profitability data in current scope.</p>
-            ) : (
-              <DataTable
-                columns={["Project", "Revenue", "Expenses", "Profit", "Margin"]}
-                rows={renderProfitabilityRows(summary.reports.projectProfitability)}
-              />
-            )}
-          </Card>
-
-          <Card title="Rig Profitability">
-            {loading ? (
-              <p className="text-sm text-ink-600">Loading rig profitability...</p>
-            ) : summary.reports.rigProfitability.length === 0 ? (
-              <p className="gf-empty-state">No rig profitability data in current scope.</p>
-            ) : (
-              <DataTable
-                columns={["Rig", "Revenue", "Expenses", "Profit", "Margin"]}
-                rows={renderProfitabilityRows(summary.reports.rigProfitability)}
-              />
-            )}
-          </Card>
-        </section>
-
-        <Card title="Alerts Requiring Attention">
+        {showTotals && <Card title="Alerts Requiring Attention">
           <div className="space-y-2">
             {alerts.map((alert) => (
               <div key={alert.type} className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -497,9 +440,9 @@ function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: s
               </div>
             ))}
           </div>
-        </Card>
+        </Card>}
 
-        <Card title="Data Availability">
+        {showTotals && <ReportDisclosure title="Data availability" hint="Source coverage and report notes">
           <DataTable
             columns={["Section", "Status"]}
             rows={[
@@ -530,7 +473,44 @@ function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: s
               ))}
             </div>
           ) : null}
-        </Card>
+        </ReportDisclosure>}
       </div>
+  );
+}
+
+function ReportDisclosure({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+  return (
+    <details className="rounded-xl border border-slate-200 bg-white">
+      <summary className="cursor-pointer rounded-xl px-4 py-3 text-sm font-semibold text-ink-900 focus-visible:ring-2 focus-visible:ring-brand-500">
+        {title}
+        {hint && <span className="ml-2 font-normal text-ink-600">{hint}</span>}
+      </summary>
+      <div className="border-t border-slate-200 p-3">{children}</div>
+    </details>
+  );
+}
+
+function ReportComparison({ title, available, columns, rows, details, profit = false }: {
+  title: string;
+  available: boolean;
+  columns: string[];
+  rows: Array<{ id: string; label: string; amount: number }>;
+  details: string[][];
+  profit?: boolean;
+}) {
+  return (
+    <Card title={title}>
+      {!available ? <p className="gf-empty-state">This breakdown is unavailable in this scope.</p>
+        : rows.length === 0 ? <p className="gf-empty-state">No recorded data in this scope.</p>
+          : (
+            <div className="space-y-4">
+              <RankedAmountBars rows={rows} label={title} limit={5} signed={profit}
+                positive={profit ? "Profits" : "Amounts"} negative={profit ? "Losses" : undefined} />
+              <ReportDisclosure title="View details" hint={`${rows.length} ${rows.length === 1 ? "row" : "rows"}`}>
+                <DataTable columns={columns} rows={details} compact />
+              </ReportDisclosure>
+            </div>
+          )}
+    </Card>
   );
 }
