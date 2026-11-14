@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { WorkflowAssistPanel, type WorkflowAssistModel } from "@/components/layout/workflow-assist-panel";
-import { Card, MetricCard } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
@@ -31,6 +31,7 @@ import {
 
 interface PendingSummary {
   counts: {
+    drilling: number;
     requisitions: number;
     receiptSubmissions: number;
     inventoryUsage: number;
@@ -41,10 +42,6 @@ interface PendingSummary {
     over24: number;
     over3d: number;
   };
-  mostAttention: {
-    label: string;
-    count: number;
-  } | null;
 }
 
 export interface ApprovalsWorkspaceCardProps {
@@ -108,61 +105,48 @@ export function ApprovalsWorkspaceCard({
   onRequisitionStatus,
   onTabChange
 }: ApprovalsWorkspaceCardProps) {
+  const counts: Record<ApprovalTab, number> = {
+    requisitions: pendingSummary.counts.requisitions,
+    drilling: pendingSummary.counts.drilling,
+    inventory: pendingSummary.counts.inventoryUsage,
+    receipts: pendingSummary.counts.receiptSubmissions
+  };
+  const activeLabel = APPROVAL_TABS.find(({ key }) => key === activeTab)?.label;
+
   return (
     <Card
-      title="Approvals Hub"
-      subtitle="Centralized approval workflow for requisitions, drilling reports, inventory usage, and receipt submissions."
+      title="Approval queues"
+      subtitle="Choose what to review."
     >
       <div className="space-y-4">
-        <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-          This workspace handles requisitions, drilling, inventory usage, and receipt submissions.
-          Approved requisitions can then continue to receipt intake from Purchase Requests history.
-        </p>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Pending Requisition Approvals"
-            value={String(pendingSummary.counts.requisitions)}
-            tone={pendingSummary.counts.requisitions > 0 ? "warn" : "neutral"}
-          />
-          <MetricCard
-            label="Pending Receipt Submissions"
-            value={String(pendingSummary.counts.receiptSubmissions)}
-            tone={pendingSummary.counts.receiptSubmissions > 0 ? "warn" : "neutral"}
-          />
-          <MetricCard
-            label="Pending Inventory Usage"
-            value={String(pendingSummary.counts.inventoryUsage)}
-            tone={pendingSummary.counts.inventoryUsage > 0 ? "warn" : "neutral"}
-          />
-          <MetricCard
-            label="Total Pending Approvals"
-            value={String(pendingSummary.total)}
-            tone={pendingSummary.total > 0 ? "warn" : "neutral"}
-          />
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Pending Urgency Breakdown</p>
-            <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-              Oldest pending first
-            </span>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2 text-xs">
-            <StatusBadge label={`Under 24h: ${pendingSummary.buckets.under24}`} tone="green" />
-            <StatusBadge label={`Over 24h: ${pendingSummary.buckets.over24}`} tone="amber" />
-            <StatusBadge label={`Over 3 days: ${pendingSummary.buckets.over3d}`} tone="red" />
-          </div>
-          {pendingSummary.mostAttention && pendingSummary.mostAttention.count > 0 && (
-            <p className="mt-2 text-xs text-slate-700">
-              Most attention needed:{" "}
-              <span className="font-semibold text-ink-900">
-                {pendingSummary.mostAttention.label} ({pendingSummary.mostAttention.count})
+        <div role="group" aria-label="Choose an approval queue" className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          {APPROVAL_TABS.map((tab) => (
+            <button key={tab.key} type="button" onClick={() => onTabChange(tab.key)}
+              aria-pressed={activeTab === tab.key}
+              aria-controls="current-approval-queue"
+              aria-label={`${tab.label}, ${loading ? "loading" : `${counts[tab.key]} waiting`}`}
+              className={`flex min-h-12 min-w-0 items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left text-sm font-semibold focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                activeTab === tab.key
+                  ? "border-brand-500 bg-brand-50 text-brand-800"
+                  : "border-slate-200 bg-white text-ink-700 hover:bg-slate-50"
+              }`}>
+              {tab.label}
+              <span aria-hidden="true" className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-ink-800">
+                {loading ? "-" : formatNumber(counts[tab.key])}
               </span>
-            </p>
-          )}
+            </button>
+          ))}
         </div>
 
+        <section id="current-approval-queue" aria-labelledby="active-approval-queue-title" className="space-y-3" aria-busy={loading}>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 id="active-approval-queue-title" className="font-semibold text-ink-900">{activeLabel}</h3>
+            <p className="text-xs text-ink-600">
+              {activeTab === "inventory" ? "Oldest first within each request type" : "Oldest first"}
+            </p>
+          </div>
+          <WorkflowAssistPanel model={approvalWorkflowAssist} />
+        {activeTab === "receipts" ? (
         <div
           id={APPROVAL_SECTION_IDS.receipts}
           className={`overflow-hidden rounded-xl border border-slate-200 ${
@@ -173,9 +157,8 @@ export function ApprovalsWorkspaceCard({
         >
           <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3 py-2">
             <div>
-              <h3 className="text-sm font-semibold text-ink-900">Pending Receipt Submissions</h3>
               <p className="text-xs text-slate-600">
-                Spending visibility for stock and operational expense approvals.
+                Review receipt details before posting.
               </p>
             </div>
             <Link
@@ -275,26 +258,7 @@ export function ApprovalsWorkspaceCard({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200/85 bg-slate-50/75 p-2">
-          {APPROVAL_TABS.map((tab) => (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => onTabChange(tab.key)}
-              className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                activeTab === tab.key
-                  ? "border-brand-500 bg-brand-50 text-brand-800"
-                  : "border-slate-200 bg-white text-ink-700 hover:bg-slate-50"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        <WorkflowAssistPanel model={approvalWorkflowAssist} />
-
-        {activeTab === "requisitions" ? (
+        ) : activeTab === "requisitions" ? (
           loading ? (
             <p className="text-sm text-ink-600">Loading submitted requisitions...</p>
           ) : sortedRequisitionRows.length === 0 ? (
@@ -673,6 +637,17 @@ export function ApprovalsWorkspaceCard({
               </div>
             </div>
           </div>
+        )}
+        </section>
+        {!loading && pendingSummary.total > 0 && (
+          <details className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-ink-700">
+            <summary className="cursor-pointer font-semibold">Waiting time across all queues</summary>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <StatusBadge label={`Under 24h: ${pendingSummary.buckets.under24}`} tone="green" />
+              <StatusBadge label={`24h to under 3 days: ${pendingSummary.buckets.over24}`} tone="amber" />
+              <StatusBadge label={`3 days or more: ${pendingSummary.buckets.over3d}`} tone="red" />
+            </div>
+          </details>
         )}
       </div>
     </Card>

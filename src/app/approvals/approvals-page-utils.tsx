@@ -19,7 +19,8 @@ import type {
 export const APPROVAL_TABS: Array<{ key: ApprovalTab; label: string }> = [
   { key: "requisitions", label: "Purchase Requisitions" },
   { key: "drilling", label: "Drilling Reports" },
-  { key: "inventory", label: "Inventory Usage" }
+  { key: "inventory", label: "Inventory Usage" },
+  { key: "receipts", label: "Receipt Submissions" }
 ];
 
 export const APPROVAL_SECTION_IDS = {
@@ -30,11 +31,22 @@ export const APPROVAL_SECTION_IDS = {
   inventory: "approvals-tab-inventory-usage"
 } as const;
 
+export function parseApprovalTab(value: string | null): ApprovalTab | null {
+  if (value === "drilling-reports") return "drilling";
+  if (value === "purchase-requisitions") return "requisitions";
+  if (value === "inventory-usage") return "inventory";
+  if (value === "receipt" || value === "receipt-submissions") return "receipts";
+  return APPROVAL_TABS.find(({ key }) => key === value)?.key ?? null;
+}
+
 export function makeApprovalFocusRowId(kind: ApprovalRowKind, id: string) {
   return `${kind}-${id}`;
 }
 
 export function resolveApprovalTabForFocus(sectionId?: string | null, targetId?: string | null): ApprovalTab | null {
+  if (sectionId === APPROVAL_SECTION_IDS.receipts) {
+    return "receipts";
+  }
   if (sectionId === APPROVAL_SECTION_IDS.requisitions) {
     return "requisitions";
   }
@@ -45,6 +57,9 @@ export function resolveApprovalTabForFocus(sectionId?: string | null, targetId?:
     return "inventory";
   }
   if (targetId) {
+    if (targetId.startsWith("receipt-")) {
+      return "receipts";
+    }
     if (targetId.startsWith("requisition-")) {
       return "requisitions";
     }
@@ -278,6 +293,10 @@ export function toPendingTimestamp(value: string | null | undefined) {
     return Number.MAX_SAFE_INTEGER;
   }
   return parsed.getTime();
+}
+
+export function sortApprovalsOldestFirst<T>(rows: readonly T[], pendingDate: (row: T) => string | null | undefined) {
+  return [...rows].sort((a, b) => toPendingTimestamp(pendingDate(a)) - toPendingTimestamp(pendingDate(b)));
 }
 
 export function getPendingAgeMeta(value: string | null | undefined): {
@@ -536,7 +555,7 @@ export function buildApprovalCandidates({
       pendingAt,
       pendingTimestamp,
       issueType: row.classification.tag === "MAINTENANCE" ? "MAINTENANCE" : "APPROVAL_BACKLOG",
-      href: buildHref(),
+      href: buildHref({ tab: "receipts" }),
       targetId: makeApprovalFocusRowId("receipt", row.id),
       sectionId: APPROVAL_SECTION_IDS.receipts,
       actionLabel: "Review approval",

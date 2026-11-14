@@ -4,7 +4,7 @@ import type {
   ReceiptType
 } from "@/lib/receipt-approval-classification";
 
-export type ApprovalTab = "requisitions" | "drilling" | "inventory";
+export type ApprovalTab = "requisitions" | "drilling" | "inventory" | "receipts";
 
 export interface DrillingApprovalRow {
   id: string;

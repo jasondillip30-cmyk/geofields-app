@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { useRegisterCopilotContext } from "@/components/layout/ai-copilot-context";
 import { AccessGate } from "@/components/layout/access-gate";
@@ -48,17 +49,35 @@ import {
   getPendingAgeMeta,
   getReceiptSubmissionPendingDate,
   makeApprovalFocusRowId,
+  parseApprovalTab,
   readApiError,
   resolveApprovalSectionFromTargetId,
   resolveApprovalTabForFocus,
+  sortApprovalsOldestFirst,
   toPendingTimestamp
 } from "./approvals-page-utils";
 
 
 export default function ApprovalsPage() {
+  return (
+    <Suspense fallback={<p role="status" className="text-sm text-ink-600">Loading approvals...</p>}>
+      <ApprovalsPageContent />
+    </Suspense>
+  );
+}
+
+function ApprovalsPageContent() {
   const { user } = useRole();
   const { filters } = useAnalyticsFilters();
-  const [activeTab, setActiveTab] = useState<ApprovalTab>("requisitions");
+  const searchParams = useSearchParams();
+  const activeTab = parseApprovalTab(searchParams.get("tab")) ?? "requisitions";
+  const setActiveTab = (tab: ApprovalTab, replace = false) => {
+    const url = new URL(window.location.href);
+    if (parseApprovalTab(url.searchParams.get("tab")) === tab) return;
+    url.searchParams.set("tab", tab);
+    if (replace) window.history.replaceState(null, "", url);
+    else window.history.pushState(null, "", url);
+  };
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -551,38 +570,23 @@ export default function ApprovalsPage() {
   );
 
   const sortedDrillingRows = useMemo(
-    () => [...drillingRows].sort((a, b) => toPendingTimestamp(getDrillingPendingDate(a)) - toPendingTimestamp(getDrillingPendingDate(b))),
+    () => sortApprovalsOldestFirst(drillingRows, getDrillingPendingDate),
     [drillingRows]
   );
   const sortedRequisitionRows = useMemo(
-    () =>
-      [...requisitionRows].sort(
-        (a, b) => toPendingTimestamp(b.submittedAt) - toPendingTimestamp(a.submittedAt)
-      ),
+    () => sortApprovalsOldestFirst(requisitionRows, (row) => row.submittedAt),
     [requisitionRows]
   );
   const sortedInventoryRows = useMemo(
-    () =>
-      [...inventoryRows].sort(
-        (a, b) => toPendingTimestamp(getInventoryPendingDate(a)) - toPendingTimestamp(getInventoryPendingDate(b))
-      ),
+    () => sortApprovalsOldestFirst(inventoryRows, getInventoryPendingDate),
     [inventoryRows]
   );
   const sortedInventoryBatchRows = useMemo(
-    () =>
-      [...inventoryBatchRows].sort(
-        (a, b) =>
-          toPendingTimestamp(getInventoryBatchPendingDate(a)) -
-          toPendingTimestamp(getInventoryBatchPendingDate(b))
-      ),
+    () => sortApprovalsOldestFirst(inventoryBatchRows, getInventoryBatchPendingDate),
     [inventoryBatchRows]
   );
   const sortedReceiptSubmissionRows = useMemo(
-    () =>
-      [...receiptSubmissionRows].sort(
-        (a, b) =>
-          toPendingTimestamp(getReceiptSubmissionPendingDate(a)) - toPendingTimestamp(getReceiptSubmissionPendingDate(b))
-      ),
+    () => sortApprovalsOldestFirst(receiptSubmissionRows, getReceiptSubmissionPendingDate),
     [receiptSubmissionRows]
   );
   const highValueReceiptThreshold = useMemo(() => {
@@ -633,18 +637,10 @@ export default function ApprovalsPage() {
       }
     }
 
-    const attentionEntries = [
-      { key: "drilling", label: "Drilling Reports", count: counts.drilling },
-      { key: "requisitions", label: "Purchase Requisitions", count: counts.requisitions },
-      { key: "inventory", label: "Inventory Usage", count: counts.inventoryUsage },
-      { key: "receipt", label: "Receipt Submissions", count: counts.receiptSubmissions }
-    ].sort((a, b) => b.count - a.count);
-
     return {
       counts,
       total,
-      buckets,
-      mostAttention: attentionEntries[0] || null
+      buckets
     };
   }, [
     drillingRows,
@@ -905,7 +901,7 @@ export default function ApprovalsPage() {
         },
         {
           label: "Open receipt submissions",
-          href: buildApprovalHref(),
+          href: buildApprovalHref({ tab: "receipts" }),
           reason: "Review pending receipt submissions first.",
           actionLabel: "Review approval",
           inspectHint: "Inspect receipt type, amount, and operational context.",
@@ -966,7 +962,7 @@ export default function ApprovalsPage() {
       setAssistTarget(target);
       const nextTab = resolveApprovalTabForFocus(target.sectionId, target.targetId);
       if (nextTab) {
-        setActiveTab(nextTab);
+        setActiveTab(nextTab, true);
       }
       const nextSectionId = target.sectionId || resolveApprovalSectionFromTargetId(target.targetId);
       setFocusedRowId(target.targetId || null);
