@@ -3,10 +3,9 @@ const { env } = process;
 function verify() {
   if (env.VERCEL_ENV !== "preview" || env.VERCEL_GIT_COMMIT_REF !== "codex/geofields-phone-preview") return false;
   const database = new URL(env.DATABASE_URL || "");
-  return database.hostname.split(".")[0] === "ep-plain-silence-amqlwo66" &&
+  return database.hostname.split(".")[0] === "ep-proud-thunder-amm00zl6" &&
     database.hostname.endsWith(".neon.tech") &&
-    database.pathname === "/geofields_phone_qa" &&
-    database.username === "geofields_phone_preview" &&
+    database.pathname === "/neondb" &&
     database.searchParams.get("sslmode") === "require" &&
     /^vercel_blob_rw_vCQuUiDN4QhHMkJq_\S+$/.test(env.BLOB_READ_WRITE_TOKEN || "") &&
     /^[a-f0-9]{64}$/.test(env.AUTH_SECRET || "");
