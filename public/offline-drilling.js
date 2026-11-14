@@ -136,7 +136,7 @@ async function drawQueue() {
       summary.textContent = "View saved report";
       details.append(summary);
       for (const [label, value] of [
-        ["Rig", row.rigName], ["From depth", row.payload.fromMeter], ["To depth", row.payload.toMeter],
+        ["Rig", row.rigName], ["Shift", row.payload.shift === "DAY" ? "Day" : row.payload.shift === "NIGHT" ? "Night" : "Not recorded"], ["From depth", row.payload.fromMeter], ["To depth", row.payload.toMeter],
         ["Work hours", row.payload.workHours], ["Area", row.payload.areaLocation], ["Lead operator", row.payload.leadOperatorName],
         ["Assistants", row.payload.assistantCount], ["Rig moves", row.payload.rigMoves], ["Standby hours", row.payload.standbyHours],
         ["Delay hours", row.payload.delayHours], ["Delay reason", row.payload.delayReasonCategory], ["Delay note", row.payload.delayReasonNote],
@@ -166,6 +166,7 @@ function editReport(row) {
   correcting = row;
   control("projectId").value = row.payload.projectId;
   drawProjectFields();
+  control("shift").value = "";
   for (const [name, value] of Object.entries(row.payload)) {
     const field = control(name);
     if (field && (typeof value === "string" || typeof value === "number")) field.value = value;
@@ -248,7 +249,7 @@ async function sync() {
         // Keep a confirmation, not the submitted report's private notes or crew details.
         await save(queueKey(owner, row.id), { id: row.id, savedAt: row.savedAt, projectName: row.projectName,
           status: "sent", syncedAt: new Date().toISOString(), replayed: result.replayed === true, payload: {
-            date: row.payload.date, holeNumber: row.payload.holeNumber, projectId: row.payload.projectId, toMeter: row.payload.toMeter
+            date: row.payload.date, shift: row.payload.shift, holeNumber: row.payload.holeNumber, projectId: row.payload.projectId, toMeter: row.payload.toMeter
           } });
         message(result.replayed ? "GeoFields already received this report. No duplicate was created." : "Report submitted for approval.");
       } else if ([400, 404, 409, 422].includes(response.status)) {
@@ -279,7 +280,7 @@ reportForm.addEventListener("submit", async (event) => {
   if (!shellReady || !selected || !owner || setup.ownerId !== owner) return;
   const fields = Object.fromEntries(new FormData(reportForm));
   const payload = {
-    date: fields.date, projectId: selected.id, rigId: fields.rigId, holeNumber: fields.holeNumber.trim(),
+    date: fields.date, shift: fields.shift, projectId: selected.id, rigId: fields.rigId, holeNumber: fields.holeNumber.trim(),
     areaLocation: fields.areaLocation.trim() || "Project site", fromMeter: Number(fields.fromMeter), toMeter: Number(fields.toMeter),
     workHours: Number(fields.workHours), rigMoves: Number(fields.rigMoves), standbyHours: Number(fields.standbyHours),
     delayHours: Number(fields.delayHours), delayReasonCategory: fields.delayReasonCategory,

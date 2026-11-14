@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { drillingWorkDate } from "@/lib/drilling-shifts";
 import type React from "react";
 
 import type {
@@ -117,7 +118,7 @@ export function DrillingReportEntryFormCard({
   return (
     <Card
       title={formMode === "edit" ? "Correct drilling report" : "New drilling report"}
-      subtitle={formMode === "edit" ? "Update the report and resubmit it for approval." : "Record today's drilling activity for the locked project."}
+      subtitle={formMode === "edit" ? "Update the report and resubmit it for approval." : "Record drilling activity for the selected shift."}
       action={
         <Link href={spendingReportsHref} className="gf-btn-subtle">
           View reports in Project Operations
@@ -134,9 +135,28 @@ export function DrillingReportEntryFormCard({
           </div>
         </div>
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-          <ReadOnlyField
-            label="Report date"
-            value={formMode === "create" ? `${form.date} (today)` : form.date}
+          {formMode === "create" ? (
+            <label className="text-sm text-ink-700">
+              <span className="mb-1 block">Shift start date</span>
+              <input
+                type="date"
+                max={drillingWorkDate()}
+                required
+                value={form.date}
+                onChange={(event) => setForm((current) => ({ ...current, date: event.target.value }))}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 outline-none ring-brand-300 focus:ring"
+              />
+              <span className="mt-1 block text-xs text-ink-600">For night shifts, use the date the shift began.</span>
+            </label>
+          ) : <ReadOnlyField label="Shift start date" value={form.date} />}
+          <SelectField
+            label="Shift"
+            value={form.shift}
+            onChange={(value) => setForm((current) => ({
+              ...current, shift: value === "DAY" || value === "NIGHT" ? value : ""
+            }))}
+            options={[{ value: "DAY", label: "Day" }, { value: "NIGHT", label: "Night" }]}
+            required
           />
 
           {isSingleProjectScope ? (

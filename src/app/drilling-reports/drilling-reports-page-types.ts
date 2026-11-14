@@ -44,6 +44,7 @@ export interface RigOption {
 export interface DrillReportRecord {
   id: string;
   date: string;
+  shift?: "DAY" | "NIGHT" | null;
   approvalStatus: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
   submittedAt: string | null;
   approvedAt: string | null;
@@ -129,6 +130,7 @@ export interface HoleProgressSummary {
 
 export interface DrillReportFormState {
   date: string;
+  shift: "DAY" | "NIGHT" | "";
   projectId: string;
   rigId: string;
   holeMode: "CONTINUE" | "START_NEW";

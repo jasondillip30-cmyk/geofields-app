@@ -25,6 +25,7 @@ import { assertActiveProjectForDrilling, ProjectClosedForDrillingError } from "@
 import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 import { canSyncOfflineDrilling, offlineBillingSelect, offlineBillingVersion, offlineDigest } from "@/lib/offline-drilling-server";
 import { buildGuidedBillableLineInputs } from "@/lib/drilling-report-guided-inputs";
+import { parseDrillingShift } from "@/lib/drilling-shifts";
 
 class OfflineSubmissionAlreadySaved extends Error {}
 
@@ -160,6 +161,8 @@ export async function POST(request: NextRequest) {
   }
 
   const date = typeof body?.date === "string" ? body.date : "";
+  const shift = parseDrillingShift(body?.shift);
+  if (shift.error) return NextResponse.json({ message: shift.error }, { status: 400 });
   const projectId = typeof body?.projectId === "string" ? body.projectId : "";
   const rigId = typeof body?.rigId === "string" ? body.rigId : "";
   const holeNumber = typeof body?.holeNumber === "string" ? body.holeNumber.trim() : "";
@@ -336,6 +339,7 @@ export async function POST(request: NextRequest) {
       const insertedBase = await tx.drillReport.create({
         data: {
           date: reportDate,
+          shift: shift.value,
         clientId: project.clientId,
         projectId,
         rigId,
@@ -588,6 +592,7 @@ function parseApprovalStatusFilter(value: string | null): EntryApprovalStatus | 
 function reportAuditSnapshot(report: {
   id: string;
   date: Date;
+  shift: string | null;
   projectId: string;
   rigId: string;
   clientId: string;
@@ -606,6 +611,7 @@ function reportAuditSnapshot(report: {
   return {
     id: report.id,
     date: report.date,
+    shift: report.shift,
     projectId: report.projectId,
     rigId: report.rigId,
     clientId: report.clientId,

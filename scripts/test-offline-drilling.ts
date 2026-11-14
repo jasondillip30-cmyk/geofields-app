@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { GET } from "../src/app/api/offline-drilling/route";
 import { POST } from "../src/app/api/drilling-reports/route";
+import { GET as GET_SHIFT_GRID } from "../src/app/api/drilling-reports/shift-grid/route";
 import { signSessionToken } from "../src/lib/auth/session";
 import { prisma } from "../src/lib/prisma";
 
@@ -11,7 +12,7 @@ async function main() {
   assert.equal(process.env.GEOFIELDS_OFFLINE_TEST, "1");
   assert.equal(url.protocol, "postgresql:");
   assert.equal(url.hostname, "127.0.0.1");
-  assert.ok(["55448", "55449"].includes(url.port));
+  assert.ok(["55448", "55449", "55450"].includes(url.port));
   assert.equal(url.pathname, "/geofields_offline_test");
   assert.equal(url.search, "");
   const [db] = await prisma.$queryRaw<Array<{ name: string }>>`SELECT current_database() AS name`;
@@ -48,12 +49,13 @@ async function main() {
   assert.doesNotMatch(JSON.stringify(kit), /unitRate|passwordHash|contractRate/);
   const payload = {
     offlineOwnerId: user.id, offlineBillingVersion: kit.projects[0].billingVersion, projectId: project.id, rigId: rig.id,
-    date: "2026-11-12", holeNumber: "QA-01", areaLocation: "QA", fromMeter: 0, toMeter: 12,
+    date: "2026-11-12", shift: "NIGHT", holeNumber: "QA-01", areaLocation: "QA", fromMeter: 0, toMeter: 12,
     workHours: 2, standbyHours: 0, rigMoves: 0, delayHours: 0, totalMetersDrilled: 999
   };
   const key = randomUUID();
   assert.equal((await POST(await request(other, payload, key))).status, 403);
   assert.equal((await POST(await request(user, { ...payload, date: "2026-02-30" }, key))).status, 400);
+  assert.equal((await POST(await request(user, { ...payload, shift: "OTHER" }, key))).status, 400);
   const submissions = await Promise.all(Array.from({ length: 4 }, async () => POST(await request(user, payload, key))));
   assert.deepEqual(submissions.map((response) => response.status).sort(), [200, 200, 200, 201]);
   const responses = await Promise.all(submissions.map((response) => response.json()));
@@ -61,12 +63,22 @@ async function main() {
   assert.equal((await POST(await request(user, { ...payload, workHours: 3 }, key))).status, 409);
   const report = await prisma.drillReport.findUniqueOrThrow({ where: { id: responses[0].reportId }, include: { billableLines: true } });
   assert.equal(report.approvalStatus, "SUBMITTED");
+  assert.equal(report.shift, "NIGHT");
   assert.equal(report.totalMetersDrilled, 12);
   assert.equal(report.billableAmount, 1440);
   assert.equal(report.billableLines[0]?.quantity, 12);
   assert.equal(await prisma.drillReport.count(), 1);
   assert.equal(await prisma.auditLog.count(), 1);
   assert.equal(await prisma.inventoryMovement.count(), 0);
+  const gridUrl = new URL("http://localhost/api/drilling-reports/shift-grid");
+  gridUrl.search = new URLSearchParams({ projectId: project.id, start: "2026-11-06" }).toString();
+  assert.equal((await GET_SHIFT_GRID(new NextRequest(gridUrl))).status, 401);
+  const gridRequest = () => request().then(({ headers }) => new NextRequest(gridUrl, { headers }));
+  const grid = await GET_SHIFT_GRID(await gridRequest());
+  assert.equal(grid.status, 200);
+  assert.deepEqual((await grid.json()).reports.map(({ id, shift }: { id: string; shift: string }) => [id, shift]), [[report.id, "NIGHT"]]);
+  gridUrl.searchParams.set("start", "2026-11-13");
+  assert.deepEqual((await (await GET_SHIFT_GRID(await gridRequest())).json()).reports, []);
   const refreshedKit = await (await GET(await request())).json();
   assert.deepEqual(refreshedKit.projects[0].recentHoles, [{ holeNumber: "QA-01", depth: 12 }]);
   await prisma.drillReport.update({ where: { id: report.id }, data: { approvalStatus: "REJECTED" } });

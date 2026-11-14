@@ -23,6 +23,7 @@ export function buildEditFormFromReport(report: DrillReportRecord): DrillReportF
 
   return {
     date: new Date(report.date).toISOString().slice(0, 10),
+    shift: report.shift ?? "",
     projectId: report.project.id,
     rigId: report.rig.id,
     holeMode: "CONTINUE",

@@ -27,7 +27,8 @@
         <div class="fields">
           <label>Project<select name="projectId" required></select></label>
           <label>Rig<select name="rigId" required></select></label>
-          <label>Work date<input type="date" name="date" required></label>
+          <label>Shift start date<input type="date" name="date" required><small>For night shifts, use the date the shift began.</small></label>
+          <label>Shift<select name="shift" required><option value="">Select</option><option value="DAY">Day</option><option value="NIGHT">Night</option></select></label>
           <label>Hole number<input name="holeNumber" maxlength="100" required></label>
           <label id="recent-hole-field" hidden>Continue a recent hole
             <select id="recent-hole"><option value="">Choose a hole or type one above</option></select>

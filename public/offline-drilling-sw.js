@@ -1,4 +1,4 @@
-const CACHE = "gf-offline-drilling-v2";
+const CACHE = "gf-offline-drilling-v3";
 const SHELL = [
   "/offline-drilling.html", "/offline-drilling.css", "/offline-drilling.js",
   "/offline-drilling.webmanifest", "/offline-drilling-icon.svg"

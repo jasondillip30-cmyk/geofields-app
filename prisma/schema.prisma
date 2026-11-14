@@ -429,9 +429,15 @@ model RigUsage {
   client     Client    @relation(fields: [clientId], references: [id])
 }
 
+enum DrillingShift {
+  DAY
+  NIGHT
+}
+
 model DrillReport {
   id                 String              @id @default(cuid())
   date               DateTime
+  shift              DrillingShift?
   clientId           String
   projectId          String
   rigId              String

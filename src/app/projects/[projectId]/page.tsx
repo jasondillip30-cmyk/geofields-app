@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { formatProjectContractRateDisplay } from "@/lib/project-contract-display";
 import { resolveProjectOperationalStatus, scheduledProjectCloseout } from "@/lib/project-status-policy";
 import { ProjectRecordDrilling } from "./project-record-drilling";
+import { ProjectShiftGrid } from "./project-shift-grid";
 
 type ContractType = "PER_METER" | "DAY_RATE" | "LUMP_SUM";
 
@@ -109,6 +110,10 @@ export default async function ProjectWorkspacePage({
 
         <AccessGate permission="finance:view">
           <ProjectFinancialOverview projectId={project.id} contractRate={primaryContractRate} />
+        </AccessGate>
+
+        <AccessGate permission="drilling:view">
+          <ProjectShiftGrid key={project.id} projectId={project.id} reportsHref={drillingReportsHref} />
         </AccessGate>
 
         <Card title="Project details">

@@ -89,6 +89,9 @@ function buildBillableLinesInput(
 export async function persistDrillingReport(
   params: PersistDrillingReportParams
 ): Promise<PersistDrillingReportResult> {
+  if (params.form.shift !== "DAY" && params.form.shift !== "NIGHT") {
+    return { ok: false, error: "Select Day or Night before saving." };
+  }
   const billableLines = buildBillableLinesInput(params.guidedBillableLinesResult);
   if (billableLines.error) {
     return { ok: false, error: billableLines.error };
@@ -142,6 +145,7 @@ export async function persistDrillingReport(
 
   const payload = {
     date: params.form.date,
+    shift: params.form.shift,
     projectId: params.form.projectId,
     rigId: params.form.rigId,
     holeNumber: params.derivedHoleNumber,

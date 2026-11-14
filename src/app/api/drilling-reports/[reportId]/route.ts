@@ -22,6 +22,7 @@ import {
   validateDelayReasonInput
 } from "@/lib/drill-report-delay-reasons";
 import { evaluateDrillReportHoleContinuity } from "@/lib/drill-report-continuity";
+import { parseDrillingShift } from "@/lib/drilling-shifts";
 import { prisma } from "@/lib/prisma";
 import { assertActiveProjectForDrilling, ProjectClosedForDrillingError } from "@/lib/project-drilling-guard";
 import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
@@ -101,6 +102,8 @@ export async function PATCH(
   const body = await request.json().catch(() => null);
 
   const date = typeof body?.date === "string" ? body.date : "";
+  const shift = parseDrillingShift(body?.shift);
+  if (shift.error) return NextResponse.json({ message: shift.error }, { status: 400 });
   const projectId = typeof body?.projectId === "string" ? body.projectId : "";
   const rigId = typeof body?.rigId === "string" ? body.rigId : "";
   const holeNumber = typeof body?.holeNumber === "string" ? body.holeNumber.trim() : "";
@@ -293,6 +296,7 @@ export async function PATCH(
         where: { id: reportId, updatedAt: existing.updatedAt, approvalStatus: existing.approvalStatus },
         data: {
           date: reportDate,
+          shift: shift.value,
         clientId: project.clientId,
         projectId,
         rigId,
@@ -405,6 +409,7 @@ function roundCurrency(value: number) {
 function reportAuditSnapshot(report: {
   id: string;
   date: Date;
+  shift: string | null;
   projectId: string;
   rigId: string;
   clientId: string;
@@ -423,6 +428,7 @@ function reportAuditSnapshot(report: {
   return {
     id: report.id,
     date: report.date,
+    shift: report.shift,
     projectId: report.projectId,
     rigId: report.rigId,
     clientId: report.clientId,

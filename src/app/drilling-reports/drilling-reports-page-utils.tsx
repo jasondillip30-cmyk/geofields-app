@@ -1,5 +1,6 @@
 import { DRILL_DELAY_REASON_OPTIONS, type DrillDelayReasonCategory } from "@/lib/drill-report-delay-reasons";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { drillingWorkDate } from "@/lib/drilling-shifts";
 
 import type {
   DrillReportFormState,
@@ -102,7 +103,8 @@ export function ReadOnlyField({ label, value }: { label: string; value: string }
 
 export function createEmptyForm(projectId = "", rigId = ""): DrillReportFormState {
   return {
-    date: new Date().toISOString().slice(0, 10),
+    date: drillingWorkDate(),
+    shift: "",
     projectId,
     rigId,
     holeMode: "CONTINUE",
