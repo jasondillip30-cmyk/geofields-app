@@ -6,6 +6,8 @@ import {
   withFinancialDrillReportApproval
 } from "@/lib/financial-approval-policy";
 import { prisma } from "@/lib/prisma";
+import { assessProjectBudgetHealth } from "@/lib/project-budget-health";
+import { resolveProjectOperationalStatus } from "@/lib/project-status-policy";
 import { calculateProjectRevenueFromBillableLines } from "@/lib/project-revenue-calculator";
 import { buildRecognizedSpendContext } from "@/lib/recognized-spend-context";
 import {
@@ -83,6 +85,7 @@ export async function GET(request: NextRequest) {
   const rigId = projectId ? null : rawRigId;
   const fromDate = parseDateOrNull(fromParam);
   const toDate = parseDateOrNull(toParam, true);
+  const includeBudgetHealth = request.nextUrl.searchParams.get("includeBudgetHealth") === "1" && !fromParam && !toParam;
 
   const drillWhere = withFinancialDrillReportApproval({
     ...(projectId ? { projectId } : {}),
@@ -98,7 +101,7 @@ export async function GET(request: NextRequest) {
       : {})
   });
 
-  const [reports, spendContext, usageMovements, projectRateCard] = await Promise.all([
+  const [reports, spendContext, usageMovements, projectRateCard, budgetContext] = await Promise.all([
     prisma.drillReport.findMany({
       where: drillWhere,
       orderBy: [{ date: "asc" }, { createdAt: "asc" }],
@@ -172,6 +175,19 @@ export async function GET(request: NextRequest) {
             }
           }
         })
+      : Promise.resolve(null),
+    projectId && includeBudgetHealth
+      ? prisma.project.findUnique({
+          where: { id: projectId },
+          select: {
+            startDate: true, endDate: true, closedAt: true, status: true, estimatedMeters: true,
+            budgetPlans: {
+              where: { scopeType: "PROJECT", isActive: true },
+              take: 2,
+              select: { amount: true, currency: true, periodStart: true, periodEnd: true }
+            }
+          }
+        })
       : Promise.resolve(null)
   ]);
 
@@ -219,6 +235,40 @@ export async function GET(request: NextRequest) {
 
   const revenueTrend = buildRevenueTrend(reports);
   const expenseByCategory = buildExpenseCategoryRows(projectExpenses, totalExpenses);
+  const budgetHealth = budgetContext ? (() => {
+    const day = (date: Date) => date.toISOString().slice(0, 10);
+    let firstActualDate: string | null = null;
+    let lastActualDate: string | null = null;
+    for (const entry of [...reports, ...projectExpenses]) {
+      const date = day(entry.date);
+      if (firstActualDate === null || date < firstActualDate) firstActualDate = date;
+      if (lastActualDate === null || date > lastActualDate) lastActualDate = date;
+    }
+    const end = budgetContext.endDate;
+    const closed = budgetContext.closedAt;
+    const projectEnd = closed && (!end || closed < end) ? closed : end;
+    const [plan] = budgetContext.budgetPlans;
+    const budgetPeriodPosted = budgetContext.budgetPlans.length === 1
+      ? roundCurrency(projectExpenses.reduce((sum, expense) => {
+          const date = day(expense.date);
+          return date >= day(plan.periodStart) && date <= day(plan.periodEnd) ? sum + expense.amount : sum;
+        }, 0))
+      : undefined;
+    return assessProjectBudgetHealth({
+      plans: budgetContext.budgetPlans.map((plan) => ({
+        ...plan, periodStart: day(plan.periodStart), periodEnd: day(plan.periodEnd)
+      })),
+      projectStart: day(budgetContext.startDate),
+      projectEnd: projectEnd ? day(projectEnd) : null,
+      firstActualDate,
+      lastActualDate,
+      completed: resolveProjectOperationalStatus(budgetContext) === "COMPLETED",
+      actual: roundCurrency(totalExpenses),
+      approvedMeters: roundCurrency(totalMetersDrilled),
+      plannedMeters: budgetContext.estimatedMeters || null,
+      budgetPeriodPosted
+    });
+  })() : undefined;
   const incomeByHole = buildIncomeByHoleRows(reports, totalIncome);
   const timePeriod = buildTimePeriodBuckets(
     reports,
@@ -258,6 +308,7 @@ export async function GET(request: NextRequest) {
     revenueTrend,
     timePeriod,
     expenseByCategory,
+    ...(budgetHealth ? { budgetHealth } : {}),
     incomeByHole,
     largestExpenses,
     mostFrequentUsage,

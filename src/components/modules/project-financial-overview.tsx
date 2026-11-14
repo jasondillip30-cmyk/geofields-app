@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
+import { ProjectBudgetHealthCard } from "@/components/modules/project-budget-health-card";
 import { ProjectOperatingCostsPanel } from "@/components/modules/project-operating-costs-panel";
 import { ProjectProfitabilityOverview } from "@/components/modules/project-profitability-overview";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
 import { formatCurrency } from "@/lib/utils";
+import type { ProjectBudgetHealth } from "@/lib/project-budget-health";
 
 interface ProjectFinancialSummary {
+  budgetHealth?: ProjectBudgetHealth;
   totals: {
     income: number;
     expenses: number;
@@ -75,7 +78,7 @@ function ProjectFinancialSummaryCard({
     const load = async () => {
       try {
         const response = await fetch(
-          `/api/spending/summary?projectId=${encodeURIComponent(projectId)}`,
+          `/api/spending/summary?projectId=${encodeURIComponent(projectId)}&includeBudgetHealth=1`,
           { cache: "no-store" }
         );
         if (!response.ok) {
@@ -118,6 +121,9 @@ function ProjectFinancialSummaryCard({
 
   return (
     <section className="space-y-4">
+      {summary.budgetHealth && (
+        <ProjectBudgetHealthCard health={summary.budgetHealth} projectId={projectId} categories={summary.expenseByCategory} />
+      )}
       <ProjectProfitabilityOverview
         drilledMeters={summary.totals.metersDrilled || 0}
         contractRate={contractRate}
@@ -136,7 +142,8 @@ function ProjectFinancialSummaryCard({
       </p>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Largest expenses" subtitle="Highest recognized project costs in the current project scope.">
+        <div id="project-largest-expenses" className="scroll-mt-48">
+          <Card title="Largest expenses" subtitle="Highest recognized project costs in the current project scope." className="h-full">
           {summary.largestExpenses.length > 0 ? (
             <DataTable
               compact
@@ -157,7 +164,8 @@ function ProjectFinancialSummaryCard({
           ) : (
             <p className="text-sm text-ink-600">No recognized project expenses yet.</p>
           )}
-        </Card>
+          </Card>
+        </div>
 
         <Card title="Supporting records" subtitle="Open the project-scoped source views behind this overview.">
           <div className="flex flex-wrap gap-2">
