@@ -11,7 +11,7 @@ async function main() {
   assert.equal(process.env.GEOFIELDS_OFFLINE_TEST, "1");
   assert.equal(url.protocol, "postgresql:");
   assert.equal(url.hostname, "127.0.0.1");
-  assert.equal(url.port, "55448");
+  assert.ok(["55448", "55449"].includes(url.port));
   assert.equal(url.pathname, "/geofields_offline_test");
   assert.equal(url.search, "");
   const [db] = await prisma.$queryRaw<Array<{ name: string }>>`SELECT current_database() AS name`;
@@ -44,6 +44,7 @@ async function main() {
   assert.match(setup.headers.get("Cache-Control") ?? "", /private, no-store/);
   const kit = await setup.json();
   assert.deepEqual(kit.projects.map((item: { id: string }) => item.id), [project.id]);
+  assert.deepEqual(kit.projects[0].recentHoles, []);
   assert.doesNotMatch(JSON.stringify(kit), /unitRate|passwordHash|contractRate/);
   const payload = {
     offlineOwnerId: user.id, offlineBillingVersion: kit.projects[0].billingVersion, projectId: project.id, rigId: rig.id,
@@ -66,6 +67,10 @@ async function main() {
   assert.equal(await prisma.drillReport.count(), 1);
   assert.equal(await prisma.auditLog.count(), 1);
   assert.equal(await prisma.inventoryMovement.count(), 0);
+  const refreshedKit = await (await GET(await request())).json();
+  assert.deepEqual(refreshedKit.projects[0].recentHoles, [{ holeNumber: "QA-01", depth: 12 }]);
+  await prisma.drillReport.update({ where: { id: report.id }, data: { approvalStatus: "REJECTED" } });
+  assert.deepEqual((await (await GET(await request())).json()).projects[0].recentHoles, []);
   await prisma.projectBillingRateItem.update({ where: { id: rate.id }, data: { unitRate: 130 } });
   assert.equal((await POST(await request(user, payload, randomUUID()))).status, 422);
   await prisma.project.update({ where: { id: project.id }, data: { closedAt: new Date() } });

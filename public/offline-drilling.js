@@ -8,6 +8,7 @@ let setup = null;
 let busy = false;
 let correcting = null;
 let shellReady = false;
+let savedRows = [];
 
 const storage = new Promise((resolve, reject) => {
   try {
@@ -48,6 +49,7 @@ function project() {
 function drawProjectFields() {
   const current = project();
   control("rigId").replaceChildren(...(current?.rigs ?? []).map((rig) => new Option(rig.name, rig.id)));
+  drawRecentHoles();
   const billing = byId("billing");
   billing.replaceChildren();
   for (const item of current?.extraItems ?? []) {
@@ -62,6 +64,27 @@ function drawProjectFields() {
     label.append(input);
     billing.append(label);
   }
+}
+
+function drawRecentHoles() {
+  const current = project();
+  const holes = new Map((current?.recentHoles ?? []).map(({ holeNumber, depth }) => [holeNumber, depth]));
+  if (current) {
+    for (const row of [...savedRows].reverse()) {
+      const payload = row.payload;
+      if (row.status === "review" || (row.status === "sent" && (!row.syncedAt || row.syncedAt <= setup.savedAt)) ||
+          payload.projectId !== current.id || !Number.isFinite(payload.toMeter)) continue;
+      holes.set(payload.holeNumber, Math.max(holes.get(payload.holeNumber) ?? 0, payload.toMeter));
+    }
+  }
+  const picker = byId("recent-hole");
+  picker.replaceChildren(new Option("Choose a hole or type one above", ""));
+  for (const [hole, depth] of holes) {
+    const option = new Option(hole + " (continue at " + depth + " m)", hole);
+    option.dataset.depth = String(depth);
+    picker.append(option);
+  }
+  byId("recent-hole-field").hidden = holes.size === 0;
 }
 
 function drawSetup() {
@@ -88,6 +111,8 @@ async function drawQueue() {
   const owner = ownedBy();
   const rows = await entries(owner);
   if (owner !== ownedBy()) return;
+  savedRows = rows;
+  drawRecentHoles();
   const list = byId("queue");
   list.replaceChildren();
   byId("sync").disabled = busy || !rows.some((row) => row.status === "waiting");
@@ -101,7 +126,7 @@ async function drawQueue() {
     const heading = document.createElement("strong");
     heading.textContent = row.projectName + " / " + row.payload.holeNumber + " / " + row.payload.date;
     const status = document.createElement("p");
-    status.textContent = row.status === "sent" ? "Submitted for approval"
+    status.textContent = row.status === "sent" ? (row.replayed ? "Already received by GeoFields" : "Submitted for approval")
       : row.status === "review" ? "Needs review: " + row.error
       : "Saved on this phone. Waiting to sync.";
     item.append(heading, status);
@@ -222,8 +247,10 @@ async function sync() {
       if (response.ok && typeof result?.reportId === "string") {
         // Keep a confirmation, not the submitted report's private notes or crew details.
         await save(queueKey(owner, row.id), { id: row.id, savedAt: row.savedAt, projectName: row.projectName,
-          status: "sent", payload: { date: row.payload.date, holeNumber: row.payload.holeNumber } });
-        message("Report received. It is pending approval if newly submitted.");
+          status: "sent", syncedAt: new Date().toISOString(), replayed: result.replayed === true, payload: {
+            date: row.payload.date, holeNumber: row.payload.holeNumber, projectId: row.payload.projectId, toMeter: row.payload.toMeter
+          } });
+        message(result.replayed ? "GeoFields already received this report. No duplicate was created." : "Report submitted for approval.");
       } else if ([400, 404, 409, 422].includes(response.status)) {
         await save(queueKey(owner, row.id), { ...row, status: "review", error: result?.message || "Review this report online." });
         message("A saved report needs review. No data was discarded.");
@@ -297,7 +324,19 @@ byId("lock").addEventListener("click", () => {
   message("Offline reports locked. Sign in online with the same account and prepare field setup to reopen them.");
 });
 byId("cancel-edit").addEventListener("click", resetForm);
-control("projectId").addEventListener("change", drawProjectFields);
+control("projectId").addEventListener("change", () => {
+  drawProjectFields();
+  control("holeNumber").value = "";
+  control("fromMeter").value = "";
+  control("toMeter").value = "";
+});
+byId("recent-hole").addEventListener("change", (event) => {
+  const option = event.target.selectedOptions[0];
+  if (!option?.value) return;
+  control("holeNumber").value = option.value;
+  control("fromMeter").value = option.dataset.depth;
+  control("toMeter").value = "";
+});
 window.addEventListener("online", () => void sync());
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void sync(); });
 window.addEventListener("storage", (event) => {

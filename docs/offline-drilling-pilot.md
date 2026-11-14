@@ -8,6 +8,8 @@ prepare again there before going offline.
 1. Sign in while connected, open **Offline drilling** from project Spending
    or the project detail page, and choose **Prepare or refresh field setup**.
    Confirm **Ready for offline use** and check the project and rig are listed.
+   Select a recent hole to fill its last recorded depth, or type a new hole.
+   The downloaded depth is a hint; the server checks it again at sync.
 2. Turn on airplane mode. Close the screen, reopen it from the Home Screen,
    fill a report, and select **Save report on this phone**. Close and reopen
    again to verify that the saved report is still waiting to sync.

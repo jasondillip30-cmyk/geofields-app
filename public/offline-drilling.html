@@ -29,6 +29,9 @@
           <label>Rig<select name="rigId" required></select></label>
           <label>Work date<input type="date" name="date" required></label>
           <label>Hole number<input name="holeNumber" maxlength="100" required></label>
+          <label id="recent-hole-field" hidden>Continue a recent hole
+            <select id="recent-hole"><option value="">Choose a hole or type one above</option></select>
+          </label>
           <label>From depth (m)<input type="number" name="fromMeter" min="0" step="any" inputmode="decimal" required></label>
           <label>To depth (m)<input type="number" name="toMeter" min="0" step="any" inputmode="decimal" required></label>
           <label>Work hours<input type="number" name="workHours" min="0" step="any" inputmode="decimal" required></label>
