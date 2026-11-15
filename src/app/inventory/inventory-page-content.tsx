@@ -16,6 +16,7 @@ import { canManageExpenseApprovalActions } from "@/lib/auth/approval-policy";
 import { canAccess } from "@/lib/auth/permissions";
 import type { CopilotPageContext } from "@/lib/ai/contextual-copilot";
 import { buildScopedHref } from "@/lib/drilldown";
+import { ProjectInventoryPriority, WorkshopStockPriority } from "./inventory-items-priority";
 import { InventoryPageChrome } from "./inventory-page-chrome";
 import { InventoryPageModals } from "./inventory-page-modals";
 import {
@@ -941,6 +942,27 @@ function InventoryPageContent() {
               Switch to All projects mode to manage warehouse issues.
             </p>
           </section>
+        )}
+
+        {showItems && (
+          isSingleProjectScope ? (
+            <ProjectInventoryPriority
+              projectId={filters.projectId}
+              summary={overview.projectLinked}
+              movements={movements}
+              loading={loading}
+              canViewCost={canViewInventoryValue}
+              movementsHref={buildHref("/inventory/stock-movements")}
+              onOpenMovement={openMovementDetail}
+            />
+          ) : (
+            <WorkshopStockPriority
+              overview={overview === defaultOverview ? null : overview}
+              loading={loading}
+              onOpenItem={openItemDetail}
+              canOpenPurchases={Boolean(user?.role && canAccess(user.role, "requisitions:view"))}
+            />
+          )
         )}
 
         <InventoryItemsSection

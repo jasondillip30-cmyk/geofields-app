@@ -149,17 +149,6 @@ export function InventoryItemsSection({
     >
       <Card className="min-w-0">
         <div className="space-y-4">
-          {canViewInventoryValue ? (
-            <div id="inventory-value-card-section">
-              <InventoryValueStatisticsCard
-                totalValue={overview.overview.totalInventoryValue}
-                subtitle={`Quantity on hand × unit cost across ${formatNumber(overview.overview.totalItems)} catalog items. ${formatNumber(overview.overview.unassignedLocationItemCount)} item(s) without a location contribute ${formatCurrency(overview.overview.unassignedLocationValue)}.`}
-                segments={inventoryValueSegments}
-                lowStockRows={lowStockRows}
-                outOfStockRows={overview.outOfStockItems}
-              />
-            </div>
-          ) : null}
           {isSingleProjectScope ? (
             <div className="rounded-xl border border-brand-200 bg-brand-50/70 px-4 py-3 text-sm text-brand-900">
               Showing project-approved items for this locked project. Stock on hand remains global warehouse stock.
@@ -536,6 +525,20 @@ export function InventoryItemsSection({
           )}
         </div>
       </Card>
+      {canViewInventoryValue && !isSingleProjectScope && (
+        <details id="inventory-value-card-section" className="mt-3 rounded-xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer font-semibold text-ink-900">Warehouse valuation</summary>
+          <div className="mt-3">
+            <InventoryValueStatisticsCard
+              totalValue={overview.overview.totalInventoryValue}
+              subtitle={`Quantity on hand × unit cost across ${formatNumber(overview.overview.totalItems)} catalog items. ${formatNumber(overview.overview.unassignedLocationItemCount)} item(s) without a location contribute ${formatCurrency(overview.overview.unassignedLocationValue)}.`}
+              segments={inventoryValueSegments}
+              lowStockRows={lowStockRows}
+              outOfStockRows={overview.outOfStockItems}
+            />
+          </div>
+        </details>
+      )}
     </section>
   );
 }
