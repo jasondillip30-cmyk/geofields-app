@@ -106,5 +106,5 @@ function formatScopeDate(value: string) {
     return value;
   }
 
-  return parsed.toLocaleDateString("en-US");
+  return parsed.toLocaleDateString("en-US", { timeZone: "UTC" });
 }
