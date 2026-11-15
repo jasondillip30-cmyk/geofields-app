@@ -45,6 +45,7 @@ export interface MaintenanceRow {
   issueType: string;
   issueDescription: string;
   status: string;
+  urgency?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   estimatedDowntimeHours: number;
   notes: string | null;
   breakdownReportId: string | null;

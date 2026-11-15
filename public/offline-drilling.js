@@ -9,6 +9,7 @@ let busy = false;
 let correcting = null;
 let shellReady = false;
 let savedRows = [];
+let draftId = null;
 
 const storage = new Promise((resolve, reject) => {
   try {
@@ -35,6 +36,7 @@ async function data(mode, action) {
 const load = (key) => data("readonly", (store) => store.get(key));
 const save = (key, value) => data("readwrite", (store) => store.put(value, key));
 const queueKey = (owner, id) => "report:" + owner + ":" + id;
+const draftKey = (owner) => "draft:" + owner;
 const ownedBy = () => localStorage.getItem(ownerKey);
 const message = (text) => { byId("message").textContent = text; };
 
@@ -88,12 +90,14 @@ function drawRecentHoles() {
 }
 
 function drawSetup() {
+  const ready = shellReady && Boolean(setup?.projects.length);
   const previous = control("projectId").value;
   control("projectId").replaceChildren(...(setup?.projects ?? []).map((item) => new Option(item.name, item.id)));
   if (setup?.projects.some((item) => item.id === previous)) control("projectId").value = previous;
   drawProjectFields();
   byId("lock").hidden = !setup;
-  byId("capture").hidden = !shellReady || !setup?.projects.length;
+  byId("capture").hidden = !ready;
+  byId("setup-options").open = !ready;
   byId("readiness").textContent = !shellReady ? "Offline screen is not ready. Connect to the internet and try again."
     : !setup ? "Not ready yet. Sign in online, then prepare field setup."
     : !setup.projects.length ? "No active projects with an active assigned rig were downloaded."
@@ -109,27 +113,40 @@ async function entries(owner) {
 
 async function drawQueue() {
   const owner = ownedBy();
-  const rows = await entries(owner);
+  const [rows, draft] = await Promise.all([entries(owner), owner ? load(draftKey(owner)) : null]);
   if (owner !== ownedBy()) return;
   savedRows = rows;
   drawRecentHoles();
   const list = byId("queue");
   list.replaceChildren();
-  byId("sync").disabled = busy || !rows.some((row) => row.status === "waiting");
+  byId("open-report").textContent = draft ? "Resume draft" : "Start report";
+  const waiting = rows.filter((row) => row.status === "waiting").length;
+  const review = rows.filter((row) => row.status === "review").length;
+  const sent = rows.filter((row) => row.status === "sent").length;
+  byId("queue-summary").textContent = [
+    waiting && waiting + " waiting to send", review && review + " need review", sent && sent + " sent"
+  ].filter(Boolean).join(" / ");
+  byId("sync").hidden = waiting === 0;
+  byId("sync").disabled = busy || navigator.onLine === false || waiting === 0;
   if (!rows.length) {
     list.textContent = "No saved reports for this account.";
     return;
   }
-  for (const row of rows) {
+  const rank = { review: 0, waiting: 1, sent: 2 };
+  for (const row of [...rows].sort((a, b) => rank[a.status] - rank[b.status] || b.savedAt.localeCompare(a.savedAt))) {
     const item = document.createElement("div");
     item.className = "entry";
     const heading = document.createElement("strong");
     heading.textContent = row.projectName + " / " + row.payload.holeNumber + " / " + row.payload.date;
     const status = document.createElement("p");
-    status.textContent = row.status === "sent" ? (row.replayed ? "Already received by GeoFields" : "Submitted for approval")
-      : row.status === "review" ? "Needs review: " + row.error
-      : "Saved on this phone. Waiting to sync.";
-    item.append(heading, status);
+    status.className = "entry-status";
+    status.dataset.status = row.status;
+    status.textContent = row.status === "sent" ? "Sent to GeoFields"
+      : row.status === "review" ? "Needs review" : "Saved on this phone";
+    const detail = document.createElement("p");
+    detail.textContent = row.status === "sent" ? "Submitted for approval. Check the online report for its current status."
+      : row.status === "review" ? row.error : "Waiting for a connection to send.";
+    item.append(status, heading, detail);
     if (row.status === "review") {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
@@ -163,7 +180,13 @@ async function drawQueue() {
 }
 
 function editReport(row) {
+  if (!reportForm.hidden) {
+    message("Save the open form before correcting another report.");
+    return;
+  }
   correcting = row;
+  setFormOpen(true);
+  byId("save-draft").hidden = true;
   control("projectId").value = row.payload.projectId;
   drawProjectFields();
   control("shift").value = "";
@@ -181,12 +204,22 @@ function editReport(row) {
   control("holeNumber").focus({ preventScroll: true });
 }
 
+function setFormOpen(open) {
+  reportForm.hidden = !open;
+  byId("open-report").hidden = open;
+  byId("open-report").setAttribute("aria-expanded", String(open));
+}
+
 function resetForm() {
   correcting = null;
+  draftId = null;
   reportForm.reset();
   control("date").value = today();
   drawProjectFields();
   byId("cancel-edit").hidden = true;
+  byId("save-draft").hidden = false;
+  byId("more-fields").open = false;
+  setFormOpen(false);
 }
 
 async function liveSetup() {
@@ -199,6 +232,10 @@ async function liveSetup() {
 
 async function prepare() {
   if (busy) return;
+  if (!reportForm.hidden) {
+    byId("save-status").textContent = "Save or finish the open form before refreshing field setup.";
+    return;
+  }
   busy = true;
   byId("prepare").disabled = true;
   byId("lock").disabled = true;
@@ -297,10 +334,21 @@ reportForm.addEventListener("submit", async (event) => {
   if (button.disabled) return;
   button.disabled = true;
   try {
-    const id = correcting?.id || crypto.randomUUID();
-    await save(queueKey(owner, id), { id, payload, projectName: selected.name,
+    const id = correcting?.id || draftId || crypto.randomUUID();
+    const row = { id, payload, projectName: selected.name,
       rigName: selected.rigs.find((rig) => rig.id === payload.rigId)?.name,
-      status: "waiting", savedAt: new Date().toISOString() });
+      status: "waiting", savedAt: new Date().toISOString() };
+    await data("readwrite", (store) => {
+      if (correcting) return store.put(row, queueKey(owner, id));
+      const submitted = store.add(row, queueKey(owner, id));
+      if (draftId) {
+        const pending = store.get(draftKey(owner));
+        pending.onsuccess = () => {
+          if (pending.result?.id === id) store.delete(draftKey(owner));
+        };
+      }
+      return submitted;
+    });
     resetForm();
     byId("save-status").textContent = "Saved on this phone. Check the queue below for sync status.";
     message("Saved on this phone. Waiting to sync.");
@@ -310,6 +358,62 @@ reportForm.addEventListener("submit", async (event) => {
     byId("save-status").textContent = "Could not save on this phone. Keep the form open and try again.";
   } finally {
     button.disabled = false;
+  }
+});
+
+byId("open-report").addEventListener("click", async () => {
+  const owner = ownedBy();
+  if (!setup || setup.ownerId !== owner || !reportForm.hidden) return;
+  const openButton = byId("open-report");
+  openButton.disabled = true;
+  try {
+    const draft = await load(draftKey(owner));
+    if (owner !== ownedBy()) return;
+    resetForm();
+    byId("save-status").textContent = "";
+    if (draft && setup.projects.some((item) => item.id === draft.fields.projectId)) {
+      draftId = draft.id;
+      control("projectId").value = draft.fields.projectId;
+      drawProjectFields();
+      for (const [name, value] of Object.entries(draft.fields)) {
+        const field = control(name);
+        if (field) field.value = value;
+      }
+      byId("more-fields").open = draft.moreFieldsOpen;
+    } else if (draft) {
+      byId("save-status").textContent = "The draft's project is not in this field setup. It is still saved on this phone.";
+    }
+    setFormOpen(true);
+    control("projectId").focus();
+  } catch {
+    byId("save-status").textContent = "Could not open the saved draft. Try again.";
+  } finally {
+    openButton.disabled = false;
+  }
+});
+
+byId("save-draft").addEventListener("click", async () => {
+  const owner = ownedBy();
+  const button = byId("save-draft");
+  const submit = reportForm.querySelector("[type=submit]");
+  if (!setup || setup.ownerId !== owner || correcting || submit.disabled || button.disabled) return;
+  button.disabled = true;
+  submit.disabled = true;
+  try {
+    await save(draftKey(owner), {
+      id: draftId || crypto.randomUUID(),
+      fields: Object.fromEntries(new FormData(reportForm)),
+      moreFieldsOpen: byId("more-fields").open
+    });
+    resetForm();
+    await drawQueue();
+    byId("save-status").textContent = "Draft saved on this phone. It has not been sent.";
+    byId("open-report").focus();
+  } catch {
+    byId("save-status").textContent = "Could not save the draft. Keep this form open and try again.";
+  } finally {
+    button.disabled = false;
+    submit.disabled = false;
   }
 });
 

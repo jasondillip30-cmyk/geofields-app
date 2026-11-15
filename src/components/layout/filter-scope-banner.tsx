@@ -10,6 +10,7 @@ interface FilterScopeBannerProps {
   rigLabel?: string | null;
   onClearFilters?: () => void;
   className?: string;
+  additionalFiltersOnly?: boolean;
 }
 
 export function hasActiveScopeFilters(filters: AnalyticsFilters) {
@@ -65,18 +66,33 @@ export function FilterScopeBanner({
   clientLabel,
   rigLabel,
   onClearFilters,
-  className
+  className,
+  additionalFiltersOnly = false
 }: FilterScopeBannerProps) {
   if (!hasActiveScopeFilters(filters)) {
     return null;
   }
 
-  const scopeSummary = buildFilterScopeSummary({ filters, projectLabel, clientLabel, rigLabel });
+  const additionalFilters =
+    filters.workspaceMode !== "workshop" && filters.projectId === "all"
+      ? [
+          filters.clientId === "all" ? null : clientLabel || "Selected client",
+          filters.rigId === "all" ? null : rigLabel || "Selected rig"
+        ].filter(Boolean)
+      : [];
+  if (additionalFiltersOnly && additionalFilters.length === 0 && !onClearFilters) {
+    return null;
+  }
+  const scopeSummary = additionalFiltersOnly
+    ? ["Additional filters", ...additionalFilters].join(" • ")
+    : buildFilterScopeSummary({ filters, projectLabel, clientLabel, rigLabel });
 
   return (
     <div
       className={cn(
-        "rounded-2xl border border-brand-200 bg-gradient-to-r from-brand-50/95 to-white px-4 py-3 text-sm text-brand-900 shadow-[0_1px_2px_rgba(37,99,235,0.08)]",
+        additionalFiltersOnly
+          ? "rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+          : "rounded-2xl border border-brand-200 bg-gradient-to-r from-brand-50/95 to-white px-4 py-3 text-sm text-brand-900 shadow-[0_1px_2px_rgba(37,99,235,0.08)]",
         className
       )}
     >
@@ -96,7 +112,7 @@ export function FilterScopeBanner({
   );
 }
 
-function formatScopeDate(value: string) {
+export function formatScopeDate(value: string) {
   if (!value) {
     return "";
   }

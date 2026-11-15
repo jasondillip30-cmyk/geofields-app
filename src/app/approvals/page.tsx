@@ -1094,7 +1094,7 @@ function ApprovalsPageContent() {
           </aside>
         )}
 
-        <FilterScopeBanner filters={filters} clientLabel={selectedClientName} rigLabel={selectedRigLabel} />
+        <FilterScopeBanner filters={filters} clientLabel={selectedClientName} rigLabel={selectedRigLabel} additionalFiltersOnly />
 
         <div
           id={APPROVAL_SECTION_IDS.summary}

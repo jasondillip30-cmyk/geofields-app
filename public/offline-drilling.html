@@ -14,16 +14,19 @@
   <header><div><strong>GeoFields</strong><span>Field reporting</span></div><a href="/">Back to GeoFields</a></header>
   <main>
     <section aria-labelledby="title">
-      <p class="eyebrow">FIELD KIT</p>
       <h1 id="title">Offline drilling</h1>
-      <p>Set up on Wi-Fi before leaving. Reports saved here stay on this phone until GeoFields confirms receipt.</p>
       <p id="readiness" role="status">Checking field setup...</p>
+      <details id="setup-options" open><summary>Field setup</summary>
+      <p>Prepare while connected before going to site.</p>
       <div class="actions"><button id="prepare" type="button">Prepare or refresh field setup</button><a href="/login?next=%2Foffline-drilling.html">Sign in online</a><button id="lock" type="button" hidden>Lock offline reports</button></div>
       <details><summary>Add this screen to your phone</summary><p>On iPhone, open this page in Safari and choose Share, Add to Home Screen, then Open as Web App if offered. On Android, use the browser's Install or Add to Home Screen option. Open the icon while online and prepare field setup there before leaving.</p></details>
+      </details>
     </section>
     <section id="capture" hidden aria-labelledby="capture-title">
       <h2 id="capture-title">Record drilling</h2>
-      <form id="report">
+      <button id="open-report" type="button" aria-expanded="false" aria-controls="report">Start report</button>
+      <p id="save-status" role="status"></p>
+      <form id="report" hidden>
         <div class="fields">
           <label>Project<select name="projectId" required></select></label>
           <label>Rig<select name="rigId" required></select></label>
@@ -53,16 +56,19 @@
           <label>Comments<textarea name="comments" rows="3" maxlength="2000"></textarea></label>
         </details>
         <p>Inventory usage is not captured here. Record it through the normal inventory workflow when back online.</p>
-        <button type="submit">Save report on this phone</button>
-        <button id="cancel-edit" type="button" hidden>Cancel correction</button>
-        <p id="save-status" role="status"></p>
+        <div class="actions">
+          <button type="submit">Save to send</button>
+          <button id="save-draft" class="secondary" type="button">Save draft</button>
+          <button id="cancel-edit" class="secondary" type="button" hidden>Cancel correction</button>
+        </div>
       </form>
     </section>
     <section aria-labelledby="queue-title">
-      <h2 id="queue-title">Reports on this phone</h2>
+      <h2 id="queue-title">Report queue</h2>
+      <p id="queue-summary"></p>
       <p id="message" role="status" aria-live="polite"></p>
       <div id="queue"></div>
-      <button id="sync" type="button" disabled>Sync now</button>
+      <button id="sync" class="secondary" type="button" hidden disabled>Sync now</button>
     </section>
     <p class="footnote">Use your own device or browser profile. Clearing browser data can erase unsynced reports. Keep this screen open or reopen it when you have signal.</p>
   </main>

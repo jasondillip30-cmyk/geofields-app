@@ -893,7 +893,6 @@ function InventoryPageContent() {
         filters={filters}
         selectedClientLabel={selectedClientLabel}
         selectedRigLabel={selectedRigLabel}
-        selectedProjectLabel={scopedProject?.name || null}
         showMovements={showMovements}
         pageTitle={pageTitle}
         pageSubtitle={pageSubtitle}
@@ -960,7 +959,10 @@ function InventoryPageContent() {
               overview={overview === defaultOverview ? null : overview}
               loading={loading}
               onOpenItem={openItemDetail}
-              canOpenPurchases={Boolean(user?.role && canAccess(user.role, "requisitions:view"))}
+              canOpenPurchases={(row) => Boolean(
+                user && canAccess(user.role, "requisitions:view") &&
+                (canManage || canAccess(user.role, "inventory:approve") || row.requestedBy?.id === user.id)
+              )}
             />
           )
         )}

@@ -10,9 +10,11 @@ prepare again there before going offline.
    Confirm **Ready for offline use** and check the project and rig are listed.
    Select a recent hole to fill its last recorded depth, or type a new hole.
    The downloaded depth is a hint; the server checks it again at sync.
-2. Turn on airplane mode. Close the screen, reopen it from the Home Screen,
-   fill a report, and select **Save report on this phone**. Close and reopen
-   again to verify that the saved report is still waiting to sync.
+2. Turn on airplane mode. Reopen the field screen and choose **Start report**.
+   If you need to stop partway through, choose **Save draft**. Reopen the screen
+   and select **Resume draft** to verify that the fields are still there.
+   Drafts do not sync. Once the report is complete, select **Save to send**.
+   Refresh again and verify it says **Saved on this phone** in the queue.
 3. Reconnect and reopen the screen, or use **Sync now**. Check that the report
    is submitted once and appears in the normal approval queue, not in
    approved revenue. Repeat on the crew's iPhone and Android devices.
@@ -23,6 +25,7 @@ or separate browser profile. The offline lock hides reports until the same
 account prepares the kit again; it is not device-level encryption. Clearing
 site data can erase unsynced work. Keep the screen open or reopen it when
 signal returns; background sync while closed is not promised.
+The field screen keeps one unfinished draft per account on this browser.
 
 The pilot does not capture inventory usage or attachments offline. The server
 still checks the account, rig assignment, project status, depth continuity,

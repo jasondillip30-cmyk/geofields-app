@@ -8,6 +8,7 @@ import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provi
 import { useRole } from "@/components/layout/role-provider";
 import { Card } from "@/components/ui/card";
 import { MaintenanceHistorySection } from "@/app/maintenance/maintenance-history-section";
+import { MaintenanceActiveJobs } from "@/app/maintenance/maintenance-active-jobs";
 import {
   getProjectRigIds,
   maintenanceRowSortValue,
@@ -88,7 +89,8 @@ function MaintenanceWorkspace() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [prefillApplied, setPrefillApplied] = useState(false);
   const [deepLinkedMaintenanceId, setDeepLinkedMaintenanceId] = useState("");
-  const [logOpen, setLogOpen] = useState(true);
+  const [logOpen, setLogOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(hasBreakdownPrefill);
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -159,38 +161,17 @@ function MaintenanceWorkspace() {
     () => rows.find((entry) => entry.id === selectedRecordId) || null,
     [rows, selectedRecordId]
   );
-  const statusCounts = useMemo(() => {
-    return rows.reduce(
-      (acc, entry) => {
-        const normalized = normalizeMaintenanceStatus(entry.status).status;
-        acc.total += 1;
-        if (normalized === "OPEN") acc.open += 1;
-        if (normalized === "IN_REPAIR") acc.inRepair += 1;
-        if (normalized === "WAITING_FOR_PARTS") acc.waitingParts += 1;
-        if (normalized === "COMPLETED") acc.completed += 1;
-        return acc;
-      },
-      {
-        total: 0,
-        open: 0,
-        inRepair: 0,
-        waitingParts: 0,
-        completed: 0
-      }
-    );
-  }, [rows]);
-  const rowsWithLocalLinkFilter = useMemo(() => {
-    if (logFilters.linkage === "linked") {
-      return rows.filter((entry) => Boolean(entry.breakdownReportId));
-    }
-    if (logFilters.linkage === "unlinked") {
-      return rows.filter((entry) => !entry.breakdownReportId);
-    }
-    return rows;
-  }, [logFilters.linkage, rows]);
+  const completedCount = rows.filter((entry) => normalizeMaintenanceStatus(entry.status).status === "COMPLETED").length;
+  const historyRows = useMemo(() => rows.filter((row) => (
+    (!logFilters.rigId || row.rigId === logFilters.rigId) &&
+    (logFilters.status === "all" || row.status === logFilters.status) &&
+    (!logFilters.from || row.date >= logFilters.from) &&
+    (!logFilters.to || row.date <= logFilters.to) &&
+    (logFilters.linkage === "all" || Boolean(row.breakdownReportId) === (logFilters.linkage === "linked"))
+  )), [logFilters, rows]);
   const rigHistoryRows = useMemo(() => {
     const byRig = new Map<string, RigMaintenanceHistoryRow>();
-    for (const row of rowsWithLocalLinkFilter) {
+    for (const row of historyRows) {
       const rigId = row.rig?.id || row.rigId;
       const rigCode = row.rig?.rigCode || row.rigId;
       const existing = byRig.get(rigId);
@@ -235,7 +216,7 @@ function MaintenanceWorkspace() {
         }
         return a.rigCode.localeCompare(b.rigCode);
       });
-  }, [rowsWithLocalLinkFilter]);
+  }, [historyRows]);
   const rigDetailSelectedRig = useMemo(
     () => rigHistoryRows.find((entry) => entry.rigId === selectedRigHistoryId) || null,
     [rigHistoryRows, selectedRigHistoryId]
@@ -325,11 +306,6 @@ function MaintenanceWorkspace() {
       if (isSingleProjectScope) {
         query.set("projectId", scopeProjectId);
       }
-      if (logFilters.rigId) query.set("rigId", logFilters.rigId);
-      if (logFilters.status !== "all") query.set("status", logFilters.status);
-      if (logFilters.from) query.set("from", logFilters.from);
-      if (logFilters.to) query.set("to", logFilters.to);
-
       const response = await fetch(`/api/maintenance-requests?${query.toString()}`, {
         cache: "no-store"
       });
@@ -348,18 +324,15 @@ function MaintenanceWorkspace() {
     } finally {
       setLoadingRows(false);
     }
-  }, [
-    isSingleProjectScope,
-    logFilters.from,
-    logFilters.rigId,
-    logFilters.status,
-    logFilters.to,
-    scopeProjectId
-  ]);
+  }, [isSingleProjectScope, scopeProjectId]);
 
   useEffect(() => {
     void loadMaintenanceRows();
   }, [loadMaintenanceRows]);
+
+  useEffect(() => {
+    if (breakdownPrefillId) setReportOpen(true);
+  }, [breakdownPrefillId]);
 
   useEffect(() => {
     if (!notice) {
@@ -676,6 +649,7 @@ function MaintenanceWorkspace() {
       setNotice("Maintenance activity recorded.");
       setForm(INITIAL_FORM_STATE);
       setWizardStep(shouldSkipRigSelectionStep ? 2 : 1);
+      setReportOpen(false);
       await loadMaintenanceRows();
     } catch (error) {
       setErrorMessage(
@@ -923,7 +897,17 @@ function MaintenanceWorkspace() {
           {errorMessage}
         </div>
       )}
-      <MaintenanceReportWizardCard
+      {canReportMaintenance && (
+        <button type="button" aria-expanded={reportOpen} aria-controls="maintenance-report-form"
+          onClick={() => setReportOpen((current) => !current)}
+          className={`min-h-11 ${reportOpen ? "gf-btn-secondary" : "gf-btn-primary"}`}>
+          {reportOpen ? "Hide report form" : "Log maintenance"}
+        </button>
+      )}
+
+      {canReportMaintenance && reportOpen && (
+        <div id="maintenance-report-form">
+          <MaintenanceReportWizardCard
         shouldSkipRigSelectionStep={shouldSkipRigSelectionStep}
         visibleWizardSteps={visibleWizardSteps}
         activeWizardStep={activeWizardStep}
@@ -951,6 +935,14 @@ function MaintenanceWorkspace() {
         onSave={() => {
           void saveMaintenance();
         }}
+          />
+        </div>
+      )}
+
+      <MaintenanceActiveJobs
+        rows={rows}
+        loading={loadingRows}
+        onOpenCase={(id) => { void openRecordDetail(id); }}
       />
 
       <MaintenanceHistorySection
@@ -958,7 +950,7 @@ function MaintenanceWorkspace() {
         scopedProjectName={scopedProject?.name || null}
         logOpen={logOpen}
         onToggleLogOpen={() => setLogOpen((current) => !current)}
-        statusCounts={statusCounts}
+        completedCount={completedCount}
         logFilters={logFilters}
         setLogFilters={setLogFilters}
         scopedProjectRigOptions={scopedProjectRigOptions}

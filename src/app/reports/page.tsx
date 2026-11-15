@@ -310,7 +310,7 @@ function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: s
 
   return (
       <div className="gf-page-stack">
-        <FilterScopeBanner filters={filters} projectLabel={projectName} />
+        <FilterScopeBanner filters={filters} additionalFiltersOnly />
 
         {error ? <div className="gf-feedback-error">{error}</div> : null}
 
@@ -328,10 +328,10 @@ function ScopedReports({ filters, query }: { filters: AnalyticsFilters; query: s
             }
           />
           <div className="gf-kpi-grid-primary">
-            <MetricCard label={`${financeScope} Revenue`} value={showTotals ? formatCurrency(summary.totals.totalRevenue) : "-"} tone="good" />
-            <MetricCard label={`${financeScope} Expenses`} value={showTotals ? formatCurrency(summary.totals.totalExpenses) : "-"} tone="warn" />
+            <MetricCard label="Revenue" value={showTotals ? formatCurrency(summary.totals.totalRevenue) : "-"} tone="good" />
+            <MetricCard label="Expenses" value={showTotals ? formatCurrency(summary.totals.totalExpenses) : "-"} tone="warn" />
             <MetricCard
-              label={`${financeScope} Gross Profit`}
+              label="Gross Profit"
               value={showTotals ? formatCurrency(summary.totals.grossProfit) : "-"}
               tone={summary.totals.grossProfit >= 0 ? "good" : "danger"}
             />

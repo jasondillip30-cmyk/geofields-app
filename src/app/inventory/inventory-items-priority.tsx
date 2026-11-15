@@ -4,17 +4,21 @@ import { useEffect, useState } from "react";
 import { movementItemLabel, toIsoDate } from "@/components/inventory/inventory-page-utils";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import { canCreateShortageReplenishment, replenishmentLabels } from "@/lib/inventory-shortage-workflow";
+import type { RequisitionStatus } from "@/lib/requisition-workflow";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
 import type { InventoryMovementRow, InventoryOverviewResponse, InventoryUsageRequestRow } from "./inventory-page-types";
+
+type WorkshopShortageRow = InventoryUsageRequestRow & { replenishmentStatus: RequisitionStatus | null };
 
 export function WorkshopStockPriority({ overview, loading, onOpenItem, canOpenPurchases }: {
   overview: InventoryOverviewResponse | null;
   loading: boolean;
   onOpenItem: (id: string) => void;
-  canOpenPurchases: boolean;
+  canOpenPurchases: (row: InventoryUsageRequestRow) => boolean;
 }) {
-  const [shortages, setShortages] = useState<InventoryUsageRequestRow[] | null>(null);
+  const [shortages, setShortages] = useState<WorkshopShortageRow[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     if (loading) return;
@@ -25,7 +29,7 @@ export function WorkshopStockPriority({ overview, loading, onOpenItem, canOpenPu
           cache: "no-store", signal: controller.signal
         });
         if (!response.ok) throw new Error("Could not load shortage requests.");
-        const payload: { data: InventoryUsageRequestRow[] } = await response.json();
+        const payload: { data: WorkshopShortageRow[] } = await response.json();
         if (!controller.signal.aborted) {
           setShortages(payload.data);
           setUnavailable(false);
@@ -38,34 +42,49 @@ export function WorkshopStockPriority({ overview, loading, onOpenItem, canOpenPu
   }, [loading]);
 
   return (
-    <Card title="Stock needs attention" subtitle="Stock counts are warehouse-wide. Shortage requests show what you have access to review.">
-      <div className="grid gap-3 md:grid-cols-3">
-        <StockList title="Out of stock" count={overview?.overview.outOfStockCount} loading={loading}
-          items={(overview?.outOfStockItems ?? []).map((item) => ({ ...item, note: `${formatNumber(item.minimumStockLevel)} minimum` }))}
-          onOpenItem={onOpenItem} />
-        <StockList title="Low stock" count={overview?.overview.lowStockCount} loading={loading}
-          items={(overview?.lowStockItems ?? []).map((item) => ({ ...item, note: `${formatNumber(item.quantityInStock)} on hand · minimum ${formatNumber(item.minimumStockLevel)}` }))}
-          onOpenItem={onOpenItem} />
-        <section className="min-w-0 rounded-lg border border-slate-200 p-3">
-          <h3 className="font-semibold text-ink-900">Waiting for stock{shortages && !unavailable ? ` (${formatNumber(shortages.length)})` : ""}</h3>
-          {unavailable ? <p className="mt-2 text-sm text-ink-600">Shortage requests could not be loaded.</p>
-            : shortages === null ? <p role="status" className="mt-2 text-sm text-ink-600">Loading shortage requests...</p>
-              : shortages.length === 0 ? <p className="mt-2 text-sm text-ink-600">No visible requests are waiting for stock.</p>
+    <Card title="Stock needs attention">
+      <div className="grid gap-3 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <section className="min-w-0 rounded-xl border border-brand-100 bg-brand-50/40 px-3 py-2">
+          <h4 className="flex flex-wrap items-center gap-2 text-sm font-semibold text-ink-900">
+            Waiting for stock
+            {shortages && !unavailable && (
+              <span className="rounded-full bg-white px-2 py-0.5 text-xs tabular-nums text-brand-900">{formatNumber(shortages.length)}</span>
+            )}
+          </h4>
+          {unavailable ? <p className="mt-1 text-xs text-slate-700">Shortage requests could not be loaded.</p>
+            : shortages === null ? <p role="status" className="mt-1 text-xs text-slate-700">Loading shortage requests...</p>
+              : shortages.length === 0 ? <p className="mt-1 text-xs text-slate-700">No visible requests are waiting for stock.</p>
                 : (
-                  <ul className="mt-2 divide-y divide-slate-200 text-sm">
+                  <ul className="mt-1 divide-y divide-brand-100 text-sm">
                     {shortages.slice(0, 5).map((row) => (
                       <li key={row.id} className="py-2">
                         <p className="break-words font-medium text-ink-900">{row.item?.name || "Inventory item"}</p>
-                        <p className="text-xs text-ink-600">Requested: {formatNumber(row.quantity)}{row.project ? ` · ${row.project.name}` : ""}</p>
-                        {canOpenPurchases && (
-                          <Link className="inline-block py-1 text-xs text-brand-700 underline"
+                        <p className="break-words text-xs text-slate-700">Requested: {formatNumber(row.quantity)}{row.project ? ` · ${row.project.name}` : ""}</p>
+                        {row.replenishmentRequisitionId && (
+                          <p className="mt-1 text-xs font-semibold text-brand-900">
+                            {row.replenishmentStatus ? replenishmentLabels[row.replenishmentStatus] : "Replenishment status unavailable"}
+                          </p>
+                        )}
+                        {canOpenPurchases(row) && canCreateShortageReplenishment(row) && (
+                          <Link className="inline-flex min-h-11 items-center text-xs font-semibold text-brand-700 underline underline-offset-4"
                             href={`/expenses?workspace=workshop&shortageRequestId=${encodeURIComponent(row.id)}`}>Open shortage in Purchase Requests</Link>
                         )}
                       </li>
                     ))}
                   </ul>
                 )}
-          {shortages && shortages.length > 5 && <p className="mt-2 text-xs text-ink-600">Showing 5 of {formatNumber(shortages.length)}.</p>}
+          {!unavailable && shortages && shortages.length > 5 && <p className="mt-1 text-xs text-slate-700">Showing 5 of {formatNumber(shortages.length)}.</p>}
+        </section>
+        <section className="min-w-0 px-1 md:px-2">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-600">Warehouse stock</h4>
+          <div className="mt-1 divide-y divide-slate-200">
+            <StockList title="Out of stock" count={overview?.overview.outOfStockCount} loading={loading}
+              items={(overview?.outOfStockItems ?? []).map((item) => ({ ...item, note: `${formatNumber(item.minimumStockLevel)} minimum` }))}
+              onOpenItem={onOpenItem} />
+            <StockList title="Low stock" count={overview?.overview.lowStockCount} loading={loading}
+              items={(overview?.lowStockItems ?? []).map((item) => ({ ...item, note: `${formatNumber(item.quantityInStock)} on hand · minimum ${formatNumber(item.minimumStockLevel)}` }))}
+              onOpenItem={onOpenItem} />
+          </div>
         </section>
       </div>
     </Card>
@@ -80,11 +99,16 @@ function StockList({ title, count, loading, items, onOpenItem }: {
   onOpenItem: (id: string) => void;
 }) {
   return (
-    <section className="min-w-0 rounded-lg border border-slate-200 p-3">
-      <h3 className="font-semibold text-ink-900">{title}{loading || count === undefined ? "" : ` (${formatNumber(count)})`}</h3>
-      {loading ? <p role="status" className="mt-2 text-sm text-ink-600">Loading stock...</p>
-        : count === undefined ? <p className="mt-2 text-sm text-ink-600">Stock levels could not be loaded.</p>
-        : items.length === 0 ? <p className="mt-2 text-sm text-ink-600">None.</p>
+    <section className="min-w-0 py-2">
+      <h5 className="flex items-center justify-between gap-2 text-sm font-semibold text-ink-900">
+        {title}
+        {!loading && count !== undefined && (
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums text-slate-700">{formatNumber(count)}</span>
+        )}
+      </h5>
+      {loading ? <p role="status" className="mt-1 text-xs text-slate-700">Loading stock...</p>
+        : count === undefined ? <p className="mt-1 text-xs text-slate-700">Stock levels could not be loaded.</p>
+        : items.length === 0 ? null
           : (
             <ul className="mt-2 divide-y divide-slate-200">
               {items.slice(0, 5).map((item) => (

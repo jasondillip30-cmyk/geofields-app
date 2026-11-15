@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
 import { CalendarDays, PanelLeft, PanelLeftClose, X } from "lucide-react";
 
 import { roleLabels } from "@/lib/auth/roles";
 import { canUseLaunchGlobe } from "@/lib/auth/workspace-launch-access";
 import { useAnalyticsFilters } from "@/components/layout/analytics-filters-provider";
+import { formatScopeDate } from "@/components/layout/filter-scope-banner";
 import { useRole } from "@/components/layout/role-provider";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_MODE_LABELS } from "@/lib/workspace-mode";
@@ -167,6 +169,10 @@ const PAGE_META: Array<{ test: (pathname: string) => boolean; meta: PageMeta }> 
     }
   },
   {
+    test: (pathname) => pathname === "/reports",
+    meta: { title: "Reports" }
+  },
+  {
     test: (pathname) => pathname.startsWith("/activity-log"),
     meta: {
       title: "Activity Log"
@@ -196,49 +202,27 @@ function resolveProjectStatusChip(status: string | null) {
     return {
       label: "Active",
       toneClass: "text-emerald-800",
-      borderClass: "border-emerald-200",
-      surfaceClass: "bg-emerald-50",
-      dotClass: "bg-emerald-500",
-      dotGlowClass: "bg-emerald-400/70"
+      dotClass: "bg-emerald-500"
     };
   }
   if (normalized === "ON_HOLD") {
     return {
       label: "On hold",
       toneClass: "text-red-800",
-      borderClass: "border-red-200",
-      surfaceClass: "bg-red-50",
-      dotClass: "bg-red-500",
-      dotGlowClass: "bg-red-400/70"
+      dotClass: "bg-red-500"
     };
   }
   if (normalized === "COMPLETED") {
     return {
       label: "Completed",
       toneClass: "text-amber-800",
-      borderClass: "border-amber-200",
-      surfaceClass: "bg-amber-50",
-      dotClass: "bg-amber-500",
-      dotGlowClass: "bg-amber-400/70"
-    };
-  }
-  if (normalized === "PLANNED") {
-    return {
-      label: "Planned",
-      toneClass: "text-slate-800",
-      borderClass: "border-slate-300",
-      surfaceClass: "bg-slate-100",
-      dotClass: "bg-slate-500",
-      dotGlowClass: "bg-slate-400/70"
+      dotClass: "bg-amber-500"
     };
   }
   return {
     label: "Planned",
     toneClass: "text-slate-800",
-    borderClass: "border-slate-300",
-    surfaceClass: "bg-slate-100",
-    dotClass: "bg-slate-500",
-    dotGlowClass: "bg-slate-400/70"
+    dotClass: "bg-slate-500"
   };
 }
 
@@ -270,6 +254,8 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
   const [desktopDateFiltersOpen, setDesktopDateFiltersOpen] = useState(false);
   const topbarRef = useRef<HTMLElement | null>(null);
   const desktopDateFiltersRef = useRef<HTMLDivElement | null>(null);
+  const mobileDateButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileDateCloseRef = useRef<HTMLButtonElement | null>(null);
   const lastGlobeScrollTriggerAt = useRef(0);
   const topbarWheelIntentAccumulator = useRef(0);
   const topbarWheelIntentResetTimeout = useRef<number | null>(null);
@@ -333,15 +319,20 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
       return;
     }
 
-    if (!mobileFiltersOpen) {
-      document.body.style.overflow = "";
-      return;
-    }
+    if (!mobileFiltersOpen) return;
 
     const previousOverflow = document.body.style.overflow;
+    const dateButton = mobileDateButtonRef.current;
     document.body.style.overflow = "hidden";
+    mobileDateCloseRef.current?.focus();
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileFiltersOpen(false);
+    };
+    document.addEventListener("keydown", handleEscape);
     return () => {
+      document.removeEventListener("keydown", handleEscape);
       document.body.style.overflow = previousOverflow;
+      dateButton?.focus();
     };
   }, [mobileFiltersOpen]);
 
@@ -389,18 +380,16 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
   );
   const workspaceModeLabel = WORKSPACE_MODE_LABELS[filters.workspaceMode];
   const dateRangeSummary = useMemo(() => {
-    if (!filters.from && !filters.to) {
-      return "All dates";
-    }
-    if (filters.from && filters.to) {
-      return `${filters.from} to ${filters.to}`;
-    }
-    if (filters.from) {
-      return `From ${filters.from}`;
-    }
-    return `Until ${filters.to}`;
+    const from = formatScopeDate(filters.from);
+    const to = formatScopeDate(filters.to);
+    if (from && to) return `${from} to ${to}`;
+    if (from) return `From ${from}`;
+    if (to) return `Until ${to}`;
+    return "All dates";
   }, [filters.from, filters.to]);
   const isProjectMode = filters.workspaceMode === "project";
+  const showDateFilters = !["/purchasing/receipt-follow-up", "/inventory/receipt-intake"]
+    .some((route) => pathname === route || pathname.startsWith(`${route}/`));
 
   const pageMeta = useMemo(() => resolvePageMeta(pathname), [pathname]);
   const workspaceLaunchEnabled = isWorkspaceLaunchEnabled();
@@ -531,7 +520,7 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
       onTouchEnd={handleTopbarTouchEnd}
       className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-2.5 shadow-sm backdrop-blur md:px-6"
     >
-      <div className="space-y-2.5">
+      <div className="space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="min-w-0">
             <h1 className="break-words text-lg font-semibold tracking-tight text-ink-900 sm:text-xl">{pageMeta.title}</h1>
@@ -592,19 +581,42 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-50 to-white px-3 py-1 lg:py-2.5">
-          <div className="flex items-center justify-between gap-2 lg:hidden">
-            <p className="min-w-0 truncate text-sm font-medium text-ink-900">{dateRangeSummary}</p>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-slate-100 pt-1.5 sm:flex-nowrap">
+          <div className="flex min-w-0 max-w-full items-center gap-2 text-xs" aria-label="Workspace scope">
+            <span
+              title={modeChipLabel}
+              className={cn(
+                "min-w-0 truncate rounded-md px-2 py-1 font-medium",
+                isProjectMode && filters.projectId !== "all"
+                  ? "bg-brand-50 text-brand-900"
+                  : "bg-slate-100 text-slate-700"
+              )}
+            >
+              {modeChipLabel}
+            </span>
+            {isProjectMode && filters.projectId !== "all" && selectedProjectStatusChip ? (
+              <span className={cn("hidden shrink-0 items-center gap-1.5 sm:inline-flex", selectedProjectStatusChip.toneClass)}>
+                <span className={cn("h-1.5 w-1.5 rounded-full", selectedProjectStatusChip.dotClass)} />
+                {selectedProjectStatusChip.label}
+              </span>
+            ) : null}
+          </div>
+          {showDateFilters && (
             <button
               type="button"
+              ref={mobileDateButtonRef}
               onClick={() => setMobileFiltersOpen(true)}
-              className="gf-btn-secondary min-h-11 shrink-0 px-3 py-2 text-sm"
+              className="inline-flex min-h-11 max-w-full items-center gap-1.5 px-2 text-xs font-medium text-ink-700 hover:bg-slate-50 lg:hidden"
+              aria-haspopup="dialog"
+              aria-expanded={mobileFiltersOpen}
+              aria-label={`Open date range filters: ${dateRangeSummary}`}
             >
-              Date
+              <CalendarDays size={14} className="shrink-0" />
+              <span>{dateRangeSummary}</span>
             </button>
-          </div>
+          )}
 
-          <div className="hidden flex-wrap items-center gap-2 lg:flex">
+          {showDateFilters && <div className="ml-auto hidden items-center lg:flex">
             <div className="relative" ref={desktopDateFiltersRef}>
               <button
                 type="button"
@@ -612,10 +624,10 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
                 className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-slate-50"
                 aria-haspopup="dialog"
                 aria-expanded={desktopDateFiltersOpen}
-                aria-label="Open date range filters"
+                  aria-label={`Open date range filters: ${dateRangeSummary}`}
               >
                 <CalendarDays size={14} />
-                <span className="uppercase tracking-wide text-slate-500">Date</span>
+                <span>{dateRangeSummary}</span>
               </button>
               {desktopDateFiltersOpen ? (
                 <section
@@ -665,59 +677,24 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               ) : null}
             </div>
 
-            {isProjectMode && filters.projectId !== "all" && selectedProjectStatusChip ? (
-              <span
-                className={cn(
-                  "ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-1.5 text-xs font-semibold",
-                  selectedProjectStatusChip.borderClass,
-                  selectedProjectStatusChip.surfaceClass,
-                  selectedProjectStatusChip.toneClass
-                )}
-              >
-                <span className={cn("relative inline-flex h-2.5 w-2.5 rounded-full", selectedProjectStatusChip.dotClass)}>
-                  <span
-                    className={cn(
-                      "absolute inset-0 rounded-full blur-[4px] opacity-90",
-                      selectedProjectStatusChip.dotGlowClass
-                    )}
-                  />
-                </span>
-                {selectedProjectStatusChip.label}
-              </span>
-            ) : null}
-          </div>
-          <div className="mb-1 mt-1 flex flex-wrap items-center gap-2 text-[13px] lg:mb-0 lg:mt-2 lg:text-xs">
-            <span
-              className={cn(
-                "rounded-full px-2.5 py-0.5",
-                filters.workspaceMode === "workshop"
-                  ? "border border-slate-300 bg-slate-100 font-semibold text-slate-800"
-                  : isProjectMode && filters.projectId !== "all"
-                    ? "border border-brand-300 bg-brand-100 font-semibold text-brand-900"
-                    : isProjectMode
-                      ? "border border-amber-200 bg-amber-50 font-semibold text-amber-900"
-                      : "border border-slate-200 bg-white text-slate-700"
-              )}
-            >
-              {modeChipLabel}
-            </span>
-          </div>
+          </div>}
         </div>
       </div>
 
-      {mobileFiltersOpen ? (
-        <div className="fixed inset-0 z-50 lg:hidden">
+      {mobileFiltersOpen && showDateFilters ? createPortal(
+        <div className="fixed inset-0 z-[80] lg:hidden">
           <button
             type="button"
             className="absolute inset-0 bg-slate-900/45 backdrop-blur-[1px]"
             onClick={() => setMobileFiltersOpen(false)}
             aria-label="Close filters"
           />
-          <section className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-hidden rounded-t-2xl border-t border-slate-200 bg-white shadow-[0_-16px_34px_rgba(15,23,42,0.26)]">
+          <section role="dialog" aria-labelledby="mobile-date-range-title" className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-hidden rounded-t-2xl border-t border-slate-200 bg-white shadow-[0_-16px_34px_rgba(15,23,42,0.26)]">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-2.5">
-              <p className="text-sm font-semibold text-ink-900">Date range</p>
+              <p id="mobile-date-range-title" className="text-sm font-semibold text-ink-900">Date range</p>
               <button
                 type="button"
+                ref={mobileDateCloseRef}
                 onClick={() => setMobileFiltersOpen(false)}
                 className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-600"
                 aria-label="Close filters panel"
@@ -728,7 +705,6 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
 
             <div className="max-h-[calc(88vh-120px)] space-y-2.5 overflow-y-auto px-4 py-3.5">
               <div className="grid gap-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Date range</p>
                 <label className="grid gap-1 text-xs font-medium text-ink-700">
                   <span>From</span>
                   <input
@@ -771,7 +747,8 @@ export function Topbar({ sidebarHidden, onToggleSidebar, onOpenWorkspaceLaunch }
               </button>
             </div>
           </section>
-        </div>
+        </div>,
+        document.body
       ) : null}
     </header>
   );

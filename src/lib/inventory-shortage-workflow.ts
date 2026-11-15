@@ -1,5 +1,12 @@
 import type { RequisitionStatus } from "@/lib/requisition-workflow";
 
+export const replenishmentLabels: Record<RequisitionStatus, string> = {
+  SUBMITTED: "Replenishment submitted",
+  APPROVED: "Replenishment approved (awaiting receipt)",
+  REJECTED: "Replenishment rejected",
+  PURCHASE_COMPLETED: "Replenishment received"
+};
+
 export function canCreateShortageReplenishment({
   replenishmentRequisitionId,
   replenishmentStatus

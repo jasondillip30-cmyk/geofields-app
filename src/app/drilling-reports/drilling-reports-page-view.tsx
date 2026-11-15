@@ -834,18 +834,21 @@ export default function DrillingReportsPage() {
           />
         ) : null}
 
-        <Card
-          title="Review report status"
-          action={
-            <Link href={spendingReportsHref} className="gf-btn-subtle">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+          <p className="text-sm text-slate-600">
+            Only approved reports count toward revenue.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {canCreateReport && (
+              <a href="/offline-drilling.html" className="gf-btn-secondary inline-flex min-h-11 items-center">
+                Offline drilling
+              </a>
+            )}
+            <Link href={spendingReportsHref} className="gf-btn-subtle inline-flex min-h-11 items-center">
               View approved reports
             </Link>
-          }
-        >
-          <p className="text-sm text-slate-600">
-            Check submissions and correct rejected reports. Only approved reports count toward revenue.
-          </p>
-        </Card>
+          </div>
+        </div>
 
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(320px,1fr)]">
           <DrillingReportsBrowserSection

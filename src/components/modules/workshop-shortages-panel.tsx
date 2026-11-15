@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import { Card } from "@/components/ui/card";
 import { useRole } from "@/components/layout/role-provider";
-import { canCreateShortageReplenishment } from "@/lib/inventory-shortage-workflow";
+import { canCreateShortageReplenishment, replenishmentLabels } from "@/lib/inventory-shortage-workflow";
 import type { RequisitionStatus } from "@/lib/requisition-workflow";
 import { formatNumber } from "@/lib/utils";
 
@@ -25,13 +25,6 @@ interface WorkshopShortageRow {
   maintenanceRequest: { requestCode: string } | null;
   requestedBy: { fullName: string } | null;
 }
-
-const replenishmentLabels: Record<RequisitionStatus, string> = {
-  SUBMITTED: "Replenishment submitted",
-  APPROVED: "Replenishment approved · awaiting receipt",
-  REJECTED: "Replenishment rejected",
-  PURCHASE_COMPLETED: "Replenishment received"
-};
 
 export function WorkshopShortagesPanel({ refreshToken }: { refreshToken: number }) {
   const { role } = useRole();

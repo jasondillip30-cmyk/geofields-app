@@ -12,7 +12,6 @@ interface InventoryPageChromeProps {
   filters: AnalyticsFilters;
   selectedClientLabel: string | null;
   selectedRigLabel: string | null;
-  selectedProjectLabel: string | null;
   showMovements: boolean;
   pageTitle: string;
   pageSubtitle: string;
@@ -25,7 +24,6 @@ export function InventoryPageChrome({
   filters,
   selectedClientLabel,
   selectedRigLabel,
-  selectedProjectLabel,
   showMovements,
   pageTitle,
   pageSubtitle,
@@ -46,27 +44,26 @@ export function InventoryPageChrome({
 
       <FilterScopeBanner
         filters={filters}
-        projectLabel={selectedProjectLabel}
+        additionalFiltersOnly
         clientLabel={selectedClientLabel}
         rigLabel={selectedRigLabel}
       />
 
-      <section className="gf-page-header">
+      <section className="px-1">
         <div className="min-w-0">
           {showMovements ? (
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Inventory</p>
           ) : null}
-          <h1
+          <h2
             className={cn(
               "font-semibold tracking-tight text-ink-900",
               showMovements ? "text-3xl md:text-[2rem]" : "text-2xl md:text-[1.7rem]"
             )}
           >
             {pageTitle}
-          </h1>
+          </h2>
           <p className="mt-1 text-sm text-slate-600">{pageSubtitle}</p>
         </div>
-        <div className="mt-4 border-t border-slate-200/80" />
       </section>
 
       {children}
