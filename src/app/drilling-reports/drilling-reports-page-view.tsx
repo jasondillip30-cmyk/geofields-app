@@ -841,7 +841,7 @@ export default function DrillingReportsPage() {
           <div className="flex flex-wrap gap-2">
             {canCreateReport && (
               <a href="/offline-drilling.html" className="gf-btn-secondary inline-flex min-h-11 items-center">
-                Offline drilling
+                Shift log / offline drilling
               </a>
             )}
             <Link href={spendingReportsHref} className="gf-btn-subtle inline-flex min-h-11 items-center">

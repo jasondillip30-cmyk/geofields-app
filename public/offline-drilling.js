@@ -1,5 +1,7 @@
 "use strict";
 
+import { mountShiftLog } from "./offline-drilling-shift-ui.mjs";
+
 const ownerKey = "gf.offline-drilling.owner";
 const reportForm = document.querySelector("#report");
 const control = (name) => reportForm.elements.namedItem(name);
@@ -10,6 +12,12 @@ let correcting = null;
 let shellReady = false;
 let savedRows = [];
 let draftId = null;
+let draftRevision = 0;
+let draftWrites = Promise.resolve();
+let draftClosing = false;
+let shiftEntries = [];
+let shiftApplied = false;
+const shiftContext = ["projectId", "rigId", "date", "shift", "holeNumber"];
 
 const storage = new Promise((resolve, reject) => {
   try {
@@ -39,6 +47,72 @@ const queueKey = (owner, id) => "report:" + owner + ":" + id;
 const draftKey = (owner) => "draft:" + owner;
 const ownedBy = () => localStorage.getItem(ownerKey);
 const message = (text) => { byId("message").textContent = text; };
+const draftConflict = "This draft changed in another tab. Reopen it to get the latest saved version.";
+
+function reportFields() {
+  const fields = Object.fromEntries(new FormData(reportForm));
+  for (const name of shiftContext) fields[name] = control(name).value;
+  return fields;
+}
+
+function saveReportDraft(entries, applied, fields = reportFields()) {
+  const owner = ownedBy();
+  const id = draftId || (draftId = crypto.randomUUID());
+  const moreFieldsOpen = byId("more-fields").open;
+  const write = draftWrites.then(async () => {
+    if (!owner || owner !== ownedBy() || owner !== setup?.ownerId || draftId !== id) {
+      throw new Error("The field draft is no longer open. Reopen it before editing.");
+    }
+    const revision = draftRevision + 1;
+    let conflict = false;
+    try {
+      await data("readwrite", (store) => {
+        const previous = store.get(draftKey(owner));
+        previous.onsuccess = () => {
+          const draft = previous.result;
+          if ((draft ? draft.id !== id || (draft.revision ?? 0) !== draftRevision : draftRevision !== 0)) {
+            conflict = true;
+            store.transaction.abort();
+            return;
+          }
+          store.put({ id, revision, fields, moreFieldsOpen, shiftEntries: entries, shiftApplied: applied }, draftKey(owner));
+        };
+        return previous;
+      });
+    } catch {
+      throw new Error(conflict ? draftConflict : "Could not save on this phone. Keep the form open and try again.");
+    }
+    draftRevision = revision;
+  });
+  draftWrites = write.catch(() => {});
+  return write;
+}
+
+function drawShiftLog() {
+  for (const name of shiftContext) control(name).disabled = shiftEntries.length > 0;
+  byId("recent-hole").disabled = shiftEntries.length > 0;
+  shiftUi.render();
+}
+
+const shiftUi = mountShiftLog({
+  read: () => shiftEntries,
+  correction: () => Boolean(correcting),
+  ready: () => shellReady && !correcting && !draftClosing && shiftContext.every((name) => control(name).value.trim()),
+  commit: async (next) => {
+    // Save the timestamp transition before showing it as active on the phone.
+    await saveReportDraft(next, false);
+    shiftEntries = next;
+    shiftApplied = false;
+    drawShiftLog();
+  },
+  apply: async (totals) => {
+    const hours = { workHours: String(totals.drilling), delayHours: String(totals.delay), standbyHours: String(totals.standby) };
+    if (totals.delay > 0) byId("more-fields").open = true;
+    await saveReportDraft(shiftEntries, true, { ...reportFields(), ...hours });
+    for (const [name, value] of Object.entries(hours)) control(name).value = value;
+    shiftApplied = true;
+  }
+});
 
 function today() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Dar_es_Salaam", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -119,7 +193,7 @@ async function drawQueue() {
   drawRecentHoles();
   const list = byId("queue");
   list.replaceChildren();
-  byId("open-report").textContent = draft ? "Resume draft" : "Start report";
+  byId("open-report").textContent = draft?.shiftEntries?.at(-1)?.end === null ? "Resume running shift" : draft ? "Resume draft" : "Start report";
   const waiting = rows.filter((row) => row.status === "waiting").length;
   const review = rows.filter((row) => row.status === "review").length;
   const sent = rows.filter((row) => row.status === "sent").length;
@@ -208,11 +282,16 @@ function setFormOpen(open) {
   reportForm.hidden = !open;
   byId("open-report").hidden = open;
   byId("open-report").setAttribute("aria-expanded", String(open));
+  drawShiftLog();
 }
 
 function resetForm() {
   correcting = null;
   draftId = null;
+  draftRevision = 0;
+  shiftEntries = [];
+  shiftApplied = false;
+  shiftUi.reset();
   reportForm.reset();
   control("date").value = today();
   drawProjectFields();
@@ -310,12 +389,26 @@ async function sync() {
   }
 }
 
+function shiftNeedsReview() {
+  if (shiftEntries.at(-1)?.end === null || (shiftEntries.length && !shiftApplied)) {
+    byId("shift-timeline").open = true;
+    byId("save-status").textContent = "Stop the timer, review the timeline, and fill the report hours before sending.";
+    byId("shift-log").scrollIntoView();
+    return true;
+  }
+  return false;
+}
+
+reportForm.querySelector("[type=submit]").addEventListener("click", (event) => {
+  if (shiftNeedsReview()) event.preventDefault();
+});
+
 reportForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const selected = project();
   const owner = ownedBy();
-  if (!shellReady || !selected || !owner || setup.ownerId !== owner) return;
-  const fields = Object.fromEntries(new FormData(reportForm));
+  if (!shellReady || !selected || !owner || setup.ownerId !== owner || draftClosing || shiftUi.writing() || shiftNeedsReview()) return;
+  const fields = reportFields();
   const payload = {
     date: fields.date, shift: fields.shift, projectId: selected.id, rigId: fields.rigId, holeNumber: fields.holeNumber.trim(),
     areaLocation: fields.areaLocation.trim() || "Project site", fromMeter: Number(fields.fromMeter), toMeter: Number(fields.toMeter),
@@ -333,31 +426,42 @@ reportForm.addEventListener("submit", async (event) => {
   const button = reportForm.querySelector("[type=submit]");
   if (button.disabled) return;
   button.disabled = true;
+  draftClosing = true;
   try {
+    await draftWrites;
     const id = correcting?.id || draftId || crypto.randomUUID();
     const row = { id, payload, projectName: selected.name,
       rigName: selected.rigs.find((rig) => rig.id === payload.rigId)?.name,
       status: "waiting", savedAt: new Date().toISOString() };
+    let conflict = false;
     await data("readwrite", (store) => {
       if (correcting) return store.put(row, queueKey(owner, id));
-      const submitted = store.add(row, queueKey(owner, id));
-      if (draftId) {
-        const pending = store.get(draftKey(owner));
-        pending.onsuccess = () => {
-          if (pending.result?.id === id) store.delete(draftKey(owner));
-        };
-      }
-      return submitted;
+      const previous = store.get(draftKey(owner));
+      previous.onsuccess = () => {
+        const draft = previous.result;
+        if (draft ? draft.id !== id || (draft.revision ?? 0) !== draftRevision : draftRevision !== 0) {
+          conflict = true;
+          store.transaction.abort();
+          return;
+        }
+        store.add(row, queueKey(owner, id));
+        if (draft) store.delete(draftKey(owner));
+      };
+      return previous;
+    }).catch((error) => {
+      throw conflict ? new Error(draftConflict) : error;
     });
     resetForm();
     byId("save-status").textContent = "Saved on this phone. Check the queue below for sync status.";
     message("Saved on this phone. Waiting to sync.");
     await drawQueue();
     await sync();
-  } catch {
-    byId("save-status").textContent = "Could not save on this phone. Keep the form open and try again.";
+  } catch (error) {
+    byId("save-status").textContent = error?.message === draftConflict ? draftConflict : "Could not save on this phone. Keep the form open and try again.";
   } finally {
+    draftClosing = false;
     button.disabled = false;
+    drawShiftLog();
   }
 });
 
@@ -373,6 +477,7 @@ byId("open-report").addEventListener("click", async () => {
     byId("save-status").textContent = "";
     if (draft && setup.projects.some((item) => item.id === draft.fields.projectId)) {
       draftId = draft.id;
+      draftRevision = draft.revision ?? 0;
       control("projectId").value = draft.fields.projectId;
       drawProjectFields();
       for (const [name, value] of Object.entries(draft.fields)) {
@@ -380,11 +485,14 @@ byId("open-report").addEventListener("click", async () => {
         if (field) field.value = value;
       }
       byId("more-fields").open = draft.moreFieldsOpen;
+      shiftEntries = draft.shiftEntries ?? [];
+      shiftApplied = draft.shiftApplied === true;
     } else if (draft) {
       byId("save-status").textContent = "The draft's project is not in this field setup. It is still saved on this phone.";
     }
     setFormOpen(true);
-    control("projectId").focus();
+    if (!control("projectId").disabled) control("projectId").focus();
+    else byId("shift-log-title").scrollIntoView({ block: "nearest" });
   } catch {
     byId("save-status").textContent = "Could not open the saved draft. Try again.";
   } finally {
@@ -396,31 +504,33 @@ byId("save-draft").addEventListener("click", async () => {
   const owner = ownedBy();
   const button = byId("save-draft");
   const submit = reportForm.querySelector("[type=submit]");
-  if (!setup || setup.ownerId !== owner || correcting || submit.disabled || button.disabled) return;
+  if (!setup || setup.ownerId !== owner || correcting || draftClosing || shiftUi.writing()) return;
   button.disabled = true;
   submit.disabled = true;
+  draftClosing = true;
   try {
-    await save(draftKey(owner), {
-      id: draftId || crypto.randomUUID(),
-      fields: Object.fromEntries(new FormData(reportForm)),
-      moreFieldsOpen: byId("more-fields").open
-    });
+    await saveReportDraft(shiftEntries, shiftApplied);
     resetForm();
     await drawQueue();
     byId("save-status").textContent = "Draft saved on this phone. It has not been sent.";
     byId("open-report").focus();
-  } catch {
-    byId("save-status").textContent = "Could not save the draft. Keep this form open and try again.";
+  } catch (error) {
+    byId("save-status").textContent = error.message;
   } finally {
+    draftClosing = false;
     button.disabled = false;
     submit.disabled = false;
+    drawShiftLog();
   }
 });
 
 byId("prepare").addEventListener("click", () => void prepare());
 byId("sync").addEventListener("click", () => void sync());
 byId("lock").addEventListener("click", () => {
-  if (busy) return;
+  if (busy || shiftUi.writing() || draftClosing || !reportForm.hidden) {
+    if (!reportForm.hidden) byId("save-status").textContent = "Save the open draft before locking offline drilling.";
+    return;
+  }
   localStorage.removeItem(ownerKey);
   setup = null;
   resetForm();
@@ -441,6 +551,18 @@ byId("recent-hole").addEventListener("change", (event) => {
   control("holeNumber").value = option.value;
   control("fromMeter").value = option.dataset.depth;
   control("toMeter").value = "";
+  drawShiftLog();
+});
+reportForm.addEventListener("input", (event) => {
+  if (shiftContext.includes(event.target.name)) drawShiftLog();
+});
+reportForm.addEventListener("change", () => {
+  drawShiftLog();
+  if (shiftEntries.length && !correcting && !draftClosing && !shiftUi.writing()) {
+    void saveReportDraft(shiftEntries, shiftApplied).catch((error) => {
+      byId("save-status").textContent = error.message;
+    });
+  }
 });
 window.addEventListener("online", () => void sync());
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void sync(); });

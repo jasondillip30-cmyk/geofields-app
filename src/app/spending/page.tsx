@@ -956,7 +956,7 @@ export default function SpendingPage() {
                 </button>
                 {canSubmitDrillingReport && (
                   <a href="/offline-drilling.html" className="gf-btn-secondary min-h-11">
-                    Offline drilling
+                    Shift log / offline drilling
                   </a>
                 )}
                 {canEditFinance && (

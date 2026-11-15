@@ -26,7 +26,8 @@ function normalizeAuthPath(pathname: string) {
 
 function isPublicAsset(pathname: string) {
   return (
-    ["/offline-drilling.html", "/offline-drilling.js", "/offline-drilling.css", "/offline-drilling-sw.js", "/offline-drilling.webmanifest", "/offline-drilling-icon.svg"].includes(pathname) ||
+    ["/offline-drilling.html", "/offline-drilling.js", "/offline-drilling.css", "/offline-drilling-sw.js", "/offline-drilling.webmanifest", "/offline-drilling-icon.svg",
+      "/drilling-shift-log.mjs", "/offline-drilling-shift-ui.mjs"].includes(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon.ico") ||
     pathname.startsWith("/images") ||

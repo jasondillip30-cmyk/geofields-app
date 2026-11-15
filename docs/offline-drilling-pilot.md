@@ -27,6 +27,22 @@ site data can erase unsynced work. Keep the screen open or reopen it when
 signal returns; background sync while closed is not promised.
 The field screen keeps one unfinished draft per account on this browser.
 
+### Record time as the shift happens
+
+- Pick the project, rig, shift date, Day or Night, and hole. Tap **Drilling**,
+  **Delay**, or **Standby** whenever the activity changes. One activity runs at a
+  time. Once timing starts, the log stays tied to that report's hole and shift.
+- Each tap saves on the phone immediately. Lock the phone or close the browser,
+  then select **Resume running shift** when you return. This uses recorded
+  timestamps, not a timer that has to run in the background.
+- Tap **Stop timing** and review the timeline. Edit an activity or add a missed
+  one, then select **Fill report hours**. Drilling fills Work hours. Delay and
+  Standby fill their own fields. You can still edit all three totals manually,
+  and a delay still needs a reason. If the log changes, review and apply again.
+- Enter depth and select **Save to send** yourself. Nothing sends because a
+  timer was started or stopped. The timeline stays in the local draft; the
+  server receives the reviewed totals through the existing approval flow.
+
 The pilot does not capture inventory usage or attachments offline. The server
 still checks the account, rig assignment, project status, depth continuity,
 and billing setup. If those checks block a submission, the original report

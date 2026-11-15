@@ -8,7 +8,7 @@
   <link rel="manifest" href="/offline-drilling.webmanifest">
   <link rel="apple-touch-icon" href="/offline-drilling-icon.svg">
   <link rel="stylesheet" href="/offline-drilling.css">
-  <script src="/offline-drilling.js" defer></script>
+  <script src="/offline-drilling.js" type="module"></script>
 </head>
 <body>
   <header><div><strong>GeoFields</strong><span>Field reporting</span></div><a href="/">Back to GeoFields</a></header>
@@ -36,6 +36,32 @@
           <label id="recent-hole-field" hidden>Continue a recent hole
             <select id="recent-hole"><option value="">Choose a hole or type one above</option></select>
           </label>
+        </div>
+        <section id="shift-log" class="shift-log" aria-labelledby="shift-log-title">
+          <h2 id="shift-log-title">Shift log</h2>
+          <p id="shift-hint">Choose your project, rig, shift and hole, then tap what you're doing.</p>
+          <div id="shift-running" class="shift-running" hidden>
+            <div id="shift-clock" aria-hidden="true">00:00:00</div>
+            <div><strong id="shift-activity"></strong><p id="shift-started"></p></div>
+          </div>
+          <div class="shift-buttons">
+            <button type="button" data-activity="drilling">Drilling</button>
+            <button type="button" data-activity="delay">Delay</button>
+            <button type="button" data-activity="standby">Standby</button>
+            <button id="shift-stop" type="button" class="secondary">Stop timing</button>
+          </div>
+          <p id="shift-status" role="status"></p>
+          <details id="shift-timeline"><summary>Review shift timeline</summary>
+            <p>Forgot a tap? Edit the time or add a missed activity. Times use this phone's clock.</p>
+            <ol id="shift-entries"></ol>
+            <div class="actions">
+              <button id="shift-add" type="button" class="secondary">Add missed activity</button>
+              <button id="shift-apply" type="button" class="secondary">Fill report hours</button>
+            </div>
+            <p id="shift-totals"></p>
+          </details>
+        </section>
+        <div class="fields">
           <label>From depth (m)<input type="number" name="fromMeter" min="0" step="any" inputmode="decimal" required></label>
           <label>To depth (m)<input type="number" name="toMeter" min="0" step="any" inputmode="decimal" required></label>
           <label>Work hours<input type="number" name="workHours" min="0" step="any" inputmode="decimal" required></label>
@@ -72,5 +98,19 @@
     </section>
     <p class="footnote">Use your own device or browser profile. Clearing browser data can erase unsynced reports. Keep this screen open or reopen it when you have signal.</p>
   </main>
+  <dialog id="shift-editor" aria-labelledby="shift-editor-title">
+    <form id="shift-editor-form">
+      <h2 id="shift-editor-title">Edit activity</h2>
+      <label>Activity<select id="shift-edit-activity"><option value="drilling">Drilling</option><option value="delay">Delay</option><option value="standby">Standby</option></select></label>
+      <label>Started<input id="shift-edit-start" type="datetime-local" step="1" required></label>
+      <label id="shift-edit-end-label">Ended<input id="shift-edit-end" type="datetime-local" step="1"></label>
+      <p id="shift-edit-error" role="alert"></p>
+      <div class="actions">
+        <button type="submit">Save time</button>
+        <button id="shift-edit-cancel" type="button" class="secondary">Cancel</button>
+        <button id="shift-edit-delete" type="button" class="secondary" hidden>Remove activity</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

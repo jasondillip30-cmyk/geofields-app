@@ -21,7 +21,7 @@ export function ProjectRecordDrilling({ projectId, reportsHref }: { projectId: s
         Record drilling
       </button>
       <a href="/offline-drilling.html" className="mt-2 block text-sm font-medium text-brand-700 underline sm:mt-1">
-        Offline drilling
+        Shift log / offline drilling
       </a>
       {submitted && (
         <p role="status" className="mt-2 text-sm text-emerald-800">

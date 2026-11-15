@@ -20,3 +20,17 @@ button:disabled{opacity:.6;cursor:default}a{color:#18584a}button:focus-visible,a
 details{margin:.85rem 0;padding:.7rem;border-radius:.55rem;background:#edf4f3}summary{cursor:pointer;font-weight:650}details[open] summary{margin-bottom:.7rem}details .fields{margin-bottom:.7rem}
 .actions{display:flex;flex-wrap:wrap;align-items:center;gap:.8rem}.entry{border-top:1px solid #cfdbde;padding:.7rem 0}.entry p{overflow-wrap:anywhere}.footnote{color:#405c60;font-size:.9rem}
 [hidden]{display:none!important}
+.shift-log{margin:1rem 0;background:#edf4f3;padding:1rem}
+.shift-log p,.shift-log summary{font-size:.95rem}
+.shift-buttons{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+.shift-buttons button[aria-pressed=true]{background:#fff;color:#174437;border-color:#18584a}
+.shift-running{display:flex;align-items:center;gap:.85rem;margin:.65rem 0 1rem}
+#shift-clock{display:grid;place-items:center;width:6rem;aspect-ratio:1;border:3px solid #18584a;border-radius:50%;font-size:1.1rem;font-weight:700;font-variant-numeric:tabular-nums}
+#shift-started,#shift-status,#shift-totals{margin:.55rem 0 0}
+#shift-entries{padding-left:1.4rem}
+#shift-entries li{margin:.45rem 0}
+#shift-entries button{min-height:2.75rem}
+#shift-editor{width:min(calc(100% - 2rem),26rem);border:1px solid #8caaad;border-radius:1rem;padding:1rem;color:inherit}
+#shift-editor::backdrop{background:#102b33a8}
+#shift-editor label,#shift-editor .actions{margin-top:.65rem}
+#shift-edit-error{color:#8e311b;margin-top:.5rem}

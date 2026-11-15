@@ -1,0 +1,23 @@
+import assert from "node:assert/strict";
+import { changeActivity, editActivity, elapsedText, shiftTotals } from "../public/drilling-shift-log.mjs";
+
+const at = (clock) => Date.parse(`2026-11-${clock}Z`);
+const start = at("15T23:30:00");
+const midnight = at("16T00:00:00");
+const stop = at("16T00:30:00");
+let log = changeActivity([], "drilling", start, start);
+assert.equal(elapsedText(log[0].start, midnight), "00:30:00");
+assert.throws(() => changeActivity(log, "delay", start - 1, midnight), /valid start and end/);
+log = changeActivity(JSON.parse(JSON.stringify(log)), "delay", midnight, midnight);
+assert.equal(log[0].end, log[1].start);
+assert.equal(log.filter((entry) => entry.end === null).length, 1);
+assert.deepEqual(shiftTotals(log), { drilling: 0.5, delay: 0, standby: 0 });
+assert.equal(changeActivity(log, "delay", stop, stop), log);
+log = changeActivity(log, null, stop, stop);
+assert.deepEqual(shiftTotals(log), { drilling: 0.5, delay: 0.5, standby: 0 });
+assert.throws(() => editActivity(log, 1, { ...log[1], start: midnight - 1000 }, stop), /overlap/);
+assert.throws(() => editActivity(log, 1, { ...log[1], end: stop + 1 }, stop), /no later than now/);
+log = editActivity(log, 0, { ...log[0], end: midnight - 900000 }, stop);
+log = editActivity(log, -1, { activity: "standby", start: midnight - 900000, end: midnight }, stop);
+assert.deepEqual(shiftTotals(log), { drilling: 0.25, delay: 0.5, standby: 0.25 });
+console.log("Shift timer tests passed: switching, restore, overnight, backfill, overlap, and totals.");
