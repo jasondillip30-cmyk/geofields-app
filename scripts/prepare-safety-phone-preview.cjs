@@ -9,27 +9,39 @@ assert.match(process.env.QA_SAFETY_PASSWORD || "", /^[a-f0-9]{24}$/, "A test-onl
 const db = new PrismaClient();
 const roles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC", "FIELD"];
 const allowedEmails = roles.map((role) => "phone." + role.toLowerCase() + "@geofields.test");
+let stage = "database identity";
 
 async function main() {
   // The existing pinned Neon endpoint is QA-only; also reject unknown accounts.
   const [identity] = await db.$queryRaw`SELECT current_database() AS name`;
   assert.equal(identity.name, "neondb");
+  stage = "synthetic account verification";
   const users = await db.$queryRaw`SELECT email FROM "User"`;
+  console.log("Safety QA account check", {
+    total: users.length,
+    expected: users.filter(({ email }) => allowedEmails.includes(email)).length,
+    legacyOfflineFixture: users.filter(({ email }) => email === "offline.phone@geofields.test").length
+  });
   assert.ok(users.length >= 2 && users.every(({ email }) => allowedEmails.includes(email)), "Unexpected accounts in the designated phone QA database.");
   assert.ok(users.some(({ email }) => email === "phone.admin@geofields.test"));
   assert.ok(users.some(({ email }) => email === "phone.field@geofields.test"));
+  stage = "test password hashing";
   const passwordHash = await hash(process.env.QA_SAFETY_PASSWORD, 12);
   await db.$transaction(async (tx) => {
+    stage = "QA migration lock";
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(17112026)`;
     const [tables] = await tx.$queryRaw`SELECT to_regclass('"SafetyIncident"') IS NOT NULL AS present`;
     if (!tables.present) {
+      stage = "additive safety tables";
       const sql = fs.readFileSync(path.join(__dirname, "../prisma/migrations/20261117120000_safety_incidents/migration.sql"), "utf8");
       for (const statement of sql.split(";").map((part) => part.trim()).filter(Boolean)) await tx.$executeRawUnsafe(statement);
     }
     const [column] = await tx.$queryRaw`SELECT EXISTS (
       SELECT 1 FROM information_schema.columns WHERE table_name = 'User' AND column_name = 'isSafetyReviewer'
     ) AS present`;
+    stage = "reviewer column";
     if (!column.present) await tx.$executeRawUnsafe('ALTER TABLE "User" ADD COLUMN "isSafetyReviewer" BOOLEAN NOT NULL DEFAULT false');
+    stage = "test account password preparation";
     for (const role of roles) {
       const email = "phone." + role.toLowerCase() + "@geofields.test";
       const user = await tx.user.findUnique({ where: { email }, select: { id: true } });
@@ -40,4 +52,8 @@ async function main() {
   }, { timeout: 30000 });
   console.log("Safety phone preview ready: pinned QA database, additive safety tables, test-only accounts; no reviewers appointed.");
 }
-main().catch(() => { console.error("Safety preview preparation failed closed. Live database not targeted."); process.exitCode = 1; }).finally(() => db.$disconnect());
+main().catch((error) => {
+  const code = typeof error.code === "string" && /^(P\d{4}|ERR_ASSERTION)$/.test(error.code) ? error.code : "UNCLASSIFIED";
+  console.error("Safety preview preparation failed closed.", { stage, code });
+  process.exitCode = 1;
+}).finally(() => db.$disconnect());
