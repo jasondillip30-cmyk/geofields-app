@@ -3,16 +3,39 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { hash } = require("bcryptjs");
 const { PrismaClient } = require("@prisma/client");
+const dns = require("node:dns/promises");
+const net = require("node:net");
 require("./check-phone-preview.cjs");
 assert.notEqual(process.exitCode, 1, "Phone preview isolation check must pass before writes.");
 assert.match(process.env.QA_SAFETY_PASSWORD || "", /^[a-f0-9]{24}$/, "A test-only password must be configured.");
-const db = new PrismaClient();
+const qaUrl = new URL(process.env.DATABASE_URL);
+qaUrl.searchParams.set("connect_timeout", "20");
+const db = new PrismaClient({ datasources: { db: { url: qaUrl.toString() } } });
 const roles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC", "FIELD"];
 const allowedEmails = roles.map((role) => "phone." + role.toLowerCase() + "@geofields.test");
 let stage = "database identity";
 
 async function main() {
   // The existing pinned Neon endpoint is QA-only; also reject unknown accounts.
+  stage = "QA endpoint DNS";
+  await dns.lookup(qaUrl.hostname);
+  stage = "QA endpoint TCP";
+  await new Promise((resolve, reject) => {
+    const socket = net.connect({ host: qaUrl.hostname, port: Number(qaUrl.port || 5432) });
+    socket.setTimeout(15000);
+    socket.once("connect", () => { socket.destroy(); resolve(); });
+    socket.once("error", reject);
+    socket.once("timeout", () => { socket.destroy(); reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })); });
+  });
+  stage = "database identity";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { await db.$connect(); break; }
+    catch (error) {
+      if (attempt === 3) throw error;
+      console.log("Waiting for isolated QA database to wake", { attempt });
+      await new Promise((resolve) => setTimeout(resolve, 7000));
+    }
+  }
   const [identity] = await db.$queryRaw`SELECT current_database() AS name`;
   assert.equal(identity.name, "neondb");
   stage = "synthetic account verification";
@@ -54,7 +77,7 @@ async function main() {
 }
 main().catch((error) => {
   const rawCode = error.code || error.errorCode;
-  const code = typeof rawCode === "string" && /^(P\d{4}|ERR_ASSERTION)$/.test(rawCode) ? rawCode : "UNCLASSIFIED";
+  const code = typeof rawCode === "string" && /^(P\d{4}|ERR_ASSERTION|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN)$/.test(rawCode) ? rawCode : "UNCLASSIFIED";
   const name = String(error.name ?? "").replace(/[^A-Za-z]/g, "").slice(0, 60);
   const message = String(error.message ?? "").toLowerCase();
   const clues = ["certificate", "authentication", "reach database", "database string", "connection string", "not supported", "timeout", "timed out", "denied", "environment variable", "ssl", "not found"]
