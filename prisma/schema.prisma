@@ -193,12 +193,16 @@ model User {
   profileImageUrl     String?
   currentAssignment   String?
   isActive            Boolean             @default(true)
+  isSafetyReviewer    Boolean             @default(false)
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
   roleRef             Role?               @relation(fields: [roleId], references: [id])
   submittedReports    DrillReport[]       @relation("reportSubmitter")
   maintenanceLogs     MaintenanceUpdate[] @relation("maintenanceActor")
   workshopUpdates     WorkshopDailyUpdate[]
+  safetyReports       SafetyIncident[] @relation("SafetyReporter")
+  ownedSafetyActions  SafetyAction[] @relation("SafetyActionOwner")
+  safetyEvents        SafetyIncidentEvent[]
   approvals           Approval[]
   enteredExpenses     Expense[]           @relation("expenseEnteredBy")
   approvedExpenses    Expense[]           @relation("expenseApprover")
@@ -286,6 +290,7 @@ model Project {
   operatingCostPlans ProjectOperatingCostPlan[]
   invoices           ProjectInvoice[]
   billingRateItems   ProjectBillingRateItem[]
+  safetyIncidents    SafetyIncident[]
 }
 
 model ProjectBillingRateItem {
@@ -381,6 +386,7 @@ model Rig {
   expenses                 Expense[]
   maintenance              MaintenanceRequest[]
   workshopUpdates          WorkshopDailyUpdate[]
+  safetyIncidents          SafetyIncident[]
   inspections              Inspection[]
   breakdownReports         BreakdownReport[]
   inventoryMovements       InventoryMovement[]
@@ -680,6 +686,7 @@ model MaintenanceRequest {
   mechanic             Mechanic            @relation(fields: [mechanicId], references: [id])
   updates              MaintenanceUpdate[]
   workshopUpdates      WorkshopDailyUpdate[]
+  safetyIncidents      SafetyIncident[]
   approvals            Approval[]
   inventoryMovements   InventoryMovement[]
   inventoryUsageRequests InventoryUsageRequest[]
@@ -984,9 +991,75 @@ model BreakdownReport {
   project       Project      @relation(fields: [projectId], references: [id])
   client        Client       @relation(fields: [clientId], references: [id])
   maintenanceRequests MaintenanceRequest[]
+  safetyIncidents SafetyIncident[]
   inventoryUsageRequests InventoryUsageRequest[]
   inventoryUsageRequestBatches InventoryUsageRequestBatch[]
   inventoryMovements InventoryMovement[]
+}
+
+model SafetyIncident {
+  id                   String @id @default(cuid())
+  submissionKey        String
+  reportedById         String
+  occurredAt           DateTime
+  reportedAt           DateTime @default(now())
+  kind                 String
+  injuryObserved       Boolean?
+  location             String
+  description          String
+  immediateResponse    String?
+  shift                DrillingShift?
+  projectId            String?
+  rigId                String?
+  breakdownReportId    String?
+  maintenanceRequestId String?
+  state                String @default("REPORTED")
+  highPotential        Boolean?
+  confirmedImpact      String?
+  findings             String?
+  closeoutNote         String?
+  closedAt             DateTime?
+  revision             Int @default(0)
+  reportedBy           User @relation("SafetyReporter", fields: [reportedById], references: [id], onDelete: Restrict)
+  project              Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  rig                  Rig? @relation(fields: [rigId], references: [id], onDelete: SetNull)
+  breakdownReport      BreakdownReport? @relation(fields: [breakdownReportId], references: [id], onDelete: SetNull)
+  maintenanceRequest   MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
+  actions              SafetyAction[]
+  events               SafetyIncidentEvent[]
+
+  @@unique([reportedById, submissionKey])
+  @@index([state, reportedAt])
+}
+
+model SafetyAction {
+  id          String @id @default(cuid())
+  incidentId  String
+  ownerId     String
+  task        String
+  dueDate     DateTime @db.Date
+  state       String @default("OPEN")
+  evidence    String?
+  createdAt   DateTime @default(now())
+  incident    SafetyIncident @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  owner       User @relation("SafetyActionOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  @@index([incidentId, state])
+  @@index([ownerId, state, dueDate])
+}
+
+model SafetyIncidentEvent {
+  id         String @id @default(cuid())
+  incidentId String
+  actorId    String
+  kind       String
+  actionId   String?
+  note       String?
+  createdAt  DateTime @default(now())
+  incident   SafetyIncident @relation(fields: [incidentId], references: [id], onDelete: Restrict)
+  actor      User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([incidentId, createdAt])
 }
 
 model BudgetPlan {

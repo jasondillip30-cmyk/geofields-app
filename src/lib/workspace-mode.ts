@@ -15,7 +15,8 @@ export const MODE_VISIBLE_NAV_LABELS: Record<WorkspaceMode, string[]> = {
     "Clients",
     "Employees",
     "Rigs",
-    "Activity Log"
+    "Activity Log",
+    "Safety Incidents"
   ],
   project: [
     "Projects",
@@ -23,9 +24,10 @@ export const MODE_VISIBLE_NAV_LABELS: Record<WorkspaceMode, string[]> = {
     "Rigs",
     "Breakdowns",
     "Inventory",
-    "Project Operations"
+    "Project Operations",
+    "Safety Incidents"
   ],
-  workshop: ["Inventory", "Maintenance", "Workshop Updates", "Rigs", "Approvals", "Purchase Requests", "Activity Log"]
+  workshop: ["Inventory", "Maintenance", "Workshop Updates", "Rigs", "Approvals", "Purchase Requests", "Activity Log", "Safety Incidents"]
 };
 
 export const MODE_VISIBLE_SETUP_LABELS: Record<WorkspaceMode, string[]> = {

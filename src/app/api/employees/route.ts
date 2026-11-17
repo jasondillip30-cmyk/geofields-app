@@ -3,6 +3,7 @@ import { UserRole } from "@prisma/client";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { requireApiPermission } from "@/lib/auth/api-guard";
+import { auditSafetyReviewerChange, employeeAccessFailure, lockEmployeeAccess, resolveSafetyReviewerFlag } from "@/lib/employee-reviewer-access";
 import { prisma } from "@/lib/prisma";
 
 function parseRole(value: unknown): UserRole {
@@ -30,6 +31,7 @@ export async function GET(request: NextRequest) {
       email: true,
       role: true,
       isActive: true,
+      isSafetyReviewer: true,
       phone: true,
       title: true,
       profileImageUrl: true,
@@ -60,35 +62,45 @@ export async function POST(request: NextRequest) {
   }
 
   const role = parseRole(body?.role);
-  const roleRef = await prisma.role.findUnique({
-    where: { name: role }
-  });
-
-  const created = await prisma.user.create({
-    data: {
-      fullName,
-      email,
-      role,
-      roleId: roleRef?.id ?? null,
-      passwordHash: await hash(password, 10),
-      phone: typeof body?.phone === "string" ? body.phone.trim() : null,
-      title: typeof body?.title === "string" ? body.title.trim() : null,
-      profileImageUrl: typeof body?.profileImageUrl === "string" ? body.profileImageUrl.trim() : null,
-      currentAssignment: typeof body?.currentAssignment === "string" ? body.currentAssignment.trim() : null,
-      isActive: body?.isActive !== false
-    },
-    select: {
-      id: true,
-      fullName: true,
-      email: true,
-      role: true,
-      isActive: true,
-      phone: true,
-      title: true,
-      profileImageUrl: true,
-      currentAssignment: true
-    }
-  });
-
-  return NextResponse.json({ data: created }, { status: 201 });
+  try {
+    const isActive = body?.isActive !== false;
+    const isSafetyReviewer = resolveSafetyReviewerFlag(body?.isSafetyReviewer, role, isActive);
+    const [roleRef, passwordHash] = await Promise.all([
+      prisma.role.findUnique({ where: { name: role } }),
+      hash(password, 10)
+    ]);
+    const created = await prisma.$transaction(async (tx) => {
+      const { actor } = await lockEmployeeAccess(tx, auth.session.userId);
+      const employee = await tx.user.create({
+        data: {
+          fullName,
+          email,
+          role,
+          roleId: roleRef?.id ?? null,
+          passwordHash,
+          phone: typeof body?.phone === "string" ? body.phone.trim() : null,
+          title: typeof body?.title === "string" ? body.title.trim() : null,
+          profileImageUrl: typeof body?.profileImageUrl === "string" ? body.profileImageUrl.trim() : null,
+          currentAssignment: typeof body?.currentAssignment === "string" ? body.currentAssignment.trim() : null,
+          isActive,
+          isSafetyReviewer
+        },
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          role: true,
+          isActive: true,
+          isSafetyReviewer: true,
+          phone: true,
+          title: true,
+          profileImageUrl: true,
+          currentAssignment: true
+        }
+      });
+      await auditSafetyReviewerChange(tx, actor, employee.id, false, employee.isSafetyReviewer);
+      return employee;
+    });
+    return NextResponse.json({ data: created }, { status: 201 });
+  } catch (error) { return employeeAccessFailure(error); }
 }

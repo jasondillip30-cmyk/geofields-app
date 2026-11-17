@@ -89,6 +89,29 @@
         </div>
       </form>
     </section>
+    <section id="offline-safety" hidden aria-labelledby="offline-safety-title">
+      <h2 id="offline-safety-title">Safety incidents</h2>
+      <details id="offline-safety-panel">
+        <summary>Report incident</summary>
+        <p>Use your site's emergency reporting process first if anyone is in danger. Do not include names or medical details. Saving here does not notify anyone.</p>
+        <form id="offline-safety-form">
+          <div class="fields">
+            <label>Incident type<select name="kind" required><option value="">Choose type</option><option value="INJURY">Injury / first aid</option><option value="NEAR_MISS">Near miss</option><option value="DAMAGE">Equipment / property damage</option><option value="VEHICLE">Vehicle incident</option></select></label>
+            <label>Date and time (this device)<input name="occurredAt" type="datetime-local" required></label>
+            <label>Where it happened<input name="location" maxlength="150" required></label>
+            <label>Was anyone hurt?<select name="injuryObserved"><option value="">Not sure yet</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+          </div>
+          <label>What happened?<textarea name="description" maxlength="2000" rows="3" required></textarea></label>
+          <label>What was done immediately? (optional)<textarea name="immediateResponse" maxlength="1000" rows="2"></textarea></label>
+          <label id="offline-safety-context" hidden><input type="checkbox" name="linkContext" checked> <span></span></label>
+          <button type="submit">Save report on this phone</button>
+        </form>
+      </details>
+      <p id="offline-safety-status" role="status"></p>
+      <p id="offline-safety-pending"></p>
+      <button id="offline-safety-send" class="secondary" type="button" hidden>Send saved incident reports</button>
+      <a href="/safety-incidents">Open Safety Incidents online</a>
+    </section>
     <section aria-labelledby="queue-title">
       <h2 id="queue-title">Report queue</h2>
       <p id="queue-summary"></p>

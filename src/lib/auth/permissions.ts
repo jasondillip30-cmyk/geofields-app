@@ -20,6 +20,7 @@ export type Permission =
   | "maintenance:approve"
   | "workshop-updates:view"
   | "workshop-updates:post"
+  | "safety:report"
   | "mechanics:view"
   | "rigs:view"
   | "rigs:manage"
@@ -125,6 +126,7 @@ const permissionMap: Record<UserRole, Permission[]> = {
 };
 
 export function canAccess(role: UserRole, permission: Permission) {
+  if (permission === "safety:report") return Object.hasOwn(permissionMap, role);
   return permissionMap[role].includes(permission);
 }
 

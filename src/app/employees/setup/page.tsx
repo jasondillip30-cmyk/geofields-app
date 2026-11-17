@@ -6,17 +6,20 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { AccessGate } from "@/components/layout/access-gate";
 import { Card } from "@/components/ui/card";
+import { isSafetyReviewerEligible } from "@/lib/safety-incident-policy";
+import type { UserRole } from "@/lib/types";
 
 interface Employee {
   id: string;
   fullName: string;
   email: string;
-  role: "ADMIN" | "OFFICE" | "MECHANIC" | "FIELD";
+  role: UserRole;
   phone: string | null;
   title: string | null;
   profileImageUrl: string | null;
   currentAssignment: string | null;
   isActive: boolean;
+  isSafetyReviewer: boolean;
 }
 
 const emptyForm = {
@@ -29,7 +32,8 @@ const emptyForm = {
   title: "",
   profileImageUrl: "",
   currentAssignment: "",
-  isActive: true
+  isActive: true,
+  isSafetyReviewer: false
 };
 
 export default function EmployeeSetupPage() {
@@ -96,7 +100,8 @@ function EmployeeSetupPageContent() {
       title: match.title || "",
       profileImageUrl: match.profileImageUrl || "",
       currentAssignment: match.currentAssignment || "",
-      isActive: match.isActive
+      isActive: match.isActive,
+      isSafetyReviewer: match.isSafetyReviewer
     });
     setNotice(`Editing employee: ${match.fullName}`);
     setError(null);
@@ -186,8 +191,11 @@ function EmployeeSetupPageContent() {
             <Select
               label="Role"
               value={form.role}
-              onChange={(value) => setForm((current) => ({ ...current, role: value as Employee["role"] }))}
-              options={["ADMIN", "OFFICE", "MECHANIC", "FIELD"]}
+              onChange={(role) => setForm((current) => ({
+                ...current, role,
+                isSafetyReviewer: current.isSafetyReviewer && isSafetyReviewerEligible(role, current.isActive)
+              }))}
+              options={["ADMIN", "MANAGER", "OFFICE", "MECHANIC", "FIELD", "STAFF"]}
             />
             <Input
               label="Phone"
@@ -213,10 +221,24 @@ function EmployeeSetupPageContent() {
               <input
                 type="checkbox"
                 checked={form.isActive}
-                onChange={(event) => setForm((current) => ({ ...current, isActive: event.target.checked }))}
+                onChange={(event) => {
+                  const isActive = event.target.checked;
+                  setForm((current) => ({ ...current, isActive, isSafetyReviewer: isActive && current.isSafetyReviewer }));
+                }}
               />
               Active account
             </label>
+            <div className="rounded-lg border border-slate-200 p-3 md:col-span-2 lg:col-span-3">
+              <label className="flex min-h-11 items-center gap-2 text-sm font-semibold text-ink-900">
+                <input type="checkbox" checked={form.isSafetyReviewer} disabled={!isSafetyReviewerEligible(form.role, form.isActive)}
+                  onChange={(event) => {
+                    const isSafetyReviewer = event.target.checked;
+                    setForm((current) => ({ ...current, isSafetyReviewer }));
+                  }} />
+                Safety reviewer
+              </label>
+              <p className="text-sm text-ink-700">For active Managers and Admins only. This grants access to private incident reports and lets the employee verify fixes and close cases.</p>
+            </div>
             <div className="flex gap-2 lg:col-span-3">
               <button
                 type="submit"

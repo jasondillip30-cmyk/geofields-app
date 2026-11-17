@@ -118,6 +118,7 @@ function WorkshopFeed({ from, to }: { from?: string | null; to?: string | null }
   return (
     <div className="gf-page-stack mx-auto max-w-4xl">
       <p className="max-w-xl text-sm text-slate-600">See what was worked on, what is blocked, and what needs attention next. Updates do not change maintenance or rig status.</p>
+      <Link href="/safety-incidents#report-incident" className="gf-btn-secondary inline-flex min-h-11 items-center self-start">Report incident</Link>
       {canPost && (
         <Card title="Post a workshop update">
           <form onSubmit={post} className="space-y-4">

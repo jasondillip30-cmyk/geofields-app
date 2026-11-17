@@ -6,17 +6,20 @@ import { useEffect, useState } from "react";
 import { AccessGate } from "@/components/layout/access-gate";
 import { Card, MetricCard } from "@/components/ui/card";
 import { DataTable } from "@/components/ui/table";
+import { isSafetyReviewerEligible } from "@/lib/safety-incident-policy";
+import type { UserRole } from "@/lib/types";
 
 interface Employee {
   id: string;
   fullName: string;
   email: string;
-  role: "ADMIN" | "OFFICE" | "MECHANIC" | "FIELD";
+  role: UserRole;
   phone: string | null;
   title: string | null;
   profileImageUrl: string | null;
   currentAssignment: string | null;
   isActive: boolean;
+  isSafetyReviewer: boolean;
 }
 
 export default function EmployeesPage() {
@@ -55,7 +58,8 @@ export default function EmployeesPage() {
       setNotice("Employee deleted.");
       return;
     }
-    setError("Unable to delete employee.");
+    const payload = await response.json().catch(() => null);
+    setError(payload?.message || "Unable to delete employee.");
   }
 
   return (
@@ -102,7 +106,11 @@ export default function EmployeesPage() {
               rows={employees.map((employee) => [
                 employee.fullName,
                 employee.email,
-                employee.role,
+                <span key={`role-${employee.id}`} className="flex flex-wrap items-center gap-2">
+                  {employee.role}
+                  {employee.isSafetyReviewer && isSafetyReviewerEligible(employee.role, employee.isActive) &&
+                    <span className="whitespace-nowrap rounded bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-800">Safety reviewer</span>}
+                </span>,
                 employee.title || "-",
                 employee.currentAssignment || "-",
                 employee.isActive ? "Yes" : "No",

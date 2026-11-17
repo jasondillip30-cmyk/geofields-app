@@ -64,7 +64,8 @@ const iconMap: Record<string, typeof LayoutDashboard> = {
   Rigs: HardHat,
   Employees: Settings,
   Maintenance: Wrench,
-  "Workshop Updates": ClipboardList
+  "Workshop Updates": ClipboardList,
+  "Safety Incidents": HardHat
 };
 
 const navGroups: Array<{ title: string; labels: string[] }> = [
@@ -80,6 +81,7 @@ const navGroups: Array<{ title: string; labels: string[] }> = [
       "Breakdowns",
       "Maintenance",
       "Workshop Updates",
+      "Safety Incidents",
       "Inventory",
       "Approvals"
     ]
@@ -592,6 +594,7 @@ function resolveCoreWorkflowSegment(label: string): "primary" | "secondary" | "o
     label === "Breakdowns" ||
     label === "Maintenance" ||
     label === "Workshop Updates" ||
+    label === "Safety Incidents" ||
     label === "Inventory" ||
     label === "Approvals"
   ) {

@@ -34,3 +34,6 @@ details{margin:.85rem 0;padding:.7rem;border-radius:.55rem;background:#edf4f3}su
 #shift-editor::backdrop{background:#102b33a8}
 #shift-editor label,#shift-editor .actions{margin-top:.65rem}
 #shift-edit-error{color:#8e311b;margin-top:.5rem}
+#offline-safety-form label{margin-bottom:.65rem}
+#offline-safety-context input{display:inline-block;width:1.1rem;min-height:auto;margin-right:.3rem}
+#offline-safety-send:not([hidden]){margin-right:.65rem}

@@ -1,6 +1,7 @@
 "use strict";
 
 import { mountShiftLog } from "./offline-drilling-shift-ui.mjs";
+import { mountOfflineSafety } from "./offline-safety.mjs";
 
 const ownerKey = "gf.offline-drilling.owner";
 const reportForm = document.querySelector("#report");
@@ -114,6 +115,18 @@ const shiftUi = mountShiftLog({
   }
 });
 
+const safetyUi = mountOfflineSafety({
+  owner: ownedBy,
+  ready: () => shellReady && Boolean(setup && setup.ownerId === ownedBy()),
+  database: data,
+  linkedContext: () => {
+    const selected = !reportForm.hidden && project();
+    if (!selected) return null;
+    const rig = selected.rigs.find((entry) => entry.id === control("rigId").value);
+    return { projectId: selected.id, rigId: rig?.id, shift: control("shift").value, label: [selected.name, rig?.name].filter(Boolean).join(" / ") };
+  }
+});
+
 function today() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Dar_es_Salaam", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
@@ -176,6 +189,7 @@ function drawSetup() {
     : !setup ? "Not ready yet. Sign in online, then prepare field setup."
     : !setup.projects.length ? "No active projects with an active assigned rig were downloaded."
     : "Ready for offline use. Field setup saved " + new Date(setup.savedAt).toLocaleString() + ".";
+  void safetyUi.render();
 }
 
 async function entries(owner) {
@@ -283,6 +297,7 @@ function setFormOpen(open) {
   byId("open-report").hidden = open;
   byId("open-report").setAttribute("aria-expanded", String(open));
   drawShiftLog();
+  safetyUi.drawContext();
 }
 
 function resetForm() {
@@ -527,7 +542,7 @@ byId("save-draft").addEventListener("click", async () => {
 byId("prepare").addEventListener("click", () => void prepare());
 byId("sync").addEventListener("click", () => void sync());
 byId("lock").addEventListener("click", () => {
-  if (busy || shiftUi.writing() || draftClosing || !reportForm.hidden) {
+  if (busy || safetyUi.busy() || shiftUi.writing() || draftClosing || !reportForm.hidden) {
     if (!reportForm.hidden) byId("save-status").textContent = "Save the open draft before locking offline drilling.";
     return;
   }
@@ -558,6 +573,7 @@ reportForm.addEventListener("input", (event) => {
 });
 reportForm.addEventListener("change", () => {
   drawShiftLog();
+  safetyUi.drawContext();
   if (shiftEntries.length && !correcting && !draftClosing && !shiftUi.writing()) {
     void saveReportDraft(shiftEntries, shiftApplied).catch((error) => {
       byId("save-status").textContent = error.message;
