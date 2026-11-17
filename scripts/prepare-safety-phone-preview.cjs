@@ -53,7 +53,12 @@ async function main() {
   console.log("Safety phone preview ready: pinned QA database, additive safety tables, test-only accounts; no reviewers appointed.");
 }
 main().catch((error) => {
-  const code = typeof error.code === "string" && /^(P\d{4}|ERR_ASSERTION)$/.test(error.code) ? error.code : "UNCLASSIFIED";
-  console.error("Safety preview preparation failed closed.", { stage, code });
+  const rawCode = error.code || error.errorCode;
+  const code = typeof rawCode === "string" && /^(P\d{4}|ERR_ASSERTION)$/.test(rawCode) ? rawCode : "UNCLASSIFIED";
+  const name = String(error.name ?? "").replace(/[^A-Za-z]/g, "").slice(0, 60);
+  const message = String(error.message ?? "").toLowerCase();
+  const clues = ["certificate", "authentication", "reach database", "database string", "connection string", "not supported", "timeout", "timed out", "denied", "environment variable", "ssl", "not found"]
+    .filter((clue) => message.includes(clue));
+  console.error("Safety preview preparation failed closed.", { stage, code, name, clues });
   process.exitCode = 1;
 }).finally(() => db.$disconnect());
