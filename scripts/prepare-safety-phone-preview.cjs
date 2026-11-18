@@ -11,7 +11,7 @@ assert.match(process.env.QA_SAFETY_PASSWORD || "", /^[a-f0-9]{24}$/, "A test-onl
 const qaUrl = new URL(process.env.DATABASE_URL);
 qaUrl.searchParams.set("connect_timeout", "20");
 const db = new PrismaClient({ datasources: { db: { url: qaUrl.toString() } } });
-const roles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC", "FIELD"];
+const roles = ["ADMIN", "MANAGER", "OFFICE", "MECHANIC", "FIELD", "STAFF"];
 const allowedEmails = roles.map((role) => "phone." + role.toLowerCase() + "@geofields.test");
 let stage = "database identity";
 
@@ -69,11 +69,11 @@ async function main() {
       const email = "phone." + role.toLowerCase() + "@geofields.test";
       const user = await tx.user.findUnique({ where: { email }, select: { id: true } });
       assert.ok(user, "Missing synthetic phone QA account.");
-      await tx.user.update({ where: { id: user.id }, data: { passwordHash, isActive: true, isSafetyReviewer: false } });
+      await tx.user.update({ where: { id: user.id }, data: { passwordHash, isActive: true } });
     }
     assert.equal(await tx.safetyIncident.count({ where: { events: { none: { kind: "REPORTED" } } } }), 0);
   }, { timeout: 30000 });
-  console.log("Safety phone preview ready: pinned QA database, additive safety tables, test-only accounts; no reviewers appointed.");
+  console.log("Safety phone preview ready: pinned QA database, additive safety tables, test-only accounts; reviewer appointments preserved.");
 }
 main().catch((error) => {
   const rawCode = error.code || error.errorCode;
